@@ -43,7 +43,7 @@ pub async fn show(c: &mut Ctx) -> Result {
     } else if user.is_bot() {
         render_default_bot(c)
     } else {
-        render_initials(&user)
+        render_initials(c, &user)
     }
 }
 
@@ -73,9 +73,11 @@ async fn from_avatar_token(c: &mut Ctx) -> Result<User> {
 }
 
 /// Whether `lookup_context.find_all("show", ["users/avatars", ...])` finds `show.svg.erb` for the
-/// request's formats: `*/*` or svg.
+/// request's formats: `*/*` or svg, or no registered format at all (`Accept: image/*` parses to
+/// none, and an empty `formats=` falls back to every format).
 fn template_found(c: &mut Ctx) -> bool {
-    c.formats().unwrap_or_default().iter().any(|format| **format == format::ALL || **format == format::SVG)
+    let Ok(formats) = c.formats() else { return false };
+    formats.is_empty() || formats.iter().any(|format| **format == format::ALL || **format == format::SVG)
 }
 
 /// `avatar.variant(:square).processed if avatar.variable?` (`resize_to_limit: [512, 512], format: :webp`).
@@ -90,11 +92,11 @@ fn render_default_bot(c: &mut Ctx) -> Result {
 }
 
 /// `render formats: :svg` (`users/avatars/show.svg.erb`).
-fn render_initials(user: &User) -> Result {
+fn render_initials(c: &mut Ctx, user: &User) -> Result {
     let svg = AvatarSvg { user_id: user.id, initials: user.initials() }.render().map_err(Error::internal)?;
-    // No `Vary: Accept` here: ActiveStorage::Streaming makes this an ActionController::Live
-    // response, which the reference sends without it.
-    Ok(campfire_kit::Response::with_body(campfire_kit::StatusCode::OK, "image/svg+xml; charset=utf-8", svg))
+    // `Vary: Accept` like any render when the format came from a non-browser `Accept` (e.g.
+    // `image/*`); a browser's image `Accept` ends in `*/*`, so it usually doesn't apply.
+    Ok(c.render_as(campfire_kit::StatusCode::OK, "image/svg+xml; charset=utf-8", svg))
 }
 
 /// A file under `app/assets/images` (embedded by campfire_assets) on disk, for `send_file`: it's

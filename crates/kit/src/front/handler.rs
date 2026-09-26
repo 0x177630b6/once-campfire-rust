@@ -55,7 +55,8 @@ impl Handler {
 
     pub async fn call(self: Arc<Self>, request: Request<Body>, conn: ConnInfo) -> Response<Body> {
         let log = self.log_requests.then(|| RequestLog::new(&request, &conn));
-        let response = self.compress(request, conn).await;
+        let mut response = self.compress(request, conn).await;
+        suppress_bodiless_headers(&mut response);
         match log {
             Some(log) => log.attach(response),
             None => response,
@@ -140,6 +141,21 @@ impl Handler {
             Ok(response) => response,
             Err(infallible) => match infallible {},
         }
+    }
+}
+
+/// Go's `http.Server` drops the headers a status can't carry when it writes them
+/// (`suppressedHeaders`): `Content-Type`, `Content-Length` and `Transfer-Encoding` on a 304
+/// (whether Rails or the cache produced it), the length on 1xx and 204.
+fn suppress_bodiless_headers(response: &mut Response<Body>) {
+    let status = response.status().as_u16();
+    let suppressed: &[header::HeaderName] = match status {
+        304 => &[header::CONTENT_TYPE, header::CONTENT_LENGTH, header::TRANSFER_ENCODING],
+        100..=199 | 204 => &[header::CONTENT_LENGTH, header::TRANSFER_ENCODING],
+        _ => &[],
+    };
+    for name in suppressed {
+        response.headers_mut().remove(name);
     }
 }
 

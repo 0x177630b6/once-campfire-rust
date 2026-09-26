@@ -21,6 +21,11 @@ use futures_util::StreamExt;
 #[derive(Debug, Clone, Copy)]
 pub struct StaticFile;
 
+/// A `Content-Length` the app set itself (`PublicExceptions`, `ShowExceptions#pass_response`),
+/// as opposed to the one the server adds after this middleware, as Puma does in the reference.
+#[derive(Debug, Clone, Copy)]
+pub struct AppContentLength;
+
 /// The `Rack::Deflater` middleware.
 pub async fn deflater(request: Request, next: Next) -> Response {
     let accept_encoding = request.headers().get(header::ACCEPT_ENCODING).and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
@@ -74,9 +79,10 @@ pub async fn deflater(request: Request, next: Next) -> Response {
     }
 }
 
-/// `should_deflate?`: not for bodiless statuses, `no-transform`, already-encoded bodies, or an
-/// explicit `Content-Length: 0` (in the reference only `Rack::Files` sets one this early: an app
-/// response's length is Puma's doing, after this middleware).
+/// `should_deflate?` (rack 3.2.6; the reference passes no `:include` or `:if`): not for statuses
+/// without a body (1xx, 204, 304), `no-transform`, non-identity `Content-Encoding`, or a
+/// `Content-Length: 0` the app set (static files and error pages; an app response's length is
+/// otherwise the server's doing, after this middleware, so empty rendered bodies are gzipped).
 fn should_deflate(response: &Response) -> bool {
     let status = response.status().as_u16();
     if matches!(status, 100..=199 | 204 | 304) {
@@ -90,8 +96,9 @@ fn should_deflate(response: &Response) -> bool {
     if get(header::CONTENT_ENCODING).is_some_and(|ce| !has_word(ce, "identity")) {
         return false;
     }
-    let static_file = response.extensions().get::<StaticFile>().is_some();
-    !(static_file && get(header::CONTENT_LENGTH) == Some("0"))
+    let extensions = response.extensions();
+    let app_set_length = extensions.get::<StaticFile>().is_some() || extensions.get::<AppContentLength>().is_some();
+    !(app_set_length && get(header::CONTENT_LENGTH) == Some("0"))
 }
 
 /// `/\bword\b/`

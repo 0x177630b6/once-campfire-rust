@@ -154,6 +154,7 @@ fn clone_error(error: &Error) -> Error {
 /// while keeping their `Content-Length`.
 pub async fn into_axum(response: Response, head: bool) -> axum::response::Response {
     let Response { status, mut headers, body } = response;
+    let app_set_length = headers.contains_key(header::CONTENT_LENGTH);
     let body = match body {
         Body::Empty => AxumBody::empty(),
         Body::Bytes(bytes) => {
@@ -182,6 +183,9 @@ pub async fn into_axum(response: Response, head: bool) -> axum::response::Respon
     let mut response = axum::response::Response::new(body);
     *response.status_mut() = status;
     *response.headers_mut() = headers;
+    if app_set_length {
+        response.extensions_mut().insert(crate::deflater::AppContentLength);
+    }
     response
 }
 
