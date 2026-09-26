@@ -299,3 +299,27 @@ Add requests under the owning crate's heading. The owner removes an entry once i
   (`auth/sign_in/error`, `auth/sign_in/banned_ip`, ...) spend the 10-per-3-minutes sign-in budget
   once per matrix cell (12+ cells), which then rate-limits the harness's own fixture sign-ins on
   that server. Mark them `mutates: true` (fresh instance per cell) or narrow their matrix.
+- (from parity/capture, for parity/screens.yml) `interactions/boost_picker` clicks
+  `.boost__action` without hovering the message first; the button is hidden until hover, so the
+  step never becomes actionable on any engine. Add a `hover:` on the message before the click.
+- (from parity/capture, for parity/screens.yml) `rooms/show/busy/scrolled_to_previous_page` and
+  `scrolled_to_next_page` scroll `#message-area`, which has no box of its own; the scroller is
+  `.messages` (the MessagePaginator container). With `scroll: { selector: ".messages", ... }`
+  the next page loads on every engine (verified).
+- (from parity/capture, for parity/seeds + screens.yml) `search/submitted` (kevin searches
+  "cuckoo") renders an empty `#search-results` on every engine, with real timers too, so its
+  `wait_for: "#search-results .message"` never matches. Either kevin can't see the fixture message
+  containing "cuckoo" or the seed's FTS index lacks fixture messages (fixtures skip callbacks).
+- (from parity/capture) Mutating states now get a fresh instance per capture started with
+  `--freeze`: records they write carry the server's time (message timestamps, avatar `?v=`
+  cache busters), which a ticking clock makes differ by a second between two servers. The
+  Rust server's clock should likewise be frozen for these states.
+- (from parity/capture, for parity/screens.yml) `realtime/message_sent` sends with `press: Enter`,
+  which on touch viewports (tablet, phone) inserts a newline instead of sending
+  (composer_controller.js submits by keyboard only off touch devices), so the message never
+  arrives. Click `#composer button[name=send]` instead, or narrow the matrix to desktop/laptop.
+- (from parity/capture, for parity/seeds + screens.yml) Visiting a room marks it read for that
+  user, so sidebar unread badges in one capture depend on which other captures of the same user
+  ran first (seen: `rooms/show/original_with_invitation` with "All Talk" unread in one run and
+  read in another). Either give unread-sensitive states their own user, or mark room-visiting
+  states `mutates: true`.
