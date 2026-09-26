@@ -1,0 +1,16 @@
+<figure class="attachment attachment--content attachment--og">
+  <actiontext-opengraph-embed>
+    <div class="og-embed gap {% if opengraph_embed.twitter_avatar() %}og-embed--twitter-avatar{% endif %}">
+      <div class="og-embed__content">
+        <div class="og-embed__title">
+          {{ h::link_to_if(opengraph_embed.href.is_some(), h::truncate(opengraph_embed.filename.as_str(), 280, "…").as_str(), opengraph_embed.href.as_deref().unwrap_or_default(), h::attrs().attr("rel", "noreferrer").target("_blank")) }}
+        </div>
+        <div class="og-embed__description">{{ h::truncate(opengraph_embed.description.as_deref().unwrap_or_default(), 560, "…") }}</div>
+      </div>
+{% if let Some(url) = opengraph_embed.url %}        <div class="og-embed__image">
+          {{ h::builder_tag("img", h::attrs().attr("src", url.as_str()).class("image center").alt("")) }}
+        </div>
+{% endif %}    </div>
+  </actiontext-opengraph-embed>
+</figure>
+

@@ -16,6 +16,7 @@ pub mod accounts;
 pub mod welcome;
 pub mod pwa;
 pub mod autocompletable;
+pub mod action_text;
 pub mod rooms;
 pub mod messages;
 pub mod searches;
@@ -25,23 +26,66 @@ pub mod searches;
 pub struct ViewContext<'a> {
     pub current_user: Option<CurrentUser>,
     pub account: AccountSummary,
-    /// A freshly masked CSRF token for `csrf_meta_tags` and form hidden fields.
+    /// A freshly masked global CSRF token for `csrf_meta_tags`. Empty when rendering outside a
+    /// request (broadcasts), where Rails has no forgery protection and renders no CSRF tags.
     pub csrf_token: String,
+    /// `form_authenticity_token(form_options: { action:, method: })`: Rails 8 defaults to
+    /// per-form tokens, so every `form_with`/`button_to` asks for a masked token bound to its
+    /// action path (already normalized: no scheme/host/query, trailing "/" chomped) and its
+    /// lowercase method ("post", "patch", "put", "delete"). Return "" outside a request
+    /// (broadcasts): Rails' renderer emits no token fields there.
+    pub form_authenticity_token: &'a dyn Fn(&str, &str) -> String,
     pub flash_notice: Option<String>,
     pub flash_alert: Option<String>,
     /// `ApplicationPlatform` facts derived from the user agent.
     pub platform: Platform,
-    pub vapid_public_key: String,
+    /// `Rails.configuration.x.vapid.public_key`; `None` omits the meta tag's content attribute.
+    pub vapid_public_key: Option<String>,
     /// Resolves a logical asset path ("campfire-icon.png") to its digested URL.
     pub asset_path: &'a dyn Fn(&str) -> String,
     /// The `<script type="importmap">` + modulepreload tags (`javascript_importmap_tags`).
     pub importmap_tags: &'a str,
-    /// `<link rel="stylesheet">` tags for `stylesheet_link_tag :all`.
+    /// `<link rel="stylesheet">` tags for `stylesheet_link_tag :all, "data-turbo-track": "reload"`.
     pub stylesheet_tags: &'a str,
     /// The account's custom CSS, if any (`custom_styles_tag`).
     pub custom_styles: Option<String>,
-    /// Signed Action Cable URL meta value (`script_aware_action_cable_meta_tag`).
+    /// `script_aware_action_cable_meta_tag` content: script_name + "/cable".
     pub cable_url: String,
+    /// `request.base_url` ("http://campfire.test"), for the `*_url` helpers.
+    pub base_url: String,
+    /// `request.url`, compared against the referrer by `link_back`.
+    pub request_url: String,
+    /// `request.referrer`.
+    pub referrer: Option<String>,
+    /// Id of `last_room_visited` (`TrackedRoomVisit`): the `last_room` cookie's room if the user
+    /// is a member, else `Current.user.rooms.original`. `None` links back to the root.
+    pub last_room_visited_id: Option<i64>,
+    /// `Rails.application.config.app_version` (APP_VERSION, GIT_REVISION or "0").
+    pub app_version: String,
+}
+
+impl ViewContext<'_> {
+    pub fn asset(&self, logical_path: &str) -> String {
+        (self.asset_path)(logical_path)
+    }
+
+    /// `root_url`, `session_url`, `join_url(...)`: base URL + path.
+    pub fn url(&self, path: &str) -> String {
+        format!("{}{}", self.base_url, path)
+    }
+
+    pub fn can_administer(&self) -> bool {
+        self.current_user.as_ref().is_some_and(|user| user.administrator)
+    }
+
+    pub fn current_user_id(&self) -> Option<i64> {
+        self.current_user.as_ref().map(|user| user.id)
+    }
+
+    /// `Current.user == user`.
+    pub fn is_current_user(&self, user_id: impl std::borrow::Borrow<i64>) -> bool {
+        self.current_user_id() == Some(*user_id.borrow())
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -50,13 +94,17 @@ pub struct CurrentUser {
     pub name: String,
     pub administrator: bool,
     pub bot: bool,
+    /// `fresh_user_avatar_path(Current.user)`.
     pub avatar_url: String,
 }
 
 #[derive(Clone, Debug)]
 pub struct AccountSummary {
     pub name: String,
+    /// `fresh_account_logo_path` (no size).
     pub logo_url: String,
+    /// `Current.account.logo.attached?` (adds the `account-has-logo` body class).
+    pub has_logo: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -71,4 +119,10 @@ pub struct Platform {
     pub edge: bool,
     pub mobile: bool,
     pub desktop: bool,
+    /// `ApplicationPlatform#apple_messages?`.
+    pub apple_messages: bool,
+    /// `user_agent.browser` from the useragent gem ("Chrome", "Safari", "Firefox", "Edge", ...).
+    pub browser: String,
+    /// `ApplicationPlatform#operating_system` ("macOS", "Windows", "iPhone", ...).
+    pub operating_system: String,
 }

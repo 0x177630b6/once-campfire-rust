@@ -262,6 +262,28 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 [[package]]
 name = "campfire"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum",
+ "campfire_assets",
+ "campfire_cable",
+ "campfire_db",
+ "campfire_kit",
+ "campfire_richtext",
+ "campfire_routes",
+ "campfire_storage",
+ "campfire_views",
+ "futures-util",
+ "jiff",
+ "rails_compat",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-tungstenite",
+ "tracing",
+]
 
 [[package]]
 name = "campfire_assets"
@@ -342,7 +364,7 @@ name = "campfire_richtext"
 version = "0.1.0"
 dependencies = [
  "base64",
- "html5ever",
+ "html5ever 0.35.0",
  "regex",
  "serde",
  "serde_json",
@@ -379,7 +401,7 @@ version = "0.1.0"
 dependencies = [
  "askama",
  "campfire_routes",
- "html5ever",
+ "html5ever 0.35.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "jiff",
  "serde",
  "serde_json",
@@ -724,6 +746,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6c49c37c09c17a53d937dfbb742eb3a961d65a994e6bcdcf37e7399d0cc8ab5e"
 dependencies = [
  "digest",
+]
+
+[[package]]
+name = "html5ever"
+version = "0.35.0"
+dependencies = [
+ "log",
+ "markup5ever",
+ "match_token",
 ]
 
 [[package]]
