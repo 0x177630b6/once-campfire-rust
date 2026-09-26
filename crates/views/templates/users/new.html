@@ -1,4 +1,5 @@
 {% extends "layouts/application.html" %}
+{%- block head %}{% endblock %}
 
 {% block nav %}  <div class="flex-item-justify-end">
     {% filter link_to(h::routes::new_session(), h::attrs().class("btn flex-item-justify-end")) %}

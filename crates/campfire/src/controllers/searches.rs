@@ -1,7 +1,6 @@
 //! `SearchesController` (reference/app/controllers/searches_controller.rb). `set_messages` runs
 //! before every action, so a query that FTS5 rejects fails `create` and `clear` too.
 
-use askama::Template;
 use campfire_db::{Message, Search};
 use campfire_kit::{Ctx, Error, Result, StatusCode};
 use campfire_views::searches::{Index, IndexView, search_path};
@@ -26,7 +25,7 @@ pub async fn index(c: &mut Ctx) -> Result {
     let return_to_room_id = concerns::last_room_visited(c).await?.map(|room| room.id).unwrap_or_default();
     let messages = present(c, move |presenter| presenter.messages(&messages)).await?;
     let index = IndexView { query, q, messages, recent_searches, return_to_room_id };
-    page::page(c, StatusCode::OK, |ctx| Index { ctx, index: &index }.render()).await
+    page::framed_page!(c, StatusCode::OK, |ctx| Index { ctx, index: &index }).await
 }
 
 pub async fn create(c: &mut Ctx) -> Result {

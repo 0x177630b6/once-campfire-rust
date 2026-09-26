@@ -6,12 +6,10 @@
 pub mod boosts;
 pub mod by_bots;
 
-use std::sync::Arc;
-
 use askama::Template;
 use campfire_db::{Message, NewMessage, Role, Room, Status, User};
 use campfire_kit::format;
-use campfire_kit::{Ctx, Error, Freshness, Param, Result, StatusCode, UploadedFile, halt, permit_keys};
+use campfire_kit::{Ctx, Error, Freshness, Param, Result, StatusCode, halt, permit_keys};
 use campfire_richtext::Content;
 use campfire_storage::{Filename, Variation};
 use campfire_views::messages as views;
@@ -19,6 +17,7 @@ use campfire_views::messages as views;
 use crate::app::{App, AppCtx};
 use crate::concerns::{self, Before, before_actions, cast_integer, require_current_user};
 use crate::controllers::presenters::page::{self, Rendered, db_error};
+use crate::controllers::presenters_a::attachments::Assignment;
 use crate::controllers::presenters::{DbResolver, Presenter, cache_key_with_version, room_kind, storage_error};
 
 // --- Actions ------------------------------------------------------------------------------------
@@ -160,7 +159,8 @@ pub(crate) fn ensure_can_administer(c: &mut Ctx, message: &Message) -> Result<()
 #[derive(Debug, Default, Clone)]
 pub(crate) struct MessageParams {
     pub body: Option<String>,
-    pub attachment: Option<Arc<UploadedFile>>,
+    /// `attachment=`: `None` when the key wasn't given.
+    pub attachment: Option<Assignment>,
     pub client_message_id: Option<String>,
 }
 
@@ -171,9 +171,18 @@ fn message_params(c: &Ctx) -> Result<MessageParams> {
     let text = |key: &str| permitted.get(key).and_then(Param::as_str).map(str::to_string);
     Ok(MessageParams {
         body: text("body"),
-        attachment: permitted.get("attachment").and_then(Param::as_file).cloned(),
+        attachment: attachment_assignment(&permitted)?,
         client_message_id: text("client_message_id"),
     })
+}
+
+/// What assigning the permitted `attachment` does: an upload replaces the attachment, nil or ""
+/// removes it (`Attached::Changes::DeleteOne`), anything else raises.
+pub(crate) fn attachment_assignment(permitted: &campfire_kit::ParamMap) -> Result<Option<Assignment>> {
+    match Assignment::from_params(permitted, "attachment")? {
+        Assignment::Unchanged => Ok(None),
+        assignment => Ok(Some(assignment)),
+    }
 }
 
 /// `@room.messages.find(params[:before])` and friends (`find_paged_messages`).
@@ -207,9 +216,10 @@ pub(crate) async fn create_message(c: &Ctx, room: &Room, attributes: MessagePara
     let creator_id = require_current_user(c)?.id;
     let room_id = room.id;
     let request_host = Some(c.request.host());
-    let attachment = match &attributes.attachment {
-        Some(file) => Some((file.read()?, file.original_filename.clone(), file.content_type.clone())),
-        None => None,
+    let attachment = match attributes.attachment {
+        Some(Assignment::Create(upload)) => Some((upload.data, upload.filename, upload.content_type)),
+        Some(Assignment::Invalid) => return Err(invalid_attachment()),
+        _ => None,
     };
     let (message, blob) = c
         .app()
@@ -254,20 +264,15 @@ pub(crate) fn canonical_body(conn: &campfire_db::Connection, app: &App, body: &s
     Content::load(body, &ctx).map(|content| content.to_html()).unwrap_or_else(|_| body.to_string())
 }
 
+/// Assigning something that isn't an upload, a signed blob id, nil or "".
+fn invalid_attachment() -> Error {
+    Error::internal(anyhow::anyhow!("Could not find or build blob: expected attachable"))
+}
+
 /// `Message#process_attachment`: analyze the blob now (its `after_update` touches the message),
 /// then generate the video preview or the `:thumb` representation.
 pub(crate) async fn process_attachment(app: &App, blob: campfire_storage::Blob) -> Result<()> {
-    let storage = app.storage.clone();
-    let blob = app
-        .db
-        .write(move |tx| {
-            let mut blob = blob;
-            storage.analyze(tx.conn(), &mut blob).map_err(storage_error)?;
-            touch_attachment_records(tx, blob.id)?;
-            Ok(blob)
-        })
-        .await
-        .map_err(db_error)?;
+    let blob = analyze_attachment(app, blob).await?;
 
     let storage = app.storage.clone();
     let now = app.clock.now();
@@ -285,6 +290,20 @@ pub(crate) async fn process_attachment(app: &App, blob: campfire_storage::Blob) 
     Ok(())
 }
 
+/// `blob.analyze`: its `after_update` touches the attached records.
+async fn analyze_attachment(app: &App, blob: campfire_storage::Blob) -> Result<campfire_storage::Blob> {
+    let storage = app.storage.clone();
+    app.db
+        .write(move |tx| {
+            let mut blob = blob;
+            storage.analyze(tx.conn(), &mut blob).map_err(storage_error)?;
+            touch_attachment_records(tx, blob.id)?;
+            Ok(blob)
+        })
+        .await
+        .map_err(db_error)
+}
+
 /// `Blob#touch_attachments`: each attached record is touched (a message also touches its room).
 fn touch_attachment_records(tx: &mut campfire_db::Tx<'_>, blob_id: i64) -> campfire_db::Result<()> {
     for (record_type, record_id) in campfire_storage::blob::attachment_records(tx.conn(), blob_id).map_err(storage_error)? {
@@ -295,11 +314,20 @@ fn touch_attachment_records(tx: &mut campfire_db::Tx<'_>, blob_id: i64) -> campf
     Ok(())
 }
 
-/// `@message.update!(message_params)`
+/// `@message.update!(message_params)`. A new attachment replaces the old one (whose blob is purged
+/// later) without `process_attachment`: the blob is only analyzed, by `ActiveStorage::AnalyzeJob`
+/// after commit (verified against the reference with a bot's `PUT` and `attachment`).
 pub(crate) async fn update_message(c: &Ctx, message: Message, attributes: MessageParams) -> Result<Message> {
     let app = c.app().clone();
     let request_host = Some(c.request.host());
-    c.app()
+    let attachment = match attributes.attachment {
+        Some(Assignment::Invalid) => return Err(invalid_attachment()),
+        Some(Assignment::Create(upload)) => Some(Some(upload)),
+        Some(_) => Some(None),
+        None => None,
+    };
+    let (id, blob) = c
+        .app()
         .db
         .write(move |tx| {
             let mut message = message;
@@ -307,10 +335,35 @@ pub(crate) async fn update_message(c: &Ctx, message: Message, attributes: Messag
                 let body = canonical_body(tx.conn(), &app, &body, request_host);
                 message.update_body(tx, &body)?;
             }
-            Ok(message)
+            let attachment_given = attachment.is_some();
+            let blob = match attachment {
+                Some(Some(upload)) => Some(
+                    app.storage
+                        .create_and_upload(
+                            tx.conn(),
+                            &upload.data,
+                            Filename::new(upload.filename),
+                            upload.content_type.as_deref(),
+                            tx.now().jiff(),
+                        )
+                        .map_err(storage_error)?,
+                ),
+                _ => None,
+            };
+            if attachment_given {
+                message.replace_attachment(tx, blob.as_ref().map(|blob| blob.id))?;
+            }
+            Ok((message.id, blob))
         })
         .await
-        .map_err(db_error)
+        .map_err(db_error)?;
+    if let Some(blob) = blob.filter(|blob| !blob.is_analyzed()) {
+        let job_app = c.app().clone();
+        c.app().jobs.perform_later("ActiveStorage::AnalyzeJob", async move {
+            analyze_attachment(&job_app, blob).await.map(drop).map_err(|e| anyhow::anyhow!("{e:?}"))
+        });
+    }
+    c.app().db.read(move |conn| Message::find(conn, id)).await.map_err(db_error)
 }
 
 /// `@message.destroy` then `@message.broadcast_remove`.
@@ -406,7 +459,8 @@ pub(crate) async fn present<T: Send + 'static>(
         .db
         .read(move |conn| {
             let presenter = Presenter::new(conn, &app.secrets, &app.storage, &*app.db.env().rich_text, app.clock.now(), request_host);
-            f(&presenter)
+            // The Jbuilder partials (`json.cache!`) read the fragment cache on this thread.
+            campfire_views::fragment_cache::with(&app.fragment_cache, || f(&presenter))
         })
         .await
         .map_err(db_error)

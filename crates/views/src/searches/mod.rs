@@ -26,7 +26,7 @@ pub struct IndexView {
 
 /// `searches/index`.
 #[derive(Template)]
-#[template(path = "searches/index.html")]
+#[template(path = "searches/index.html", blocks = ["head", "content"])]
 pub struct Index<'a> {
     pub ctx: &'a ViewContext<'a>,
     pub index: &'a IndexView,

@@ -222,7 +222,7 @@ fn unix_now() -> i64 {
 /// `WebPush.decode64` (`Base64.urlsafe_decode64`): either alphabet, padding optional.
 pub(crate) fn decode64(value: &str) -> Result<Vec<u8>, EncryptionError> {
     let mut value = value.replace('-', "+").replace('_', "/");
-    if !value.ends_with('=') && value.len() % 4 != 0 {
+    if !value.ends_with('=') && !value.len().is_multiple_of(4) {
         value.push_str(&"=".repeat(4 - value.len() % 4));
     }
     STANDARD.decode(value).map_err(|_| EncryptionError::Argument("invalid base64".into()))

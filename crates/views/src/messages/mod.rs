@@ -12,6 +12,7 @@ use serde::Deserialize;
 
 use crate::helpers as h;
 use crate::ViewContext;
+use crate::fragment_cache;
 use support::{epoch_ms, iso8601, RubyNumber};
 
 /// What the message views show of a user: `avatar_tag` and the author heading.
@@ -91,6 +92,9 @@ pub enum MessageContent {
     Text { html: String },
     Sound(SoundView),
     Attachment(AttachmentView),
+    /// Rendering raised past `message_presentation`'s own rescue (or `plain_text_body` raised):
+    /// `message_tag` rescues and renders `messages/_unrenderable` in place of the whole message.
+    Unrenderable,
 }
 
 /// A `/play <name>` message's `Sound`.
@@ -139,6 +143,9 @@ pub enum AttachmentPreview {
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct BoostView {
     pub id: i64,
+    /// For the fragment cache key (`boost.cache_key_with_version`).
+    #[serde(default)]
+    pub updated_at: Timestamp,
     pub message_id: i64,
     pub content: String,
     /// `boost.content.all_emoji?`.
@@ -166,6 +173,10 @@ impl MessageView {
         } else {
             format!("{prefix}_message_{}", self.client_message_id)
         }
+    }
+
+    pub fn is_unrenderable(&self) -> bool {
+        matches!(self.content, MessageContent::Unrenderable)
     }
 
     pub fn attachment(&self) -> Option<&AttachmentView> {
@@ -226,13 +237,69 @@ pub struct MessagePartial<'a> {
     pub message: &'a MessageView,
 }
 
+/// `render message`: `messages/_message`, whose body is `cache [ message, "presentation-v3" ]`
+/// (and whose collection renders are `cached: true`), so a message version renders once.
 pub fn message(ctx: &ViewContext, message: &MessageView) -> String {
-    MessagePartial { ctx, message }.render().expect("messages/_message renders")
+    fragment_cache::fetch(
+        || {
+            format!(
+                "views/messages/_message:{}/{}/presentation-v3",
+                message_digest(),
+                fragment_cache::cache_key_with_version("messages", message.id, message.updated_at)
+            )
+        },
+        || MessagePartial { ctx, message }.render().expect("messages/_message renders"),
+    )
+}
+
+/// [`message`] where a template renders the partial.
+pub fn cached_message(ctx: &ViewContext, message: &MessageView) -> crate::helpers::Html {
+    crate::helpers::raw(self::message(ctx, message))
 }
 
 /// `render partial: "messages/message", collection: messages`.
 pub fn message_collection(ctx: &ViewContext, messages: &[MessageView]) -> String {
     messages.iter().map(|m| message(ctx, m)).collect()
+}
+
+/// `messages/boosts/_boost`, whose body is `cache boost`.
+pub fn boost(ctx: &ViewContext, boost: &BoostView) -> String {
+    fragment_cache::fetch(
+        || {
+            format!(
+                "views/messages/boosts/_boost:{}/{}",
+                boost_digest(),
+                fragment_cache::cache_key_with_version("boosts", boost.id, boost.updated_at)
+            )
+        },
+        || BoostPartial { ctx, boost }.render().expect("messages/boosts/_boost renders"),
+    )
+}
+
+/// [`boost`] where a template renders the partial.
+pub fn cached_boost(ctx: &ViewContext, boost: &BoostView) -> crate::helpers::Html {
+    crate::helpers::raw(self::boost(ctx, boost))
+}
+
+/// The template digest in `messages/_message`'s fragment keys: the partial and what it renders.
+fn message_digest() -> &'static str {
+    static DIGEST: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        fragment_cache::digest(&[
+            include_str!("../../templates/messages/_message.html"),
+            include_str!("../../templates/messages/_actions.html"),
+            include_str!("../../templates/messages/_presentation.html"),
+            include_str!("../../templates/messages/_unrenderable.html"),
+            include_str!("../../templates/messages/boosts/_boosts.html"),
+            include_str!("../../templates/messages/boosts/_boost.html"),
+        ])
+    });
+    &DIGEST
+}
+
+fn boost_digest() -> &'static str {
+    static DIGEST: std::sync::LazyLock<String> =
+        std::sync::LazyLock::new(|| fragment_cache::digest(&[include_str!("../../templates/messages/boosts/_boost.html")]));
+    &DIGEST
 }
 
 /// `messages/index`: the page of messages the client fetches while scrolling (no layout).
@@ -350,7 +417,7 @@ pub mod broadcasts {
     use askama::Template;
 
     use super::support::turbo_stream;
-    use super::{BoostPartial, BoostView, MessageView, PresentationPartial};
+    use super::{BoostView, MessageView, PresentationPartial};
     use crate::ViewContext;
 
     /// `MessagesController#update`: replaces the message's presentation, keeping the scroll.
@@ -361,7 +428,7 @@ pub mod broadcasts {
 
     /// `Messages::BoostsController#broadcast_create`.
     pub fn append_boost(ctx: &ViewContext, boost: &BoostView, message_client_id: &str) -> String {
-        let content = BoostPartial { ctx, boost }.render().expect("messages/boosts/_boost renders");
+        let content = super::boost(ctx, boost);
         turbo_stream("append", &format!("boosts_message_{message_client_id}"), &content, true)
     }
 

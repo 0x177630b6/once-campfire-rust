@@ -32,7 +32,6 @@ use rails_compat::global_id::GlobalId;
 
 pub use broadcasts::{Broadcasts, Partials};
 pub use connection::SessionAuthenticator;
-pub use room_messages::guarded_stream;
 
 /// The cable server, identified by `current_user`.
 pub type Cable = Server<CableUser>;

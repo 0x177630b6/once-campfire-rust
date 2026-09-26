@@ -367,14 +367,23 @@ pub async fn allow_browser(c: &mut Ctx) -> Result<()> {
     Ok(())
 }
 
-/// `render template: "sessions/incompatible_browser"` (200, in the application layout). Rendered
-/// from a before-action, so it's HTML whatever the request format.
+/// `render template: "sessions/incompatible_browser"` (200). Rendered from a before-action, so
+/// it's HTML whatever the request format. The layout is the controller's: turbo-rails' frame
+/// layout for a Turbo-Frame request, except in controllers that declare their own layout
+/// (`MessagesController` and its `Messages::ByBotsController`), which always use the application
+/// layout.
 async fn render_incompatible_browser(c: &mut Ctx) -> Result {
     use askama::Template;
-    let response = crate::controllers::presenters_a::view_context::page(c, StatusCode::OK, |ctx| {
-        campfire_views::sessions::IncompatibleBrowser { ctx }.render()
-    })
-    .await?;
+    use campfire_views::sessions::IncompatibleBrowser;
+
+    let own_layout = c
+        .current::<crate::controllers::MatchedRoute>()
+        .is_some_and(|route| route.endpoint.starts_with("messages#") || route.endpoint.starts_with("messages/by_bots#"));
+    let response = if own_layout {
+        crate::controllers::presenters_a::view_context::page(c, StatusCode::OK, |ctx| IncompatibleBrowser { ctx }.render()).await?
+    } else {
+        crate::controllers::presenters::page::framed_page!(c, StatusCode::OK, |ctx| IncompatibleBrowser { ctx }).await?
+    };
     Ok(response.content_type(campfire_kit::response::HTML_UTF8))
 }
 

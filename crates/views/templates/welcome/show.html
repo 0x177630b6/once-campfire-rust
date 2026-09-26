@@ -1,4 +1,5 @@
 {% extends "layouts/application.html" %}
+{%- block head %}{% endblock %}
 
 {% block sidebar %}{{ h::sidebar_turbo_frame_tag(Some(h::routes::user_sidebar().as_str()), "") }}{% endblock %}
 

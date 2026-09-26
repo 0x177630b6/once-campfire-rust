@@ -3,11 +3,11 @@
 //! request body (`RawRequestBody`), or a top-level multipart `attachment`.
 
 use campfire_db::{Message, Room};
-use campfire_kit::{Ctx, Error, Param, Response, Result, StatusCode, format, halt};
+use campfire_kit::{Ctx, Param, Response, Result, StatusCode, format, halt, permit_keys};
 use campfire_views::messages::json;
 
 use super::{
-    MessageParams, broadcast_create, broadcast_replace, create_message, deliver_webhooks_to_bots, destroy_message,
+    MessageParams, attachment_assignment, broadcast_create, broadcast_replace, create_message, deliver_webhooks_to_bots, destroy_message,
     ensure_can_administer, find_paged_messages, present, set_message, update_message,
 };
 use crate::app::AppCtx;
@@ -98,11 +98,11 @@ fn ensure_body_or_attachment_present(c: &mut Ctx) -> Result<()> {
 
 /// `params[:attachment] ? params.permit(:attachment) : { body: raw_request_body }`
 fn message_params(c: &Ctx) -> Result<MessageParams> {
-    match c.params.get("attachment").filter(|p| !p.is_null()) {
-        Some(Param::File(file)) => Ok(MessageParams { attachment: Some(file.clone()), ..MessageParams::default() }),
-        // A non-file attachment is permitted as a string, which Active Storage can't attach.
-        Some(_) => Err(Error::internal(anyhow::anyhow!("Could not find or build blob: expected attachable"))),
-        None => Ok(MessageParams { body: Some(raw_request_body(c)), ..MessageParams::default() }),
+    if c.params.get("attachment").is_some_and(|p| !p.is_null()) {
+        let permitted = c.params.permit(&permit_keys(&["attachment"]));
+        Ok(MessageParams { attachment: attachment_assignment(&permitted)?, ..MessageParams::default() })
+    } else {
+        Ok(MessageParams { body: Some(raw_request_body(c)), ..MessageParams::default() })
     }
 }
 
@@ -127,9 +127,9 @@ async fn set_pagination_headers(c: &mut Ctx, room: &Room, messages: &[Message]) 
             let count = Message::count_in_room(conn, room_id)?;
             let next_page = match (first, last) {
                 (Some(_), Some(last)) if after => {
-                    Message::exists_after(conn, room_id, &last)?.then(|| ("after", last.id))
+                    Message::exists_after(conn, room_id, &last)?.then_some(("after", last.id))
                 }
-                (Some(first), Some(_)) => Message::exists_before(conn, room_id, &first)?.then(|| ("before", first.id)),
+                (Some(first), Some(_)) => Message::exists_before(conn, room_id, &first)?.then_some(("before", first.id)),
                 _ => None,
             };
             Ok((count, next_page))

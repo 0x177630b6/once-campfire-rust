@@ -9,7 +9,7 @@ use crate::layouts::Page;
 
 /// `first_runs/show.html.erb`: account setup, shown until the first user exists.
 #[derive(Template)]
-#[template(path = "first_runs/show.html")]
+#[template(path = "first_runs/show.html", blocks = ["head", "content"])]
 pub struct Show<'a> {
     pub ctx: &'a ViewContext<'a>,
 }

@@ -1,2 +1,2 @@
 {#- reference/app/views/messages/show.html.erb -#}
-{% include "messages/_message.html" %}
+{{ crate::messages::cached_message(ctx, message) }}

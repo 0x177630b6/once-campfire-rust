@@ -20,6 +20,7 @@ use campfire_views::messages::{
     AttachmentPreview, AttachmentView, BoostView, MessageContent, MessageView, RoomKind, SoundImage, SoundView, UserView,
 };
 use campfire_views::messages::support::RubyNumber;
+use campfire_views::fragment_cache;
 use campfire_views::rooms::{RoomView, room_display_name};
 use rails_compat::Secrets;
 use regex::Regex;
@@ -44,15 +45,8 @@ pub fn to_fs_number(time: jiff::Timestamp) -> String {
     time.strftime("%Y%m%d%H%M%S").to_string()
 }
 
-/// `Time#to_fs(:usec)`, the `cache_version` of a record.
-pub fn to_fs_usec(time: jiff::Timestamp) -> String {
-    format!("{}{:06}", time.strftime("%Y%m%d%H%M%S"), time.subsec_microsecond())
-}
-
 /// `record.cache_key_with_version`: `"messages/1-20240601120000000000"`.
-pub fn cache_key_with_version(table: &str, id: i64, updated_at: jiff::Timestamp) -> String {
-    format!("{table}/{id}-{}", to_fs_usec(updated_at))
-}
+pub use campfire_views::fragment_cache::cache_key_with_version;
 
 /// `user.avatar_token`: `signed_id(purpose: :avatar)`.
 pub fn avatar_token(secrets: &Secrets, user_id: i64) -> String {
@@ -74,6 +68,19 @@ pub fn room_kind(room_type: RoomType) -> RoomKind {
 
 pub fn user_view(secrets: &Secrets, user: &User) -> UserView {
     UserView { id: user.id, name: user.name.clone(), title: user.title(), avatar_url: avatar_path(secrets, user) }
+}
+
+/// `users/_user.json.jbuilder` (`json.cache! user`).
+fn cached_user_json(secrets: &Secrets, base_url: &str, user: &User) -> UserJson {
+    let key = || jbuilder_key("users/_user", &cache_key_with_version("users", user.id, user.updated_at.jiff()));
+    fragment_cache::try_fetch_value(key, || Ok::<_, std::convert::Infallible>(user_json(secrets, base_url, user)))
+        .unwrap_or_else(|never| match never {})
+}
+
+/// Jbuilder's `json.cache!` key: `jbuilder/views/<template>:<digest>/<record key>`. The digest
+/// is the Rust build's (templates can't change while the process runs).
+fn jbuilder_key(template: &str, record: &str) -> String {
+    format!("jbuilder/views/{template}:{}/{record}", env!("CARGO_PKG_VERSION"))
 }
 
 /// `users/_user.json.jbuilder`.
@@ -174,12 +181,32 @@ impl<'a> Presenter<'a> {
     /// A message as `messages/_message` shows it.
     pub fn message(&self, message: &Message) -> Result<MessageView> {
         let (_, room_name) = self.room_and_name(message.room_id)?;
+        match self.renderable_message(message, &room_name) {
+            // `message_tag` rescues whatever its block raises, e.g. `avatar_tag message.creator`
+            // for a creator that's gone (nil), and renders `messages/_unrenderable` instead.
+            Err(campfire_db::Error::RecordNotFound(_)) => Ok(MessageView {
+                id: message.id,
+                client_message_id: message.client_message_id.clone(),
+                room_id: message.room_id,
+                room_name,
+                creator: UserView { id: message.creator_id, name: String::new(), title: String::new(), avatar_url: String::new() },
+                created_at: message.created_at.jiff(),
+                updated_at: message.updated_at.jiff(),
+                all_emoji: false,
+                content: MessageContent::Unrenderable,
+                boosts: Vec::new(),
+            }),
+            rendered => rendered,
+        }
+    }
+
+    fn renderable_message(&self, message: &Message, room_name: &str) -> Result<MessageView> {
         let plain_text = self.plain_text_body(message)?;
         Ok(MessageView {
             id: message.id,
             client_message_id: message.client_message_id.clone(),
             room_id: message.room_id,
-            room_name,
+            room_name: room_name.to_string(),
             creator: self.user_view(message.creator_id)?,
             created_at: message.created_at.jiff(),
             updated_at: message.updated_at.jiff(),
@@ -197,6 +224,7 @@ impl<'a> Presenter<'a> {
     pub fn boost(&self, boost: &Boost) -> Result<BoostView> {
         Ok(BoostView {
             id: boost.id,
+            updated_at: boost.updated_at.jiff(),
             message_id: boost.message_id,
             content: boost.content.clone(),
             all_emoji: all_emoji(&boost.content),
@@ -206,6 +234,19 @@ impl<'a> Presenter<'a> {
 
     /// `message.content_type`, with what `message_presentation` shows for it.
     fn content(&self, message: &Message, plain_text: &str) -> Result<MessageContent> {
+        let body = message.body_html(self.conn)?.unwrap_or_default();
+        let resolver = self.resolver();
+        let ctx = resolver.render_context(self.request_host.clone());
+        // `message_tag` evaluates `message.plain_text_body` first; where that raises, it rescues
+        // and renders `messages/_unrenderable`, unless logging the exception raises again (a
+        // message that isn't UTF-8): then the page fails (verified against the reference).
+        match campfire_richtext::to_plain_text(&body, &ctx) {
+            Err(campfire_richtext::Error::Unrenderable(error)) => {
+                return Err(campfire_db::Error::Other(format!("message_tag's rescue raised logging {error}")));
+            }
+            Err(_) => return Ok(MessageContent::Unrenderable),
+            Ok(_) => {}
+        }
         if let Some(attachment) = self.attachment(message)? {
             return Ok(MessageContent::Attachment(attachment));
         }
@@ -220,14 +261,10 @@ impl<'a> Presenter<'a> {
                 text: sound.text.map(str::to_string),
             }));
         }
-        let body = message.body_html(self.conn)?.unwrap_or_default();
-        let resolver = self.resolver();
-        let html = match campfire_richtext::present_message(&body, &resolver.render_context(self.request_host.clone())) {
-            Presentation::Html(html) => html,
-            // TODO: MessageView can't express `messages/_unrenderable` yet (views B).
-            Presentation::Unrenderable => String::new(),
-        };
-        Ok(MessageContent::Text { html })
+        Ok(match campfire_richtext::present_message(&body, &ctx) {
+            Presentation::Html(html) => MessageContent::Text { html },
+            Presentation::Unrenderable => MessageContent::Unrenderable,
+        })
     }
 
     /// `message.attachment` as `Messages::AttachmentPresentation` needs it.
@@ -295,25 +332,35 @@ impl<'a> Presenter<'a> {
             .map_err(|error| campfire_db::Error::Other(format!("editable_body raised: {error}")))
     }
 
-    /// `messages/_message.json.jbuilder`.
+    /// `messages/_message.json.jbuilder` (`json.cache! message`).
     pub fn message_json(&self, message: &Message, base_url: &str) -> Result<MessageJson> {
+        let key = || jbuilder_key("messages/_message", &cache_key_with_version("messages", message.id, message.updated_at.jiff()));
+        fragment_cache::try_fetch_value(key, || self.render_message_json(message, base_url))
+    }
+
+    fn render_message_json(&self, message: &Message, base_url: &str) -> Result<MessageJson> {
         Ok(MessageJson {
             id: message.id,
             created_at: json_time(message.created_at.jiff()),
             body: MessageBodyJson { plain_text: self.plain_text_body(message)?, html: self.body_html(message)? },
-            creator: user_json(self.secrets, base_url, &self.user(message.creator_id)?),
+            creator: cached_user_json(self.secrets, base_url, &self.user(message.creator_id)?),
             room: IdJson { id: message.room_id },
             url: format!("{base_url}{}", campfire_routes::room_message(message.room_id, message.id)),
         })
     }
 
-    /// `messages/boosts/_boost.json.jbuilder`.
+    /// `messages/boosts/_boost.json.jbuilder` (`json.cache! boost`).
     pub fn boost_json(&self, boost: &Boost, message: &Message, base_url: &str) -> Result<BoostJson> {
+        let key = || jbuilder_key("messages/boosts/_boost", &cache_key_with_version("boosts", boost.id, boost.updated_at.jiff()));
+        fragment_cache::try_fetch_value(key, || self.render_boost_json(boost, message, base_url))
+    }
+
+    fn render_boost_json(&self, boost: &Boost, message: &Message, base_url: &str) -> Result<BoostJson> {
         Ok(BoostJson {
             id: boost.id,
             content: boost.content.clone(),
             created_at: json_time(boost.created_at.jiff()),
-            booster: user_json(self.secrets, base_url, &self.user(boost.booster_id)?),
+            booster: cached_user_json(self.secrets, base_url, &self.user(boost.booster_id)?),
             message: BoostMessageJson {
                 id: boost.message_id,
                 url: format!("{base_url}{}", campfire_routes::room_message(message.room_id, message.id)),

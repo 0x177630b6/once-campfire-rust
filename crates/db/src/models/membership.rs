@@ -208,8 +208,9 @@ impl Membership {
     }
 
     /// `update!(involvement:)`
-    pub fn update_involvement(&mut self, tx: &mut Tx<'_>, involvement: Involvement) -> Result<()> {
-        if self.involvement == Some(involvement) {
+    pub fn update_involvement(&mut self, tx: &mut Tx<'_>, involvement: impl Into<Option<Involvement>>) -> Result<()> {
+        let involvement = involvement.into();
+        if self.involvement == involvement {
             return Ok(());
         }
         let now = tx.now();
@@ -217,7 +218,7 @@ impl Membership {
             r#"UPDATE "memberships" SET "involvement" = ?, "updated_at" = ? WHERE "memberships"."id" = ?"#,
             params![involvement, now, self.id],
         )?;
-        self.involvement = Some(involvement);
+        self.involvement = involvement;
         self.updated_at = now;
         Ok(())
     }

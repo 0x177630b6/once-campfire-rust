@@ -9,7 +9,7 @@ use crate::layouts::Page;
 
 /// `welcome/show.html.erb`: shown to users who aren't in any room yet.
 #[derive(Template)]
-#[template(path = "welcome/show.html")]
+#[template(path = "welcome/show.html", blocks = ["head", "content"])]
 pub struct Show<'a> {
     pub ctx: &'a ViewContext<'a>,
     /// `Current.user.name`.

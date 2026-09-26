@@ -127,9 +127,10 @@ pub fn turbo_stream(action: &str, target: &str, content: &str, maintain_scroll: 
     )
 }
 
-/// Serializes like Rails' `to_json`: `ActiveSupport::JSON` escapes `<`, `>` and `&` (and the
-/// JavaScript-unsafe line separators) as `\u` sequences, which serde_json leaves raw. Those
-/// characters only ever appear inside JSON strings, so replacing them after the fact is safe.
+/// Serializes like Rails' `to_json`: `ActiveSupport::JSON` escapes `<`, `>` and `&` as `\u`
+/// sequences, which serde_json leaves raw (U+2028/U+2029 stay raw with `load_defaults 8.2`).
+/// Those characters only ever appear inside JSON strings, so replacing them after the fact is
+/// safe.
 pub fn rails_json<T: serde::Serialize>(value: &T) -> String {
     let json = serde_json::to_string(value).expect("view models serialize");
     let mut out = String::with_capacity(json.len());
@@ -138,8 +139,6 @@ pub fn rails_json<T: serde::Serialize>(value: &T) -> String {
             '<' => out.push_str("\\u003c"),
             '>' => out.push_str("\\u003e"),
             '&' => out.push_str("\\u0026"),
-            '\u{2028}' => out.push_str("\\u2028"),
-            '\u{2029}' => out.push_str("\\u2029"),
             _ => out.push(c),
         }
     }

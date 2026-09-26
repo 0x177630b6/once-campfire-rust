@@ -351,7 +351,7 @@ pub async fn direct_uploads_create(c: &mut Ctx) -> Result {
     ));
     let signed_id = paths::signed_blob_id(&*storage.verifier, blob.id, None);
     let json = direct_upload_json(&blob, &signed_id, &url, content_type.as_deref());
-    Ok(Response::with_body(StatusCode::OK, campfire_kit::response::JSON_UTF8, json))
+    Ok(c.render_as(StatusCode::OK, campfire_kit::response::JSON_UTF8, json))
 }
 
 /// `blob.as_json(root: false, methods: :signed_id).merge(direct_upload: { url:, headers: })`

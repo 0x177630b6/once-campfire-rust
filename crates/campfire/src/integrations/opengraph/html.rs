@@ -279,11 +279,12 @@ impl Scanner {
             }
         }
         let name: String = self.chars[start..self.pos].iter().collect();
-        if !name.is_empty() && self.peek(0) == Some(';') {
-            if let Ok(index) = ENTITIES.binary_search_by(|(n, _)| (*n).cmp(name.as_str())) {
-                self.pos += 1;
-                return char::from_u32(ENTITIES[index].1).map(String::from).unwrap_or_default();
-            }
+        if !name.is_empty()
+            && self.peek(0) == Some(';')
+            && let Ok(index) = ENTITIES.binary_search_by(|(n, _)| (*n).cmp(name.as_str()))
+        {
+            self.pos += 1;
+            return char::from_u32(ENTITIES[index].1).map(String::from).unwrap_or_default();
         }
         format!("&{name}")
     }
@@ -323,8 +324,7 @@ mod tests {
     fn title(html: &str) -> Option<String> {
         meta_elements(&format!("<meta charset=utf-8>{html}"))
             .into_iter()
-            .filter(|m| m.attr("property") == Some("og:title"))
-            .last()
+            .rfind(|m| m.attr("property") == Some("og:title"))
             .and_then(|m| m.attr("content").filter(|c| !c.is_empty()).map(str::to_string))
     }
 

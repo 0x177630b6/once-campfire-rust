@@ -354,6 +354,26 @@ impl Message {
         Ok(now)
     }
 
+    /// `update!(attachment: blob or nil)`: `has_one_attached` replaces the attachment. The old
+    /// one is destroyed (its blob purged after commit, `dependent: :purge_later`) and each
+    /// attachment change touches the message (`belongs_to :record, touch: true`), and so its room.
+    pub fn replace_attachment(&mut self, tx: &mut Tx<'_>, blob_id: Option<i64>) -> Result<()> {
+        if let Some(attachment) =
+            Attachment::find_for(tx.conn(), RECORD_TYPE, self.id, "attachment")?
+        {
+            attachment.delete(tx)?;
+            tx.emit_after_commit(Event::PurgeBlob {
+                blob_id: attachment.blob_id,
+            });
+            self.touch(tx)?;
+        }
+        if let Some(blob_id) = blob_id {
+            Attachment::create(tx, RECORD_TYPE, self.id, "attachment", blob_id)?;
+            self.touch(tx)?;
+        }
+        Ok(())
+    }
+
     /// `destroy`: its attachment (blob purged later), boosts and body, then the message, and
     /// the room is touched. The search index entry goes after commit.
     pub fn destroy(&self, tx: &mut Tx<'_>) -> Result<()> {

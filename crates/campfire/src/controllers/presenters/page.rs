@@ -12,12 +12,25 @@ use crate::app::App;
 use crate::channels::Partials;
 use crate::controllers::presenters_a::view_context::{Layout, account_summary};
 
-/// A template that extends `layouts/application` itself.
-pub async fn page(c: &mut Ctx, status: StatusCode, render: impl FnOnce(&ViewContext) -> askama::Result<String>) -> Result {
-    let layout = Layout::load(c).await?;
-    let html = layout.render(c, render)?;
-    Ok(layout.page(c, status, html))
+/// A template that extends `layouts/application` itself (with `blocks = ["head", "content"]`):
+/// the full page, or for a Turbo-Frame request its `head` and `content` in turbo-rails' frame
+/// layout (`layout -> { "turbo_rails/frame" if turbo_frame_request? }`).
+///
+/// `framed_page!(c, StatusCode::OK, |ctx| rooms::Show { ctx, show: &show }).await`
+macro_rules! framed_page {
+    ($c:expr, $status:expr, |$ctx:ident| $page:expr) => {
+        $crate::controllers::presenters_a::view_context::page_or_frame(
+            $c,
+            $status,
+            |$ctx| askama::Template::render(&$page),
+            |$ctx| {
+                let page = $page;
+                campfire_views::layouts::frame($ctx, page.as_head(), page.as_content())
+            },
+        )
+    };
 }
+pub(crate) use framed_page;
 
 /// A content-only template: Rails wraps it in the application layout, or in turbo-rails'
 /// `layouts/turbo_rails/frame` when the request carries a `Turbo-Frame` header.
@@ -87,7 +100,8 @@ pub fn render_detached_at<T>(app: &App, account: Option<&Account>, base_url: &st
         last_room_visited_id: None,
         app_version: app.config.app_version.clone(),
     };
-    render(&ctx)
+    // Renders outside a request (broadcasts from jobs) share the fragment cache too.
+    campfire_views::fragment_cache::with(&app.fragment_cache, || render(&ctx))
 }
 
 /// The broadcast partials, rendered up front by the controller (which has the view models) and

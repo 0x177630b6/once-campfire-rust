@@ -1,5 +1,6 @@
 {#- reference/app/views/searches/index.html.erb, with SearchesHelper#search_results_tag -#}
 {% extends "layouts/application.html" %}
+{%- block head %}{% endblock %}
 
 {%- block nav %}
   {%- if let Some(query) = index.query %}
@@ -31,7 +32,7 @@
 
   <div id="search-results" class="messages searches__results" data-controller="search-results" data-search-results-target="messages" data-search-results-me-class="message--me" data-search-results-threaded-class="message--threaded" data-search-results-mentioned-class="message--mentioned" data-search-results-formatted-class="message--formatted">
     {%- for message in index.messages %}
-    {% include "messages/_message.html" %}
+    {{ crate::messages::cached_message(ctx, message) }}
     {%- endfor %}
   </div></div>
 {%- endblock %}

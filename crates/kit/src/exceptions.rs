@@ -2,6 +2,10 @@
 //!
 //! JSON requests get `{"status":404,"error":"Not Found"}`; everything else gets
 //! `public/<status>.html`, or an empty body with the status when that file doesn't exist.
+//!
+//! Unlike rendered responses (`charset=utf-8`), these say `charset=UTF-8`: PublicExceptions and
+//! `ShowExceptions#pass_response` interpolate `ActionDispatch::Response.default_charset`, which
+//! the railtie sets from `config.encoding` (verified against the reference).
 
 use axum::http::StatusCode;
 
@@ -9,22 +13,24 @@ use crate::app::KitConfig;
 use crate::format::{self, Format};
 use crate::response::Response;
 
+const CHARSET: &str = "charset=UTF-8";
+
 pub fn render(config: &KitConfig, status: StatusCode, format: Option<Format>, head: bool) -> Response {
     let content_type = format.filter(|f| **f != format::ALL);
     if head {
         let ct = content_type.map(|f| f.string).unwrap_or("text/html");
-        return Response::with_body(status, &format!("{ct}; charset=utf-8"), "");
+        return Response::with_body(status, &format!("{ct}; {CHARSET}"), "");
     }
     if content_type == Some(&format::JSON) {
         let body = format!(r#"{{"status":{},"error":"{}"}}"#, status.as_u16(), reason(status));
-        return Response::with_body(status, "application/json; charset=utf-8", body);
+        return Response::with_body(status, &format!("application/json; {CHARSET}"), body);
     }
     let page = config.public_path.as_ref().and_then(|dir| std::fs::read(dir.join(format!("{}.html", status.as_u16()))).ok());
     match page {
-        Some(html) => Response::with_body(status, "text/html; charset=utf-8", html),
+        Some(html) => Response::with_body(status, &format!("text/html; {CHARSET}"), html),
         // PublicExceptions answers X-Cascade: pass; ShowExceptions#pass_response turns that into
         // an empty page with the error's status.
-        None => Response::with_body(status, "text/html; charset=utf-8", ""),
+        None => Response::with_body(status, &format!("text/html; {CHARSET}"), ""),
     }
 }
 
@@ -55,6 +61,7 @@ mod tests {
         let response = render(&config, StatusCode::NOT_FOUND, Some(&format::HTML), false);
         assert_eq!(response.status, StatusCode::NOT_FOUND);
         assert_eq!(response.body_bytes().unwrap().as_ref(), b"<h1>404</h1>");
+        assert_eq!(response.headers[axum::http::header::CONTENT_TYPE], "text/html; charset=UTF-8");
         let missing = render(&config, StatusCode::BAD_REQUEST, None, false);
         assert_eq!(missing.status, StatusCode::BAD_REQUEST);
         assert!(missing.body_bytes().unwrap().is_empty());

@@ -342,6 +342,12 @@ pub fn content_mime_type(content_type: Option<&str>) -> Result<Option<Format>, I
     }
 }
 
+/// `request.should_apply_vary_header?`: `!params_readable? && use_accept_header &&
+/// valid_accept_header`, i.e. the format came from the `Accept` header, not a format param.
+pub fn should_apply_vary_header(input: &NegotiationInput) -> bool {
+    input.format_param.is_none() && valid_accept_header(input)
+}
+
 fn valid_accept_header(input: &NegotiationInput) -> bool {
     let accept = input.accept.unwrap_or("");
     let present = !accept.trim().is_empty();

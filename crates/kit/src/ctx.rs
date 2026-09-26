@@ -277,16 +277,28 @@ impl Ctx {
     /// `request.formats`; an invalid `Accept` header is a 406 like Rails' `InvalidType`.
     pub fn formats(&mut self) -> Result<Vec<Format>> {
         if self.formats.is_none() {
-            let input = NegotiationInput {
-                format_param: self.params.str("format"),
-                accept: self.request.header("accept"),
-                content_type: self.request.content_type(),
-                path: self.request.path(),
-                xhr: self.request.is_xhr(),
-            };
-            self.formats = Some(format::formats(&input));
+            self.formats = Some(format::formats(&self.negotiation_input()));
         }
         self.formats.clone().unwrap().map_err(|_| Error::UnknownFormat)
+    }
+
+    fn negotiation_input(&self) -> NegotiationInput<'_> {
+        NegotiationInput {
+            format_param: self.params.str("format"),
+            accept: self.request.header("accept"),
+            content_type: self.request.content_type(),
+            path: self.request.path(),
+            xhr: self.request.is_xhr(),
+        }
+    }
+
+    /// `_set_vary_header`, which every `render` runs (not `head` or `redirect_to`): `Vary: Accept`
+    /// when the format came from the `Accept` header, unless the response already varies.
+    pub fn set_vary_header(&self, response: Response) -> Response {
+        if response.headers.contains_key(header::VARY) || !format::should_apply_vary_header(&self.negotiation_input()) {
+            return response;
+        }
+        response.header(header::VARY, "Accept")
     }
 
     /// `request.format`: the first format; `None` is Rails' `Mime::NullType`.
@@ -328,7 +340,12 @@ impl Ctx {
 
     /// `render html:` / a template, as `text/html; charset=utf-8`.
     pub fn render_html(&mut self, status: StatusCode, html: impl Into<Bytes>) -> Response {
-        Response::with_body(status, response::HTML_UTF8, html)
+        self.render_as(status, response::HTML_UTF8, html)
+    }
+
+    /// `render` with an explicit content type (`render json:`, `send_data`, ...).
+    pub fn render_as(&mut self, status: StatusCode, content_type: &str, body: impl Into<Bytes>) -> Response {
+        self.set_vary_header(Response::with_body(status, content_type, body))
     }
 
     pub fn html(&mut self, html: impl Into<Bytes>) -> Response {
@@ -338,18 +355,18 @@ impl Ctx {
     /// A rendered template in the negotiated format (`respond_to` choice or request format).
     pub fn render(&mut self, status: StatusCode, body: impl Into<Bytes>) -> Response {
         let format = self.rendered_format();
-        Response::with_body(status, &format!("{}; charset=utf-8", format.string), body)
+        self.render_as(status, &format!("{}; charset=utf-8", format.string), body)
     }
 
     /// `render turbo_stream:` (`text/vnd.turbo-stream.html`).
     pub fn turbo_stream(&mut self, html: impl Into<Bytes>) -> Response {
-        Response::with_body(StatusCode::OK, response::TURBO_STREAM_UTF8, html)
+        self.render_as(StatusCode::OK, response::TURBO_STREAM_UTF8, html)
     }
 
     /// `render json:`
     pub fn json<T: Serialize + ?Sized>(&mut self, status: StatusCode, value: &T) -> Result<Response> {
         let body = serde_json::to_vec(value).map_err(Error::internal)?;
-        Ok(Response::with_body(status, response::JSON_UTF8, body))
+        Ok(self.render_as(status, response::JSON_UTF8, body))
     }
 
     /// `head status`: no body; a bare content type (no charset) unless the status has no content.

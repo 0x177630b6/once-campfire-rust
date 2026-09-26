@@ -4,7 +4,7 @@
       data-controller="turbo-streaming" data-action="turbo:submit-start->turbo-streaming#unsubscribe">
     <div class="flex-inline flex-wrap gap" id="{{ message.dom_id("boosts") }}" data-turbo-streaming-target="container">
       {%- for boost in message.boosts %}
-      {% include "messages/boosts/_boost.html" %}
+      {{ crate::messages::cached_boost(ctx, boost) }}
       {%- endfor %}
     </div>
 

@@ -25,7 +25,7 @@ pub struct HelpContactPartial<'a> {
 
 /// `accounts/edit.html.erb`.
 #[derive(Template)]
-#[template(path = "accounts/edit.html")]
+#[template(path = "accounts/edit.html", blocks = ["head", "content"])]
 pub struct Edit<'a> {
     pub ctx: &'a ViewContext<'a>,
     /// `Current.account.id`: `form_with model: @account` posts to `/account.<id>` because the
@@ -111,7 +111,7 @@ pub struct BotForm {
 
 /// `accounts/bots/index.html.erb`.
 #[derive(Template)]
-#[template(path = "accounts/bots/index.html")]
+#[template(path = "accounts/bots/index.html", blocks = ["head", "content"])]
 pub struct BotsIndex<'a> {
     pub ctx: &'a ViewContext<'a>,
     pub bots: Vec<Bot>,
@@ -125,7 +125,7 @@ impl Page for BotsIndex<'_> {
 
 /// `accounts/bots/new.html.erb`.
 #[derive(Template)]
-#[template(path = "accounts/bots/new.html")]
+#[template(path = "accounts/bots/new.html", blocks = ["head", "content"])]
 pub struct BotsNew<'a> {
     pub ctx: &'a ViewContext<'a>,
     pub bot: BotForm,
@@ -139,7 +139,7 @@ impl Page for BotsNew<'_> {
 
 /// `accounts/bots/edit.html.erb`.
 #[derive(Template)]
-#[template(path = "accounts/bots/edit.html")]
+#[template(path = "accounts/bots/edit.html", blocks = ["head", "content"])]
 pub struct BotsEdit<'a> {
     pub ctx: &'a ViewContext<'a>,
     pub bot_id: i64,
@@ -154,7 +154,7 @@ impl Page for BotsEdit<'_> {
 
 /// `accounts/custom_styles/edit.html.erb`.
 #[derive(Template)]
-#[template(path = "accounts/custom_styles/edit.html")]
+#[template(path = "accounts/custom_styles/edit.html", blocks = ["head", "content"])]
 pub struct CustomStylesEdit<'a> {
     pub ctx: &'a ViewContext<'a>,
     pub custom_styles: Option<String>,

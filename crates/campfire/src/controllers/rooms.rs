@@ -214,7 +214,7 @@ async fn render_show(c: &mut Ctx, room: Room) -> Result {
         })
         .await
         .map_err(db_error)?;
-    page::page(c, StatusCode::OK, |ctx| campfire_views::rooms::Show { ctx, show: &show }.render()).await
+    page::framed_page!(c, StatusCode::OK, |ctx| campfire_views::rooms::Show { ctx, show: &show }).await
 }
 
 #[cfg(test)]

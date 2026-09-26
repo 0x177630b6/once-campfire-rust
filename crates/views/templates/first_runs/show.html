@@ -1,4 +1,5 @@
 {% extends "layouts/application.html" %}
+{%- block head %}{% endblock %}
 
 {% block content %}{% let form = h::form_with(ctx, h::routes::first_run()).model("user").class("center max-width") %}{% filter form_with(form) %}
   <section class="nametag u-relative">

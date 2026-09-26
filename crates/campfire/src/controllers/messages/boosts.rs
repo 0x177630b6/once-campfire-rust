@@ -102,8 +102,7 @@ pub(crate) async fn broadcast_create(c: &Ctx, message: &Message, boost: &Boost) 
             );
             let view = presenter.boost(&boost)?;
             let account = campfire_db::Account::first(conn)?;
-            let html = page::render_detached_at(&app, account.as_ref(), &base_url, |ctx| views::BoostPartial { ctx, boost: &view }.render())
-                .map_err(|e| campfire_db::Error::Other(e.to_string()))?;
+            let html = page::render_detached_at(&app, account.as_ref(), &base_url, |ctx| views::boost(ctx, &view));
             let room = Room::find(conn, message.room_id)?;
             let partials = Rendered { boost: Some(html), ..Rendered::default() };
             app.broadcasts.boost_create(&room, &message, &boost, &partials);

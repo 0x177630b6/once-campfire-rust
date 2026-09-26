@@ -17,6 +17,8 @@ pub fn message_presentation(ctx: &ViewContext, message: &MessageView) -> String 
         MessageContent::Attachment(attachment) => attachment_presentation(ctx, attachment),
         MessageContent::Sound(sound) => sound_presentation(sound),
         MessageContent::Text { html } => html.clone(),
+        // `messages/_message` renders `messages/_unrenderable` instead.
+        MessageContent::Unrenderable => String::new(),
     }
 }
 

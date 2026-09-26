@@ -24,11 +24,7 @@ pub async fn show(c: &mut Ctx) -> Result {
 pub async fn update(c: &mut Ctx) -> Result {
     before_actions(c, Before::default()).await?;
     let (membership, room) = concerns::set_room(c).await?;
-    // `@membership.update! involvement: params[:involvement]`: an unknown value raises
-    // ArgumentError ('... is not a valid involvement').
-    let involvement = c.param_str("involvement").and_then(Involvement::from_name).ok_or_else(|| {
-        Error::internal(anyhow::anyhow!("{:?} is not a valid involvement", c.param_str("involvement")))
-    })?;
+    let involvement = involvement_param(c)?;
     let previous = membership.involvement;
     let membership = c
         .app()
@@ -64,4 +60,16 @@ pub async fn update(c: &mut Ctx) -> Result {
 
     let url = c.url_for(&campfire_routes::room_involvement(room.id));
     c.redirect_to(&url)
+}
+
+/// `params[:involvement]` as the enum casts it: a blank value (missing, "", "  ", `[]`) is stored
+/// as nil, anything that isn't one of the values raises ArgumentError ('... is not a valid
+/// involvement'). Verified against the reference with `update!(involvement: "")`.
+fn involvement_param(c: &Ctx) -> Result<Option<Involvement>> {
+    let Some(param) = c.param("involvement").filter(|param| !param.is_blank()) else { return Ok(None) };
+    param
+        .as_str()
+        .and_then(Involvement::from_name)
+        .map(Some)
+        .ok_or_else(|| Error::internal(anyhow::anyhow!("{:?} is not a valid involvement", param.to_s())))
 }

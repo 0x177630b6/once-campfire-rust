@@ -13,7 +13,7 @@ pub const ALLOW_BROWSER_VERSIONS: [(&str, &str); 4] = [("safari", "17.2"), ("chr
 
 /// `sessions/new.html.erb`.
 #[derive(Template)]
-#[template(path = "sessions/new.html")]
+#[template(path = "sessions/new.html", blocks = ["head", "content"])]
 pub struct New<'a> {
     pub ctx: &'a ViewContext<'a>,
     /// `params[:email_address]`.
@@ -30,7 +30,7 @@ impl Page for New<'_> {
 
 /// `sessions/incompatible_browser.html.erb`, rendered by `AllowBrowser` for old browsers.
 #[derive(Template)]
-#[template(path = "sessions/incompatible_browser.html")]
+#[template(path = "sessions/incompatible_browser.html", blocks = ["head", "content"])]
 pub struct IncompatibleBrowser<'a> {
     pub ctx: &'a ViewContext<'a>,
 }
@@ -44,7 +44,7 @@ impl Page for IncompatibleBrowser<'_> {
 /// `sessions/transfers/show.html.erb`: an auto-submitting form that PUTs back to the page's
 /// own URL (`url_for({})`, i.e. `session_transfer_path(id)`).
 #[derive(Template)]
-#[template(path = "sessions/transfers/show.html")]
+#[template(path = "sessions/transfers/show.html", blocks = ["head", "content"])]
 pub struct TransferShow<'a> {
     pub ctx: &'a ViewContext<'a>,
     /// The request path, `session_transfer_path(params[:id])`.

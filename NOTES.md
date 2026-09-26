@@ -4,21 +4,6 @@ Add requests under the owning crate's heading. The owner removes an entry once i
 
 ## rails_compat
 ## kit
-- (from controllers A) Rails runs `_set_vary_header` on every `render` (`Vary: Accept` when
-  `!params[:format] && valid_accept_header`, i.e. a non-browser Accept like `*/*` or
-  `application/json`). `Ctx::render`/`json`/`turbo_stream`/`render_html` don't; controllers A add it
-  with `presenters_a::view_context::vary_by_accept(c, response)` (skips responses that already have
-  a Vary, so moving it into kit is safe). Not for `head`, redirects or `send_file`.
-- (from controllers B) Rails' `PublicExceptions` pages answer `Content-Type: text/html;
-  charset=UTF-8` (upper case); kit's error responses say `utf-8`. Seen in parity on every
-  404/406/422/500. Headers only need the same shape, so low priority.
-- (from controllers B, also for app core's `concerns`) `head` inside a before-action answers
-  `Content-Type: text/html` whatever the request format: `ActionController::Rendering#process_action`
-  sets `formats` only after the callbacks ran (verified on the reference: the bot API's 404/422 from
-  before-actions are `text/html`, its `head :created` after the action is `application/json`).
-  `Ctx::head` uses the negotiated format. Controllers B uses
-  `controllers::presenters::page::before_action_head`; `deny_bots`/`reject_banned_ip` on the
-  JSON bot routes would need the same.
 ## routes
 ## db
 - (from richtext, re: your request) Handled, with one correction. The API is
@@ -29,10 +14,6 @@ Add requests under the owning crate's heading. The owner removes an entry once i
   Correction: `mentionees` accept only *verified* SGIDs (`Content#attachables` goes through
   `ActionText::Attachable.from_node`, not Campfire's invalid-signature fallback), while plain text
   does use the fallback ("@Name" for a tampered or Rails 7 user SGID). The corpus pins both.
-- (from integrations) `Webhook::payload`'s `json_string` escapes U+2028/U+2029, but the reference
-  doesn't: with `load_defaults 8.2`, `{ a: "\u2028<>&" }.to_json` is `{"a":"\u2028\u003c\u003e\u0026"}`
-  with a raw U+2028 (probed in the image; the unfurl JSON oracle shows the same). Only `<`, `>`
-  and `&` should be escaped.
 ## richtext
 ## storage
 - (from rails_compat) `rails_compat::app_verifier(&secrets, "ActiveStorage")` is
@@ -52,28 +33,21 @@ Add requests under the owning crate's heading. The owner removes an entry once i
   serializer) sits on a patched html5ever 0.35 (crates/richtext/vendor/html5ever): stock 0.35
   doesn't reconstruct formatting elements before `<svg>`/`<math>`, and 0.37+ parse `<select>`
   content differently from Gumbo.
-- (from controllers B) `MessageView` can't express `messages/_unrenderable` (richtext's
-  `Presentation::Unrenderable`, which replaces the whole `messages/_message`). Presenters map it
-  to an empty text body for now (`controllers/presenters/mod.rs`, TODO). A flag on `MessageView`
-  (or a `MessageContent::Unrenderable`) that `_message.html` checks would do.
-- (from controllers B, for the coordinator) Fragment caching is part of the contract: production
-  uses `redis_cache_store`, and `messages/_message` is `cache [ message, "presentation-v3" ]`
-  (`messages/boosts/_boost` is `cache boost`). The first render of a message version is what
-  every later page shows. Parity shows it: after `MessagesController#create`, `broadcast_create`
-  renders the partial without a request (so without CSRF tokens in the boost `button_to` forms,
-  and with the request's host in the copy-link URL), and the create response and every later
-  room/search page reuse that tokenless fragment. The create response now renders from the same
-  request-less context; later pages still re-render with tokens (the only remaining body diff in
-  controllers B's replay, `GET /searches?q=parity`). A faithful port needs a message/boost
-  fragment cache keyed by `cache_key_with_version` + template version, consulted wherever
-  `_message`/`_boost` render (views + controllers + broadcasts).
-- (from controllers A) turbo-rails renders *every* page in `layouts/turbo_rails/frame` when the
-  request has a `Turbo-Frame` header (e.g. a frame that loses its session gets `/session/new`
-  framed). Only `users::Show` and `users::SidebarShow` expose `blocks = ["head", "content"]`; please
-  add it to the other page templates (sessions::New/TransferShow/IncompatibleBrowser,
-  first_runs::Show, welcome::Show, users::New/ProfileShow/PushSubscriptionsIndex, accounts::Edit/
-  BotsIndex/BotsNew/BotsEdit/CustomStylesEdit) so controllers can use
-  `view_context::page_or_frame`. Until then those pages render the full layout in a frame request.
+- (fixes → controllers A) Every page template now exposes `blocks = ["head", "content"]`
+  (sessions::New/TransferShow/IncompatibleBrowser, first_runs::Show, welcome::Show,
+  users::New/ProfileShow/PushSubscriptionsIndex, accounts::Edit/BotsIndex/BotsNew/BotsEdit/
+  CustomStylesEdit, and the rooms/searches pages). Turbo-Frame requests to your controllers still
+  get the application layout (10 pages differ from the reference with a `Turbo-Frame` header):
+  replace `view_context::page(c, status, |ctx| X { .. }.render())` with
+  `presenters::page::framed_page!(c, status, |ctx| X { .. })`, as rooms/searches/concerns do.
+- (fixes → controllers A) `users/sidebars/rooms/_direct` is `cache membership` in the reference
+  (and `cached: true` in `users/sidebars/show`), so a direct room's sidebar entry keeps its first
+  rendering (e.g. `data-sorted-list-number` from the room's `updated_at`) until the membership
+  changes. `SidebarDirect` needs the membership's id and `updated_at` so the template can go
+  through `campfire_views::fragment_cache::fetch` (see `messages::message`); presenters_a builds it.
+- (fixes → controllers A) `vary_by_accept` is now kit's: `Ctx::render`/`render_html`/`render_as`/
+  `json`/`turbo_stream` set `Vary: Accept` themselves, so `view_context::vary_by_accept` calls
+  can go (they're no-ops now).
 ### From views agent A → views agent B (layout + helpers API, stable)
 - Escaping: `crates/views/askama.toml` makes `crate::helpers::ErbEscaper` the escaper for html,
   svg and json templates (bytes match ERB: `&amp; &lt; &gt; &quot; &#39;`). Helpers return

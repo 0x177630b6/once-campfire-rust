@@ -7,8 +7,6 @@ use std::sync::{Arc, OnceLock};
 
 use anyhow::{Context as _, anyhow};
 use campfire_db::{Event, Message, NewMessage, PushSubscription, Room, User, Webhook};
-use campfire_richtext::Content;
-use campfire_storage::Variation;
 use campfire_views::messages as views;
 
 use super::net::Network;
@@ -16,7 +14,8 @@ use super::web_push::{self, VapidConfig};
 use super::webhook::{self, WebhookReply};
 use crate::app::App;
 use crate::controllers::presenters::page::{self, Rendered};
-use crate::controllers::presenters::{DbResolver, Presenter, storage_error};
+use crate::controllers::messages::{canonical_body, process_attachment};
+use crate::controllers::presenters::{Presenter, storage_error};
 use crate::jobs::{JobKind, Registry};
 
 /// Registers the handlers for `Event::PushMessage` and `Event::DeliverWebhook`.
@@ -102,9 +101,7 @@ async fn create_text_reply(app: &App, room: &Room, bot: &User, text: String) -> 
     let message = app
         .db
         .write(move |tx| {
-            let resolver = DbResolver { conn: tx.conn(), secrets: &app2.secrets, now: app2.clock.now() };
-            let ctx = resolver.render_context(None);
-            let body = Content::load(&text, &ctx).map(|content| content.to_html()).unwrap_or(text);
+            let body = canonical_body(tx.conn(), &app2, &text, None);
             Message::create(tx, NewMessage { room_id, creator_id, client_message_id: None, body: Some(body), attachment_blob_id: None })
         })
         .await?;
@@ -124,40 +121,9 @@ async fn create_attachment_reply(app: &App, room: &Room, bot: &User, attachment:
         .db
         .write(move |tx| Message::create(tx, NewMessage { room_id, creator_id, client_message_id: None, body: None, attachment_blob_id: Some(blob_id) }))
         .await?;
-    process_attachment(app, blob).await?;
+    process_attachment(app, blob).await.map_err(|e| anyhow!("{e:?}"))?;
     let id = message.id;
     Ok(app.db.read(move |conn| Message::find(conn, id)).await?)
-}
-
-/// `Message#process_attachment`: analyze the blob (its `after_update` touches the message and
-/// its room), then generate the video preview or the `:thumb` representation.
-async fn process_attachment(app: &App, blob: campfire_storage::Blob) -> anyhow::Result<()> {
-    let storage = app.storage.clone();
-    let blob = app
-        .db
-        .write(move |tx| {
-            let mut blob = blob;
-            storage.analyze(tx.conn(), &mut blob).map_err(storage_error)?;
-            for (record_type, record_id) in campfire_storage::blob::attachment_records(tx.conn(), blob.id).map_err(storage_error)? {
-                if record_type == "Message" {
-                    Message::find(tx.conn(), record_id)?.touch(tx)?;
-                }
-            }
-            Ok(blob)
-        })
-        .await?;
-
-    let storage = app.storage.clone();
-    let now = app.clock.now();
-    if blob.is_video() {
-        app.db
-            .write(move |tx| storage.process_preview(tx.conn(), &blob, &Variation::format_only("webp"), now).map_err(storage_error))
-            .await?;
-    } else if blob.is_representable() {
-        let thumb = Variation::resize_to_limit(1200, 800, None);
-        crate::active_storage::processed_representation(app, blob, thumb).await.map_err(|e| anyhow!("{e:?}"))?;
-    }
-    Ok(())
 }
 
 /// `message.broadcast_create`, rendered without a request (`ApplicationController.renderer`).

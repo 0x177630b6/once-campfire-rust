@@ -2,7 +2,6 @@
 //! RoomsController's; `destroy` is RoomsController's without `set_room`
 //! (`super::destroy_without_room`).
 
-use askama::Template;
 use campfire_db::{Room, RoomType, User};
 use campfire_kit::{Ctx, Result, StatusCode};
 use campfire_views::rooms::{FormRoom, OpenFormView, OpensEdit, OpensNew};
@@ -31,7 +30,7 @@ pub async fn new(c: &mut Ctx) -> Result {
         can_administer: true,
         users: active_users(c).await?,
     };
-    page::page(c, StatusCode::OK, |ctx| OpensNew { ctx, form: &form }.render()).await
+    page::framed_page!(c, StatusCode::OK, |ctx| OpensNew { ctx, form: &form }).await
 }
 
 pub async fn create(c: &mut Ctx) -> Result {
@@ -60,7 +59,7 @@ pub async fn edit(c: &mut Ctx) -> Result {
         can_administer: require_current_user(c)?.can_administer(Some(room.creator_id), false),
         users: active_users(c).await?,
     };
-    page::page(c, StatusCode::OK, |ctx| OpensEdit { ctx, form: &form }.render()).await
+    page::framed_page!(c, StatusCode::OK, |ctx| OpensEdit { ctx, form: &form }).await
 }
 
 pub async fn update(c: &mut Ctx) -> Result {

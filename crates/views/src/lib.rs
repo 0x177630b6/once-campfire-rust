@@ -7,6 +7,7 @@
 //! `accounts`, `welcome`, `pwa`, `autocompletable`. Views agent B owns `rooms`, `messages`,
 //! `searches`. Both share `ViewContext` below; changes to it go through NOTES.md.
 
+pub mod fragment_cache;
 pub mod helpers;
 pub mod layouts;
 pub mod sessions;

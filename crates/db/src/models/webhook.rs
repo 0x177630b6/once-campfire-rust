@@ -128,14 +128,21 @@ fn without_recipient_mentions(body: &str, recipient: &User) -> String {
         .to_string()
 }
 
-/// `ActiveSupport::JSON.encode` of a string: JSON with `<`, `>`, `&`, U+2028 and U+2029
-/// escaped as `\uXXXX`.
+/// `ActiveSupport::JSON.encode` of a string: JSON with `<`, `>` and `&` escaped as `\uXXXX`.
+/// U+2028 and U+2029 stay raw (`load_defaults 8.2` turns `escape_js_separators_in_json` off;
+/// probed in the reference image).
 pub fn json_string(s: &str) -> String {
     let encoded = serde_json::to_string(s).expect("strings encode");
-    encoded
-        .replace('<', "\\u003c")
-        .replace('>', "\\u003e")
-        .replace('&', "\\u0026")
-        .replace('\u{2028}', "\\u2028")
-        .replace('\u{2029}', "\\u2029")
+    encoded.replace('<', "\\u003c").replace('>', "\\u003e").replace('&', "\\u0026")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::json_string;
+
+    /// `{ a: "\u2028<>&" }.to_json` in the reference image.
+    #[test]
+    fn json_strings_escape_html_but_not_line_separators() {
+        assert_eq!(json_string("\u{2028}<>&\u{2029}"), "\"\u{2028}\\u003c\\u003e\\u0026\u{2029}\"");
+    }
 }

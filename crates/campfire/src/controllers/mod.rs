@@ -13,8 +13,8 @@
 //! ## Porting a controller
 //!
 //! Add `pub mod rooms;` (etc.) below, write `pub async fn show(c: &mut Ctx) -> Result` actions
-//! that start with their before-action chain (see `crate::concerns`), and replace
-//! `not_yet_ported` in the matching rows with `rooms::show`. Declared routes whose action Rails
+//! that start with their before-action chain (see `crate::concerns`), and put `rooms::show` in
+//! the matching rows. Declared routes whose action Rails
 //! doesn't define (e.g. `first_runs#edit`) answer 404 like `AbstractController::ActionNotFound`:
 //! map them to `action_not_found`. Never reorder, add or remove rows: the table must stay
 //! identical to `bin/rails routes` (checked by the tests below against
@@ -405,13 +405,6 @@ fn compile(pattern: &str) -> (Regex, Vec<String>) {
     }
     regex.push('$');
     (Regex::new(&regex).expect("valid route pattern"), names)
-}
-
-/// A route whose controller hasn't been ported yet.
-pub async fn not_yet_ported(c: &mut Ctx) -> Result {
-    let endpoint = c.current::<MatchedRoute>().map_or("?", |route| route.endpoint);
-    tracing::warn!(endpoint, "route not yet ported");
-    Ok(c.render_html(StatusCode::NOT_IMPLEMENTED, format!("Not yet ported: {endpoint}\n")))
 }
 
 /// A declared route whose action the controller doesn't define (`AbstractController::ActionNotFound`).

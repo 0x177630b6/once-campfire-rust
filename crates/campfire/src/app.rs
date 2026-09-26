@@ -18,6 +18,7 @@ use axum::middleware::Next;
 use campfire_db::Database;
 use campfire_kit::{Ctx, Kit, KitConfig, RailsCrypto, SharedClock, SharedCrypto};
 use campfire_storage::{DiskService, Storage};
+use campfire_views::fragment_cache::{FragmentCache, Scoped};
 use rails_compat::{MessageVerifier, Secrets};
 
 use crate::config::Config;
@@ -39,6 +40,9 @@ pub struct AppState {
     pub cable: Cable,
     pub broadcasts: channels::Broadcasts,
     pub jobs: jobs::Jobs,
+    /// `Rails.cache` for view fragments (`cache message do`), current during every request
+    /// and every render outside one.
+    pub fragment_cache: Arc<FragmentCache>,
     /// Holds `public/{404,422,500,502}.html` for the exception pages kit renders.
     _public_pages: tempfile::TempDir,
 }
@@ -102,6 +106,7 @@ pub async fn boot(config: Config) -> anyhow::Result<Booted> {
         broadcasts: channels::Broadcasts::new(cable.clone()),
         cable,
         jobs,
+        fragment_cache: FragmentCache::new(campfire_views::fragment_cache::DEFAULT_CAPACITY),
         _public_pages: public_pages,
     });
 
@@ -130,13 +135,46 @@ async fn open_database(config: &Config, clock: SharedClock, jobs: jobs::Jobs, ri
 
 /// The HTTP service: public files, then `/cable`, then the Rails route table.
 fn router(app: &App, kit: Kit) -> Router {
-    let dispatch = || axum::routing::any(campfire_kit::action(controllers::dispatch));
+    let dispatch = || axum::routing::any(campfire_kit::action(dispatch_with_fragment_cache));
     let routes = Router::new()
         .merge(app.cable.router::<Kit>(campfire_cable::protocol::DEFAULT_MOUNT_PATH))
         .route("/", dispatch())
         .route("/{*path}", dispatch())
         .layer(axum::middleware::from_fn(public_files));
-    campfire_kit::app(routes, kit)
+    campfire_kit::app(routes, kit).layer(axum::middleware::from_fn(vary_accept_encoding))
+}
+
+/// Thruster, the proxy in front of Puma in the reference image, compresses responses and adds
+/// `Accept-Encoding` to `Vary` on every response. For GET and HEAD (its cacheable requests) it's
+/// merged into the app's value (`Vary: Accept,Accept-Encoding`); for anything else (other methods,
+/// WebSocket upgrades) a separate `Vary: Accept-Encoding` comes first, then the merged value.
+/// Verified against the reference container.
+async fn vary_accept_encoding(request: axum::extract::Request, next: Next) -> axum::response::Response {
+    use axum::http::{HeaderValue, Method, header};
+
+    let cacheable = matches!(*request.method(), Method::GET | Method::HEAD) && !request.headers().contains_key(header::UPGRADE);
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    let existing: Vec<String> = headers.get_all(header::VARY).iter().filter_map(|value| value.to_str().ok()).map(str::to_string).collect();
+    let mut values = existing;
+    if !values.iter().flat_map(|value| value.split(',')).any(|token| token.trim().eq_ignore_ascii_case("accept-encoding")) {
+        values.push("Accept-Encoding".to_string());
+    }
+    let merged = values.join(",");
+    headers.remove(header::VARY);
+    if !cacheable {
+        headers.append(header::VARY, HeaderValue::from_static("Accept-Encoding"));
+    }
+    if let Ok(merged) = HeaderValue::from_str(&merged) {
+        headers.append(header::VARY, merged);
+    }
+    response
+}
+
+/// The Rails route table, with the app's fragment cache current while the action runs.
+async fn dispatch_with_fragment_cache(c: &mut Ctx) -> campfire_kit::Result {
+    let cache = c.app().fragment_cache.clone();
+    Scoped::new(cache, controllers::dispatch(c)).await
 }
 
 /// `ActionDispatch::Static`: serve `public/` (including digested `/assets`) before routing.

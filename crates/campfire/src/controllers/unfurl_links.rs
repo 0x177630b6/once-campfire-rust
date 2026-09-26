@@ -14,7 +14,7 @@ pub async fn create(c: &mut Ctx) -> Result {
     let Some(url) = url_param(c)? else { return Ok(c.head(StatusCode::NO_CONTENT)) };
     match opengraph_json(c, &url).await? {
         // `render json: opengraph`
-        Some(json) => Ok(campfire_kit::Response::with_body(StatusCode::OK, campfire_kit::response::JSON_UTF8, json)),
+        Some(json) => Ok(c.render_as(StatusCode::OK, campfire_kit::response::JSON_UTF8, json)),
         None => Ok(c.head(StatusCode::NO_CONTENT)),
     }
 }

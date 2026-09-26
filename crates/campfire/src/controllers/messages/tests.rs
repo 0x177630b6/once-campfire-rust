@@ -199,6 +199,28 @@ async fn the_bot_api() {
     assert_eq!(updated.status, StatusCode::OK, "{}", updated.text());
     assert_eq!(updated.json()["body"]["plain_text"], "Beep edited");
 
+    // An attachment replaces the message's attachment (and keeps the body), like Rails'
+    // `update!(attachment:)`; a second one replaces the first; "" removes it.
+    let attached = |app: &TestApp, id: i64| {
+        let db = app.db().clone();
+        async move { db.read(move |conn| Message::find(conn, id)?.attachment(conn)).await.unwrap().map(|(_, blob)| blob) }
+    };
+    let put_file = |name: &'static str| {
+        Req::new(Method::PUT, &format!("{base}/{}", message.id)).multipart(&[], ("attachment", name, "image/png", PNG))
+    };
+    let with_file = bot.send(put_file("red.png")).await;
+    assert_eq!(with_file.status, StatusCode::OK, "{}", with_file.text());
+    assert_eq!(with_file.json()["body"]["plain_text"], "Beep edited");
+    let first = attached(&app, message.id).await.expect("attached");
+    assert_eq!(first.filename, "red.png");
+    assert_eq!(bot.send(put_file("again.png")).await.status, StatusCode::OK);
+    let second = attached(&app, message.id).await.expect("replaced");
+    assert_eq!(second.filename, "again.png");
+    assert_ne!(first.id, second.id);
+    let removed = bot.send(Req::new(Method::PUT, &format!("{base}/{}", message.id)).form(&[("attachment", "")])).await;
+    assert_eq!(removed.status, StatusCode::OK, "{}", removed.text());
+    assert!(attached(&app, message.id).await.is_none());
+
     let boost = bot.send(Req::new(Method::POST, &format!("{base}/{}/boosts", message.id)).body("🤖")).await;
     assert_eq!(boost.status, StatusCode::CREATED, "{}", boost.text());
     assert_eq!(boost.json()["content"], "🤖");

@@ -22,7 +22,7 @@ pub async fn show(c: &mut Ctx) -> Result {
 
 pub async fn new(c: &mut Ctx) -> Result {
     before_actions(c, Before::default()).await?;
-    page::page(c, StatusCode::OK, |ctx| DirectsNew { ctx }.render()).await
+    page::framed_page!(c, StatusCode::OK, |ctx| DirectsNew { ctx }).await
 }
 
 pub async fn create(c: &mut Ctx) -> Result {
@@ -66,7 +66,7 @@ pub async fn edit(c: &mut Ctx) -> Result {
         })
         .await
         .map_err(db_error)?;
-    page::page(c, StatusCode::OK, |ctx| DirectsEdit { ctx, edit: &edit }.render()).await
+    page::framed_page!(c, StatusCode::OK, |ctx| DirectsEdit { ctx, edit: &edit }).await
 }
 
 pub async fn destroy(c: &mut Ctx) -> Result {

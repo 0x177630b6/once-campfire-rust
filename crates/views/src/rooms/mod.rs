@@ -82,7 +82,7 @@ pub struct ShowView {
 
 /// `rooms/show`.
 #[derive(Template)]
-#[template(path = "rooms/show.html")]
+#[template(path = "rooms/show.html", blocks = ["head", "content"])]
 pub struct Show<'a> {
     pub ctx: &'a ViewContext<'a>,
     pub show: &'a ShowView,
@@ -181,7 +181,7 @@ pub struct ClosedFormView {
 
 /// `rooms/opens/new`.
 #[derive(Template)]
-#[template(path = "rooms/opens/new.html")]
+#[template(path = "rooms/opens/new.html", blocks = ["head", "content"])]
 pub struct OpensNew<'a> {
     pub ctx: &'a ViewContext<'a>,
     pub form: &'a OpenFormView,
@@ -189,7 +189,7 @@ pub struct OpensNew<'a> {
 
 /// `rooms/opens/edit`.
 #[derive(Template)]
-#[template(path = "rooms/opens/edit.html")]
+#[template(path = "rooms/opens/edit.html", blocks = ["head", "content"])]
 pub struct OpensEdit<'a> {
     pub ctx: &'a ViewContext<'a>,
     pub form: &'a OpenFormView,
@@ -197,7 +197,7 @@ pub struct OpensEdit<'a> {
 
 /// `rooms/closeds/new`.
 #[derive(Template)]
-#[template(path = "rooms/closeds/new.html")]
+#[template(path = "rooms/closeds/new.html", blocks = ["head", "content"])]
 pub struct ClosedsNew<'a> {
     pub ctx: &'a ViewContext<'a>,
     pub form: &'a ClosedFormView,
@@ -205,7 +205,7 @@ pub struct ClosedsNew<'a> {
 
 /// `rooms/closeds/edit`.
 #[derive(Template)]
-#[template(path = "rooms/closeds/edit.html")]
+#[template(path = "rooms/closeds/edit.html", blocks = ["head", "content"])]
 pub struct ClosedsEdit<'a> {
     pub ctx: &'a ViewContext<'a>,
     pub form: &'a ClosedFormView,
@@ -253,7 +253,7 @@ impl FormRoom {
 
 /// `rooms/directs/new`.
 #[derive(Template)]
-#[template(path = "rooms/directs/new.html")]
+#[template(path = "rooms/directs/new.html", blocks = ["head", "content"])]
 pub struct DirectsNew<'a> {
     pub ctx: &'a ViewContext<'a>,
 }
@@ -271,7 +271,7 @@ pub struct DirectEditView {
 }
 
 #[derive(Template)]
-#[template(path = "rooms/directs/edit.html")]
+#[template(path = "rooms/directs/edit.html", blocks = ["head", "content"])]
 pub struct DirectsEdit<'a> {
     pub ctx: &'a ViewContext<'a>,
     pub edit: &'a DirectEditView,

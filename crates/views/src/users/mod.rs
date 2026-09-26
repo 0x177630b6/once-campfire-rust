@@ -14,7 +14,7 @@ pub use summary::*;
 
 /// `users/new.html.erb` (the join page).
 #[derive(Template)]
-#[template(path = "users/new.html")]
+#[template(path = "users/new.html", blocks = ["head", "content"])]
 pub struct New<'a> {
     pub ctx: &'a ViewContext<'a>,
     pub join_code: String,
@@ -105,7 +105,7 @@ impl ProfileMembership {
 
 /// `users/profiles/show.html.erb`.
 #[derive(Template)]
-#[template(path = "users/profiles/show.html")]
+#[template(path = "users/profiles/show.html", blocks = ["head", "content"])]
 pub struct ProfileShow<'a> {
     pub ctx: &'a ViewContext<'a>,
     pub user: UserSummary,
@@ -147,7 +147,7 @@ pub struct PushSubscription {
 
 /// `users/push_subscriptions/index.html.erb`.
 #[derive(Template)]
-#[template(path = "users/push_subscriptions/index.html")]
+#[template(path = "users/push_subscriptions/index.html", blocks = ["head", "content"])]
 pub struct PushSubscriptionsIndex<'a> {
     pub ctx: &'a ViewContext<'a>,
     pub push_subscriptions: Vec<PushSubscription>,
