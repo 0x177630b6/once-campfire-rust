@@ -1,0 +1,720 @@
+//! Load generator for the Campfire benchmark (bench/run). Talks plain HTTP/1.1 and Action Cable
+//! (WebSocket) to one server and prints one JSON object per command on stdout.
+//!
+//!   loadgen login  --base URL --email E --password P            -> {"cookie": "..."}
+//!   loadgen scrape --base URL --cookie C --room ID              -> csrf token, stream names, assets
+//!   loadgen http   --base URL --cookie C --path P --conc N --duration S
+//!                  [--post-room ID --csrf T]                     -> latency/throughput
+//!   loadgen cable  --base URL --cookie C --room ID --csrf T --clients N [--streams a,b,c]
+//!                  [--latency-msgs 30 --interval-ms 200 --tput-secs 15 --posters 4]
+//!   loadgen upload --base URL --cookie C --room ID --csrf T --file PATH [--reps 5]
+
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use bytes::Bytes;
+use futures_util::{SinkExt, StreamExt};
+use hdrhistogram::Histogram;
+use http_body_util::{BodyExt, Full};
+use hyper::client::conn::http1::SendRequest;
+use hyper_util::rt::TokioIo;
+use serde_json::{Value, json};
+use tokio::net::TcpStream;
+use tokio_tungstenite::tungstenite::{Message as WsMessage, client::IntoClientRequest};
+
+type Res<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
+struct Args(HashMap<String, String>);
+
+impl Args {
+    fn parse(raw: &[String]) -> Self {
+        let mut map = HashMap::new();
+        let mut it = raw.iter();
+        while let Some(k) = it.next() {
+            if let Some(k) = k.strip_prefix("--") {
+                map.insert(k.to_string(), it.next().cloned().unwrap_or_default());
+            }
+        }
+        Args(map)
+    }
+    fn get(&self, k: &str) -> String {
+        self.0.get(k).cloned().unwrap_or_else(|| panic!("missing --{k}"))
+    }
+    fn opt(&self, k: &str) -> Option<String> {
+        self.0.get(k).cloned()
+    }
+    fn num<T: std::str::FromStr>(&self, k: &str, default: T) -> T {
+        self.0.get(k).and_then(|v| v.parse().ok()).unwrap_or(default)
+    }
+}
+
+fn host_port(base: &str) -> String {
+    base.trim_start_matches("http://").trim_end_matches('/').to_string()
+}
+
+async fn connect(addr: &str) -> Res<SendRequest<Full<Bytes>>> {
+    let stream = TcpStream::connect(addr).await?;
+    stream.set_nodelay(true)?;
+    let (sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(stream)).await?;
+    tokio::spawn(async move {
+        let _ = conn.await;
+    });
+    Ok(sender)
+}
+
+struct Resp {
+    status: u16,
+    headers: hyper::HeaderMap,
+    body: Bytes,
+}
+
+async fn send(
+    sender: &mut SendRequest<Full<Bytes>>,
+    addr: &str,
+    method: &str,
+    path: &str,
+    headers: &[(&str, String)],
+    body: Bytes,
+) -> Res<Resp> {
+    let mut req = hyper::Request::builder().method(method).uri(path).header("host", addr);
+    for (k, v) in headers {
+        req = req.header(*k, v.as_str());
+    }
+    let req = req.body(Full::new(body))?;
+    // A request that takes longer than this counts as an error (and drops the connection).
+    tokio::time::timeout(Duration::from_secs(30), async {
+        sender.ready().await?;
+        let resp = sender.send_request(req).await?;
+        let status = resp.status().as_u16();
+        let headers = resp.headers().clone();
+        let body = resp.into_body().collect().await?.to_bytes();
+        Ok(Resp { status, headers, body })
+    })
+    .await
+    .map_err(|_| "request timed out after 30s")?
+}
+
+async fn one_shot(addr: &str, method: &str, path: &str, headers: &[(&str, String)], body: Bytes) -> Res<Resp> {
+    let mut s = connect(addr).await?;
+    send(&mut s, addr, method, path, headers, body).await
+}
+
+fn urlencode(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+fn form(pairs: &[(&str, &str)]) -> Bytes {
+    Bytes::from(pairs.iter().map(|(k, v)| format!("{}={}", urlencode(k), urlencode(v))).collect::<Vec<_>>().join("&"))
+}
+
+fn merge_cookies(jar: &mut Vec<(String, String)>, headers: &hyper::HeaderMap) {
+    for v in headers.get_all("set-cookie") {
+        let s = v.to_str().unwrap_or("");
+        let pair = s.split(';').next().unwrap_or("");
+        if let Some((k, v)) = pair.split_once('=') {
+            jar.retain(|(n, _)| n != k);
+            jar.push((k.to_string(), v.to_string()));
+        }
+    }
+}
+
+fn cookie_header(jar: &[(String, String)]) -> String {
+    jar.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join("; ")
+}
+
+fn csrf_from(html: &str) -> Option<String> {
+    regex::Regex::new(r#"<meta name="csrf-token" content="([^"]*)""#).unwrap().captures(html).map(|c| c[1].to_string())
+}
+
+fn unescape(s: &str) -> String {
+    s.replace("&amp;", "&").replace("&quot;", "\"").replace("&#39;", "'")
+}
+
+async fn login(a: &Args) -> Res<Value> {
+    let addr = host_port(&a.get("base"));
+    let mut jar = Vec::new();
+    let r = one_shot(&addr, "GET", "/session/new", &[], Bytes::new()).await?;
+    merge_cookies(&mut jar, &r.headers);
+    let token = csrf_from(&String::from_utf8_lossy(&r.body)).ok_or("no csrf token on /session/new")?;
+    let body = form(&[("email_address", &a.get("email")), ("password", &a.get("password")), ("authenticity_token", &token)]);
+    let r = one_shot(
+        &addr,
+        "POST",
+        "/session",
+        &[("cookie", cookie_header(&jar)), ("content-type", "application/x-www-form-urlencoded".into())],
+        body,
+    )
+    .await?;
+    merge_cookies(&mut jar, &r.headers);
+    if r.status != 302 || !jar.iter().any(|(k, _)| k == "session_token") {
+        return Err(format!("login failed: {}", r.status).into());
+    }
+    Ok(json!({ "cookie": cookie_header(&jar) }))
+}
+
+async fn scrape(a: &Args) -> Res<Value> {
+    let addr = host_port(&a.get("base"));
+    let path = format!("/rooms/{}", a.get("room"));
+    let r = one_shot(&addr, "GET", &path, &[("cookie", a.get("cookie"))], Bytes::new()).await?;
+    let mut html = String::from_utf8_lossy(&r.body).to_string();
+    // The sidebar frame (loaded lazily by the page) carries the rooms/user-rooms stream sources.
+    let sidebar = one_shot(&addr, "GET", "/users/me/sidebar", &[("cookie", a.get("cookie"))], Bytes::new()).await?;
+    html.push_str(&String::from_utf8_lossy(&sidebar.body));
+    let streams: Vec<String> = {
+        // "Channel|signed name" for each <turbo-cable-stream-source>.
+        let re = regex::Regex::new(r#"<turbo-cable-stream-source channel="([^"]+)" signed-stream-name="([^"]+)""#).unwrap();
+        let mut seen = HashSet::new();
+        re.captures_iter(&html).map(|c| format!("{}|{}", &c[1], unescape(&c[2]))).filter(|s| seen.insert(s.clone())).collect()
+    };
+    let css = regex::Regex::new(r#"href="(/assets/[^"]+\.css)""#).unwrap().captures(&html).map(|c| c[1].to_string());
+    let js = regex::Regex::new(r#"(/assets/[^"]+\.js)""#).unwrap().captures(&html).map(|c| c[1].to_string());
+    Ok(json!({
+        "status": r.status,
+        "bytes": r.body.len(),
+        "csrf": csrf_from(&html),
+        "streams": streams,
+        "css": css,
+        "js": js,
+    }))
+}
+
+fn hist() -> Histogram<u64> {
+    Histogram::new_with_bounds(1, 120_000_000, 3).unwrap()
+}
+
+fn ms(us: u64) -> f64 {
+    (us as f64 / 1000.0 * 1000.0).round() / 1000.0
+}
+
+fn summary(h: &Histogram<u64>) -> Value {
+    if h.is_empty() {
+        return json!({"n": 0});
+    }
+    json!({
+        "n": h.len(),
+        "p50_ms": ms(h.value_at_quantile(0.5)),
+        "p90_ms": ms(h.value_at_quantile(0.9)),
+        "p99_ms": ms(h.value_at_quantile(0.99)),
+        "max_ms": ms(h.max()),
+        "mean_ms": (h.mean() / 10.0).round() / 100.0,
+    })
+}
+
+static SEQ: AtomicU64 = AtomicU64::new(0);
+
+fn nonce() -> String {
+    let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    format!("{:x}{:x}", t, SEQ.fetch_add(1, Ordering::Relaxed))
+}
+
+fn message_request(cookie: &str, csrf: &str, body_text: &str) -> (Vec<(&'static str, String)>, Bytes) {
+    let body = form(&[
+        ("message[body]", body_text),
+        ("message[client_message_id]", &nonce()),
+        ("authenticity_token", csrf),
+    ]);
+    (
+        vec![
+            ("cookie", cookie.to_string()),
+            ("content-type", "application/x-www-form-urlencoded".into()),
+            ("accept", "text/vnd.turbo-stream.html, text/html, application/xhtml+xml".into()),
+            ("x-csrf-token", csrf.to_string()),
+        ],
+        body,
+    )
+}
+
+async fn http_load(a: &Args) -> Res<Value> {
+    let addr = host_port(&a.get("base"));
+    let cookie = a.opt("cookie").unwrap_or_default();
+    let path = a.opt("path").unwrap_or_else(|| "/".into());
+    let conc: usize = a.num("conc", 1);
+    let duration = Duration::from_secs_f64(a.num("duration", 10.0));
+    let post_room = a.opt("post-room");
+    let csrf = a.opt("csrf").unwrap_or_default();
+
+    let hist_all = Arc::new(Mutex::new(hist()));
+    let statuses = Arc::new(Mutex::new(HashMap::<u16, u64>::new()));
+    let errors = Arc::new(AtomicU64::new(0));
+    let bytes_total = Arc::new(AtomicU64::new(0));
+    let start = Instant::now();
+    let deadline = start + duration;
+    let mut tasks = Vec::new();
+    for _ in 0..conc {
+        let (addr, cookie, path, post_room, csrf) = (addr.clone(), cookie.clone(), path.clone(), post_room.clone(), csrf.clone());
+        let (hist_all, statuses, errors, bytes_total) = (hist_all.clone(), statuses.clone(), errors.clone(), bytes_total.clone());
+        tasks.push(tokio::spawn(async move {
+            let mut h = hist();
+            let mut local = HashMap::<u16, u64>::new();
+            let mut conn: Option<SendRequest<Full<Bytes>>> = None;
+            let mut i = 0u64;
+            while Instant::now() < deadline {
+                if conn.is_none() {
+                    match connect(&addr).await {
+                        Ok(c) => conn = Some(c),
+                        Err(_) => {
+                            errors.fetch_add(1, Ordering::Relaxed);
+                            tokio::time::sleep(Duration::from_millis(10)).await;
+                            continue;
+                        }
+                    }
+                }
+                let (method, p, headers, body) = match &post_room {
+                    Some(room) => {
+                        i += 1;
+                        let (mut h, b) = message_request(&cookie, &csrf, &format!("bench write {i}"));
+                        h.push(("accept-encoding", "gzip".into()));
+                        ("POST", format!("/rooms/{room}/messages"), h, b)
+                    }
+                    None => ("GET", path.clone(), vec![("cookie", cookie.clone()), ("accept-encoding", "gzip".into())], Bytes::new()),
+                };
+                let t0 = Instant::now();
+                match send(conn.as_mut().unwrap(), &addr, method, &p, &headers, body).await {
+                    Ok(r) => {
+                        h.record(t0.elapsed().as_micros() as u64).ok();
+                        *local.entry(r.status).or_default() += 1;
+                        bytes_total.fetch_add(r.body.len() as u64, Ordering::Relaxed);
+                        if r.headers.get("connection").map(|v| v == "close").unwrap_or(false) {
+                            conn = None;
+                        }
+                    }
+                    Err(_) => {
+                        errors.fetch_add(1, Ordering::Relaxed);
+                        conn = None;
+                    }
+                }
+            }
+            hist_all.lock().unwrap().add(&h).unwrap();
+            let mut s = statuses.lock().unwrap();
+            for (k, v) in local {
+                *s.entry(k).or_default() += v;
+            }
+        }));
+    }
+    for t in tasks {
+        t.await?;
+    }
+    let elapsed = start.elapsed().as_secs_f64();
+    let h = hist_all.lock().unwrap();
+    let st = statuses.lock().unwrap();
+    let ok: u64 = st.iter().filter(|(k, _)| **k < 400).map(|(_, v)| v).sum();
+    Ok(json!({
+        "path": if let Some(r) = &post_room { format!("POST /rooms/{r}/messages") } else { path },
+        "conc": conc,
+        "secs": (elapsed * 100.0).round() / 100.0,
+        "rps": ((h.len() as f64 / elapsed) * 10.0).round() / 10.0,
+        "ok": ok,
+        "statuses": st.iter().map(|(k, v)| (k.to_string(), json!(v))).collect::<serde_json::Map<_, _>>(),
+        "errors": errors.load(Ordering::Relaxed),
+        "avg_bytes": if h.len() > 0 { bytes_total.load(Ordering::Relaxed) / h.len() } else { 0 },
+        "latency": summary(&h),
+    }))
+}
+
+// ---------------------------------------------------------------------------------------------
+// Action Cable fan-out
+
+struct Delivery {
+    sent: Mutex<HashMap<u64, Instant>>,
+    got: Mutex<HashMap<u64, (usize, Instant)>>, // seq -> (clients received, last receipt)
+    per_client: Mutex<Histogram<u64>>,
+    receipts: AtomicU64,
+}
+
+fn markers(text: &str) -> Vec<u64> {
+    let mut out = Vec::new();
+    let mut rest = text;
+    while let Some(i) = rest.find("bmk") {
+        rest = &rest[i + 3..];
+        let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if !digits.is_empty() && rest[digits.len()..].starts_with('z') {
+            if let Ok(n) = digits.parse() {
+                out.push(n);
+            }
+        }
+    }
+    out
+}
+
+async fn cable_client(
+    addr: String,
+    cookie: String,
+    subs: Vec<String>,
+    confirmed: Arc<AtomicUsize>,
+    connected: Arc<AtomicUsize>,
+    stop: Arc<AtomicBool>,
+    delivery: Arc<Delivery>,
+) -> Res<()> {
+    let mut req = format!("ws://{addr}/cable").into_client_request()?;
+    let h = req.headers_mut();
+    h.insert("cookie", cookie.parse()?);
+    h.insert("origin", format!("http://{addr}").parse()?);
+    h.insert("sec-websocket-protocol", "actioncable-v1-json, actioncable-unsupported".parse()?);
+    let debug = std::env::var_os("LOADGEN_DEBUG").is_some();
+    if debug {
+        eprintln!("connecting {:?}", req.headers());
+    }
+    let (ws, _) = tokio_tungstenite::connect_async(req).await.inspect_err(|e| {
+        if debug {
+            eprintln!("connect error: {e}")
+        }
+    })?;
+    if debug {
+        eprintln!("connected");
+    }
+    connected.fetch_add(1, Ordering::Relaxed);
+    let (mut tx, mut rx) = ws.split();
+    for ident in &subs {
+        tx.send(WsMessage::text(json!({"command": "subscribe", "identifier": ident}).to_string())).await?;
+    }
+    let mut seen = HashSet::new();
+    let mut confirms = 0;
+    while let Some(msg) = rx.next().await {
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
+        let text = match msg? {
+            WsMessage::Text(t) => t,
+            WsMessage::Close(_) => break,
+            _ => continue,
+        };
+        let now = Instant::now();
+        if std::env::var_os("LOADGEN_DEBUG").is_some() {
+            eprintln!("<< {}", &text[..text.len().min(300)]);
+        }
+        if text.contains("confirm_subscription") {
+            confirms += 1;
+            if confirms == subs.len() {
+                confirmed.fetch_add(1, Ordering::Relaxed);
+            }
+            continue;
+        }
+        for seq in markers(&text) {
+            if !seen.insert(seq) {
+                continue;
+            }
+            delivery.receipts.fetch_add(1, Ordering::Relaxed);
+            let sent = delivery.sent.lock().unwrap().get(&seq).copied();
+            if let Some(t0) = sent {
+                delivery.per_client.lock().unwrap().record(now.duration_since(t0).as_micros() as u64).ok();
+            }
+            let mut got = delivery.got.lock().unwrap();
+            let e = got.entry(seq).or_insert((0, now));
+            e.0 += 1;
+            e.1 = now;
+        }
+    }
+    let _ = tx.send(WsMessage::Close(None)).await;
+    Ok(())
+}
+
+async fn post_marked(sender: &mut Option<SendRequest<Full<Bytes>>>, addr: &str, room: &str, cookie: &str, csrf: &str, seq: u64, delivery: &Delivery) -> Option<u64> {
+    if sender.is_none() {
+        *sender = connect(addr).await.ok();
+    }
+    let (h, b) = message_request(cookie, csrf, &format!("fanout bmk{seq}z"));
+    let t0 = Instant::now();
+    delivery.sent.lock().unwrap().insert(seq, t0);
+    match send(sender.as_mut()?, addr, "POST", &format!("/rooms/{room}/messages"), &h, b).await {
+        Ok(r) if r.status < 400 => Some(t0.elapsed().as_micros() as u64),
+        _ => {
+            *sender = None;
+            None
+        }
+    }
+}
+
+async fn wait_drain(delivery: &Delivery, seqs: &[u64], clients: usize, timeout: Duration) {
+    let until = Instant::now() + timeout;
+    while Instant::now() < until {
+        let got = delivery.got.lock().unwrap();
+        if seqs.iter().all(|s| got.get(s).map(|g| g.0 >= clients).unwrap_or(false)) {
+            return;
+        }
+        drop(got);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+fn fanout_stats(delivery: &Delivery, seqs: &[u64], clients: usize) -> (Histogram<u64>, usize, Option<Instant>) {
+    let sent = delivery.sent.lock().unwrap();
+    let got = delivery.got.lock().unwrap();
+    let mut all = hist();
+    let mut complete = 0;
+    let mut last = None::<Instant>;
+    for s in seqs {
+        if let Some((n, t)) = got.get(s) {
+            last = Some(last.map_or(*t, |l| l.max(*t)));
+            if *n >= clients {
+                complete += 1;
+                all.record(t.duration_since(sent[s]).as_micros() as u64).ok();
+            }
+        }
+    }
+    (all, complete, last)
+}
+
+async fn cable(a: &Args) -> Res<Value> {
+    let addr = host_port(&a.get("base"));
+    let cookie = a.get("cookie");
+    let room = a.get("room");
+    let csrf = a.get("csrf");
+    let clients: usize = a.num("clients", 100);
+    let latency_msgs: u64 = a.num("latency-msgs", 30);
+    let interval = Duration::from_millis(a.num("interval-ms", 200));
+    let tput_secs: f64 = a.num("tput-secs", 15.0);
+    let posters: usize = a.num("posters", 4);
+
+    // The chatter.js load shape: presence for the room, unread rooms, heartbeat, and the page's
+    // turbo stream sources (rooms list, the room's messages, the user's rooms).
+    let mut subs = vec![
+        json!({"channel": "PresenceChannel", "room_id": room.parse::<u64>()?}).to_string(),
+        json!({"channel": "UnreadRoomsChannel"}).to_string(),
+        json!({"channel": "HeartbeatChannel"}).to_string(),
+    ];
+    for s in a.get("streams").split(',').filter(|s| !s.is_empty()) {
+        let (channel, name) = s.split_once('|').unwrap_or(("Turbo::StreamsChannel", s));
+        subs.push(json!({"channel": channel, "signed_stream_name": name}).to_string());
+    }
+
+    let delivery = Arc::new(Delivery {
+        sent: Mutex::new(HashMap::new()),
+        got: Mutex::new(HashMap::new()),
+        per_client: Mutex::new(hist()),
+        receipts: AtomicU64::new(0),
+    });
+    let confirmed = Arc::new(AtomicUsize::new(0));
+    let connected = Arc::new(AtomicUsize::new(0));
+    let stop = Arc::new(AtomicBool::new(false));
+    let failed = Arc::new(AtomicUsize::new(0));
+
+    // Connect with bounded parallelism (50 handshakes in flight).
+    let connect_start = Instant::now();
+    let gate = Arc::new(tokio::sync::Semaphore::new(50));
+    let mut handles = Vec::new();
+    for _ in 0..clients {
+        let permit = gate.clone().acquire_owned().await?;
+        let (addr, cookie, subs, confirmed, connected, stop, delivery, failed) =
+            (addr.clone(), cookie.clone(), subs.clone(), confirmed.clone(), connected.clone(), stop.clone(), delivery.clone(), failed.clone());
+        let before = connected.load(Ordering::Relaxed);
+        handles.push(tokio::spawn(async move {
+            let c2 = connected.clone();
+            let task = tokio::spawn(cable_client(addr, cookie, subs, confirmed, connected, stop, delivery));
+            // Release the permit once this client has connected (or failed).
+            let until = Instant::now() + Duration::from_secs(30);
+            while c2.load(Ordering::Relaxed) <= before && !task.is_finished() && Instant::now() < until {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            drop(permit);
+            if let Ok(Err(_)) = task.await {
+                failed.fetch_add(1, Ordering::Relaxed);
+            }
+        }));
+    }
+    let until = Instant::now() + Duration::from_secs(120);
+    while confirmed.load(Ordering::Relaxed) + failed.load(Ordering::Relaxed) < clients && Instant::now() < until {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let connect_secs = connect_start.elapsed().as_secs_f64();
+    let ready = confirmed.load(Ordering::Relaxed);
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    // Phase 1: paced messages, one at a time (open loop at `interval`), for delivery latency.
+    let mut poster = None;
+    let mut post_h = hist();
+    let mut seqs = Vec::new();
+    let mut seq = 0u64;
+    for _ in 0..latency_msgs {
+        seq += 1;
+        let tick = Instant::now();
+        if let Some(us) = post_marked(&mut poster, &addr, &room, &cookie, &csrf, seq, &delivery).await {
+            post_h.record(us).ok();
+        }
+        seqs.push(seq);
+        let spent = tick.elapsed();
+        if spent < interval {
+            tokio::time::sleep(interval - spent).await;
+        }
+    }
+    wait_drain(&delivery, &seqs, ready, Duration::from_secs(20)).await;
+    let (all_h, complete, _) = fanout_stats(&delivery, &seqs, ready);
+    let client_h = std::mem::replace(&mut *delivery.per_client.lock().unwrap(), hist());
+    let latency = json!({
+        "messages": latency_msgs,
+        "complete": complete,
+        "post": summary(&post_h),
+        "per_client": summary(&client_h),
+        "all_clients": summary(&all_h),
+    });
+
+    // Phase 2: closed-loop posters for tput_secs, then drain; delivered messages/sec.
+    let receipts_before = delivery.receipts.load(Ordering::Relaxed);
+    let next = Arc::new(AtomicU64::new(seq + 1));
+    let tput_start = Instant::now();
+    let tput_deadline = tput_start + Duration::from_secs_f64(tput_secs);
+    let mut ptasks = Vec::new();
+    for _ in 0..posters {
+        let (addr, room, cookie, csrf, delivery, next) = (addr.clone(), room.clone(), cookie.clone(), csrf.clone(), delivery.clone(), next.clone());
+        ptasks.push(tokio::spawn(async move {
+            let mut conn = None;
+            let mut mine = Vec::new();
+            let mut h = hist();
+            while Instant::now() < tput_deadline {
+                let s = next.fetch_add(1, Ordering::Relaxed);
+                if let Some(us) = post_marked(&mut conn, &addr, &room, &cookie, &csrf, s, &delivery).await {
+                    h.record(us).ok();
+                    mine.push(s);
+                }
+            }
+            (mine, h)
+        }));
+    }
+    let mut tseqs = Vec::new();
+    let mut tpost_h = hist();
+    for t in ptasks {
+        let (m, h) = t.await?;
+        tseqs.extend(m);
+        tpost_h.add(&h).ok();
+    }
+    let posting_secs = tput_start.elapsed().as_secs_f64();
+    wait_drain(&delivery, &tseqs, ready, Duration::from_secs(60)).await;
+    let (tall_h, tcomplete, last) = fanout_stats(&delivery, &tseqs, ready);
+    let span = last.map(|l| l.duration_since(tput_start).as_secs_f64()).unwrap_or(posting_secs).max(posting_secs);
+    let tclient_h = delivery.per_client.lock().unwrap().clone();
+    let receipts = delivery.receipts.load(Ordering::Relaxed) - receipts_before;
+    let throughput = json!({
+        "posters": posters,
+        "posted": tseqs.len(),
+        "posts_per_sec": ((tseqs.len() as f64 / posting_secs) * 10.0).round() / 10.0,
+        "complete": tcomplete,
+        "delivered_msgs_per_sec": ((tcomplete as f64 / span) * 10.0).round() / 10.0,
+        "frames_per_sec": (receipts as f64 / span).round(),
+        "drain_secs": ((span - posting_secs) * 100.0).round() / 100.0,
+        "post": summary(&tpost_h),
+        "per_client": summary(&tclient_h),
+        "all_clients": summary(&tall_h),
+    });
+
+    stop.store(true, Ordering::Relaxed);
+    for h in handles {
+        h.abort();
+    }
+    Ok(json!({
+        "clients": clients,
+        "ready": ready,
+        "failed": failed.load(Ordering::Relaxed),
+        "connect_secs": (connect_secs * 100.0).round() / 100.0,
+        "subscriptions_per_client": subs.len(),
+        "latency": latency,
+        "throughput": throughput,
+    }))
+}
+
+// ---------------------------------------------------------------------------------------------
+// Upload + thumbnail
+
+async fn upload(a: &Args) -> Res<Value> {
+    let addr = host_port(&a.get("base"));
+    let cookie = a.get("cookie");
+    let room = a.get("room");
+    let csrf = a.get("csrf");
+    let file = a.get("file");
+    let reps: usize = a.num("reps", 5);
+    let data = std::fs::read(&file)?;
+    let name = std::path::Path::new(&file).file_name().unwrap().to_string_lossy().to_string();
+    let ctype = if name.ends_with(".png") { "image/png" } else { "image/jpeg" };
+    let img_re = regex::Regex::new(r#"<img[^>]+src="([^"]+)""#).unwrap();
+
+    let mut runs = Vec::new();
+    for _ in 0..reps {
+        let boundary = format!("----bench{}", nonce());
+        let mut body = Vec::new();
+        for (k, v) in [("authenticity_token", csrf.as_str()), ("message[client_message_id]", &nonce())] {
+            body.extend(format!("--{boundary}\r\nContent-Disposition: form-data; name=\"{k}\"\r\n\r\n{v}\r\n").as_bytes());
+        }
+        body.extend(
+            format!("--{boundary}\r\nContent-Disposition: form-data; name=\"message[attachment]\"; filename=\"{name}\"\r\nContent-Type: {ctype}\r\n\r\n")
+                .as_bytes(),
+        );
+        body.extend(&data);
+        body.extend(format!("\r\n--{boundary}--\r\n").as_bytes());
+        let t0 = Instant::now();
+        let r = one_shot(
+            &addr,
+            "POST",
+            &format!("/rooms/{room}/messages"),
+            &[
+                ("cookie", cookie.clone()),
+                ("content-type", format!("multipart/form-data; boundary={boundary}")),
+                ("accept", "text/vnd.turbo-stream.html, text/html".into()),
+                ("x-csrf-token", csrf.clone()),
+            ],
+            Bytes::from(body),
+        )
+        .await?;
+        let post_ms = t0.elapsed().as_secs_f64() * 1000.0;
+        let html = String::from_utf8_lossy(&r.body).to_string();
+        let Some(src) = img_re.captures(&html).map(|c| unescape(&c[1])) else {
+            runs.push(json!({"post_status": r.status, "post_ms": post_ms, "error": "no <img> in response"}));
+            continue;
+        };
+        // Follow redirects to the bytes (representations/redirect -> disk service).
+        let mut url = src.clone();
+        let mut status = 0;
+        let mut size = 0;
+        for _ in 0..5 {
+            let path = url.trim_start_matches(&format!("http://{addr}")).to_string();
+            let g = one_shot(&addr, "GET", &path, &[("cookie", cookie.clone())], Bytes::new()).await?;
+            status = g.status;
+            size = g.body.len();
+            match g.headers.get("location") {
+                Some(loc) if (300..400).contains(&g.status) => url = loc.to_str()?.to_string(),
+                _ => break,
+            }
+        }
+        let total_ms = t0.elapsed().as_secs_f64() * 1000.0;
+        runs.push(json!({
+            "post_status": r.status, "post_ms": (post_ms * 10.0).round() / 10.0,
+            "thumb_status": status, "thumb_bytes": size, "thumb_ms": ((total_ms - post_ms) * 10.0).round() / 10.0,
+            "total_ms": (total_ms * 10.0).round() / 10.0,
+        }));
+    }
+    let mut totals: Vec<f64> = runs.iter().filter_map(|r| r["total_ms"].as_f64()).collect();
+    totals.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    Ok(json!({
+        "file": name, "bytes": data.len(),
+        "median_total_ms": totals.get(totals.len() / 2),
+        "runs": runs,
+    }))
+}
+
+#[tokio::main]
+async fn main() {
+    let raw: Vec<String> = std::env::args().collect();
+    let cmd = raw.get(1).cloned().unwrap_or_default();
+    let a = Args::parse(&raw[2.min(raw.len())..]);
+    let out = match cmd.as_str() {
+        "login" => login(&a).await,
+        "scrape" => scrape(&a).await,
+        "http" => http_load(&a).await,
+        "cable" => cable(&a).await,
+        "upload" => upload(&a).await,
+        _ => Err("usage: loadgen login|scrape|http|cable|upload --base URL ...".into()),
+    };
+    match out {
+        Ok(v) => println!("{v}"),
+        Err(e) => {
+            eprintln!("loadgen {cmd}: {e}");
+            std::process::exit(1);
+        }
+    }
+}
