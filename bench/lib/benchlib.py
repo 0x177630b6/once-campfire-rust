@@ -3,11 +3,11 @@ configurations, drive bench/loadgen against it, and account CPU and memory per p
 
 Configurations (see `start`):
 
-  proxy-thruster  docker -p 127.0.0.1:PORT:80, bin/boot (Thruster → campfire): what bench/run measures
-  proxy-direct    docker -p 127.0.0.1:PORT:3000, `campfire server` (no Thruster)
-  host-thruster   docker --network host, Thruster on PORT → campfire on PORT+1 (no docker-proxy)
-  host-direct     docker --network host, `campfire server` on PORT (neither)
-  native-<label>  the host binary NATIVE_<LABEL>_BIN (optionally LD_PRELOAD=NATIVE_<LABEL>_PRELOAD),
+  proxy-thruster  docker -p 127.0.0.1:PORT:80, bin/boot (the front server, Thruster's job since 6b0d797)
+  proxy-direct    docker -p 127.0.0.1:PORT:3000, the bare app on TARGET_PORT (no front server)
+  host-thruster   docker --network host, the front server on PORT (no docker-proxy): what bench/run measures
+  host-direct     docker --network host, the bare app on PORT (neither)
+  native-<label>  the host binary NATIVE_<LABEL>_BIN, front server on PORT (optionally LD_PRELOAD=NATIVE_<LABEL>_PRELOAD),
                   on the host, pinned to SERVER_CPUS: for build variants and in-process profilers
 
 Every configuration gets its own copy of the seed, with outbound Web Push and webhook endpoints
@@ -202,7 +202,8 @@ def start(config, seed, extra_env=None):
         preload = os.environ.get(f"NATIVE_{label}_PRELOAD", "")
         penv = {k: v for k, v in os.environ.items() if k in ("PATH", "HOME", "USER", "LANG")}
         penv.update(env)
-        penv.update(PORT=str(PORT), BIND="127.0.0.1", CAMPFIRE_STORAGE_PATH=storage)
+        # The front server (crates/kit/src/front, what Thruster did) on PORT, the bare app beside it.
+        penv.update(HTTP_PORT=str(PORT), TARGET_PORT=str(PORT + 1), CAMPFIRE_STORAGE_PATH=storage)
         if preload:
             penv["LD_PRELOAD"] = preload
         logf = open(os.path.join(WORK, "app.log"), "w")
@@ -216,10 +217,11 @@ def start(config, seed, extra_env=None):
             args += ["--dns", "127.0.0.1", "-p", f"127.0.0.1:{PORT}:{80 if entry == 'thruster' else 3000}"]
         else:
             args += ["--network", "host"]
+            # "thruster" is the in-process front server since 6b0d797; "direct" the bare app on TARGET_PORT.
             if entry == "thruster":
                 env.update(HTTP_PORT=str(PORT), TARGET_PORT=str(PORT + 1))
             else:
-                env.update(PORT=str(PORT))
+                env.update(HTTP_PORT=str(PORT + 1), TARGET_PORT=str(PORT))
         for k, v in env.items():
             args += ["-e", f"{k}={v}"]
         args.append(IMAGE)

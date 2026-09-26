@@ -16,6 +16,8 @@
 #
 # Knobs (env): SERVER_CPUS=8-11 LOADGEN_CPUS=12-15 HTTP_SECS=8 HTTP_CONCS="1 16 64"
 #   CABLE_CLIENTS="100 500 1000" CABLE_TPUT_SECS=15 CABLE_POSTERS=4 UPLOAD_REPS=5 PORT=4390
+# The apps run with --network host: PORT and PORT+1 (and 6379, for the reference's Redis) must be
+# free on the host.
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -89,6 +91,19 @@ env_args() {
   if [ "${1:-}" = rust ]; then local e; for e in $RUST_EXTRA_ENV; do printf '%s\n' -e "$e"; done; fi
 }
 
+# Web Push and webhook deliveries to the seed's real endpoints (fcm.googleapis.com, ...) go to a
+# closed local port instead, so they fail fast without leaving the box (host networking rules out
+# the --dns 127.0.0.1 this used to rely on).
+neuter_deliveries() {
+  python3 - "$1" <<'PY'
+import sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+db.execute("UPDATE push_subscriptions SET endpoint = 'https://127.0.0.1:9/push/' || id")
+db.execute("UPDATE webhooks SET url = 'http://127.0.0.1:9/hook/' || id")
+db.commit()
+PY
+}
+
 cgroup_dir() { echo "/sys/fs/cgroup/system.slice/docker-$(docker inspect -f '{{.Id}}' "$CONTAINER").scope"; }
 mem_anon() { awk '$1=="anon"{print $2}' "$1/memory.stat"; }
 
@@ -110,13 +125,16 @@ start_app() {
   docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
   rm -rf "$dir"; mkdir -p "$dir/db" "$dir/storage"
   cp -a --reflink=auto "$SEED/db/." "$dir/db/"; cp -a --reflink=auto "$SEED/storage/." "$dir/storage/"
+  neuter_deliveries "$dir/db/production.sqlite3"
   local args=(); mapfile -t args < <(env_args "$app")
   sync
   local t0; t0=$(date +%s.%N)
-  # --dns 127.0.0.1: no resolver, so Web Push/webhook deliveries to the seed's real endpoints
-  # (fcm.googleapis.com, ...) fail fast instead of leaving the box.
+  # --network host: no docker-proxy between the load generator and the app (it only exists for
+  # published ports reached from the host, and cost up to ~20% of a request; see
+  # plans/perf-attribution.md §1). Both front servers (Thruster, the Rust app's own) listen on
+  # HTTP_PORT, their app on TARGET_PORT; the reference's Redis takes the host's 6379.
   docker run -d --name "$CONTAINER" --cpuset-cpus "$SERVER_CPUS" --user "$(id -u):$(id -g)" \
-    --dns 127.0.0.1 -p "127.0.0.1:$PORT:80" "${args[@]}" \
+    --network host -e "HTTP_PORT=$PORT" -e "TARGET_PORT=$((PORT + 1))" "${args[@]}" \
     -v "$dir/db:/rails/storage/db" -v "$dir/storage:/rails/storage/files" \
     "$(image_for "$app")" >/dev/null
   for _ in $(seq 1 3000); do
