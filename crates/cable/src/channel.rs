@@ -7,7 +7,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use crate::connection::Control;
-use crate::pubsub::RecvError;
+use crate::pubsub::{Frame, RecvError};
 use crate::{json, naming, protocol, Server};
 
 pub type Params = Map<String, Value>;
@@ -74,7 +74,7 @@ pub struct Subscription<U: Send + Sync + 'static> {
     pub(crate) rejected: bool,
     pub(crate) unsubscribed: bool,
     pub(crate) transmissions: Vec<String>,
-    pub(crate) outbound: mpsc::Sender<String>,
+    pub(crate) outbound: mpsc::Sender<Frame>,
     pub(crate) control: mpsc::Sender<Control>,
 }
 
@@ -121,15 +121,15 @@ impl<U: Send + Sync + 'static> Subscription<U> {
             return;
         }
         let broadcasting = broadcasting.into();
-        let mut subscriber = self.server.hub().subscribe(&broadcasting);
-        let identifier = self.encoded_identifier.clone();
+        // The hub wraps each broadcast for this identifier once, for every subscriber sharing it.
+        let mut subscriber = self.server.hub().subscribe(&broadcasting, Some(self.encoded_identifier.clone()));
         let outbound = self.outbound.clone();
         let control = self.control.clone();
         let forwarder = tokio::spawn(async move {
             loop {
                 match subscriber.recv().await {
-                    Ok(payload) => {
-                        if outbound.send(protocol::message(&identifier, &payload)).await.is_err() {
+                    Ok(frame) => {
+                        if outbound.send(frame).await.is_err() {
                             break;
                         }
                     }

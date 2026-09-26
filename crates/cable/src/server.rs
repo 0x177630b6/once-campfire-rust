@@ -198,7 +198,7 @@ impl<U: Send + Sync + 'static> Server<U> {
     /// Broadcasts an already-encoded JSON document.
     pub fn broadcast_json(&self, broadcasting: &str, encoded: String) -> usize {
         tracing::debug!(broadcasting, "[ActionCable] Broadcasting");
-        self.inner.hub.broadcast(broadcasting, json::escape_html_entities(encoded).into())
+        self.inner.hub.broadcast(broadcasting, &json::escape_html_entities(encoded))
     }
 
     /// `SomeChannel.broadcast_to(broadcastables, message)`.

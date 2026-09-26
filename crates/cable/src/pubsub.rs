@@ -1,19 +1,41 @@
-//! In-process replacement for the Redis subscription adapter: one `tokio::sync::broadcast`
-//! channel per broadcasting, created on first subscribe and dropped with its last subscriber.
+//! In-process replacement for the Redis subscription adapter: `tokio::sync::broadcast` channels
+//! per broadcasting, created on first subscribe and dropped with their last subscriber.
 //!
-//! Payloads are already-encoded JSON, as they are on the Redis wire. Each channel's ring buffer
-//! is bounded; a subscriber that falls behind gets `Lagged` and its connection is closed with
-//! `reconnect: true` rather than silently skipping messages.
+//! Payloads are already-encoded JSON, as they are on the Redis wire. Subscribers that would wrap
+//! a payload identically (the same channel identifier) share one channel, and each broadcast
+//! builds their `{"identifier":…,"message":…}` frame once for all of them. Each channel's ring
+//! buffer is bounded; a subscriber that falls behind gets `Lagged` and its connection is closed
+//! with `reconnect: true` rather than silently skipping messages.
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use axum::extract::ws::Utf8Bytes;
 use tokio::sync::broadcast;
 
-pub type Payload = Arc<str>;
+use crate::protocol;
+
+/// A frame ready for the socket, shared by every subscriber that receives it.
+pub type Frame = Utf8Bytes;
 
 pub struct Hub {
     capacity: usize,
-    streams: Mutex<HashMap<String, broadcast::Sender<Payload>>>,
+    streams: Mutex<HashMap<String, Vec<Group>>>,
+}
+
+/// The subscribers of one broadcasting that receive identical frames: the payload wrapped for
+/// the same encoded channel identifier, or the raw payload when `identifier` is `None`.
+struct Group {
+    identifier: Option<Arc<str>>,
+    sender: broadcast::Sender<Frame>,
+}
+
+impl Group {
+    fn frame(&self, payload: &str) -> Frame {
+        match &self.identifier {
+            Some(identifier) => protocol::message(identifier, payload).into(),
+            None => payload.into(),
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -29,29 +51,39 @@ impl Hub {
     }
 
     /// Publishes to every current subscriber of `broadcasting`. Returns how many received it.
-    pub fn broadcast(&self, broadcasting: &str, payload: Payload) -> usize {
+    pub fn broadcast(&self, broadcasting: &str, payload: &str) -> usize {
         let mut streams = self.streams.lock().unwrap();
-        match streams.get(broadcasting).map(|sender| sender.send(payload)) {
-            Some(Ok(receivers)) => receivers,
-            Some(Err(_)) => {
-                streams.remove(broadcasting);
-                0
+        let Some(groups) = streams.get_mut(broadcasting) else {
+            return 0;
+        };
+        let mut receivers = 0;
+        groups.retain(|group| match group.sender.send(group.frame(payload)) {
+            Ok(count) => {
+                receivers += count;
+                true
             }
-            None => 0,
+            Err(_) => false,
+        });
+        if groups.is_empty() {
+            streams.remove(broadcasting);
         }
+        receivers
     }
 
-    pub fn subscribe(self: &Arc<Self>, broadcasting: &str) -> Subscriber {
+    /// Subscribes to `broadcasting`, receiving each payload wrapped as a message frame for the
+    /// encoded channel `identifier`, or raw when it's `None`.
+    pub fn subscribe(self: &Arc<Self>, broadcasting: &str, identifier: Option<Arc<str>>) -> Subscriber {
         let mut streams = self.streams.lock().unwrap();
-        let receiver = match streams.get(broadcasting) {
-            Some(sender) => sender.subscribe(),
+        let groups = streams.entry(broadcasting.to_string()).or_default();
+        let receiver = match groups.iter().find(|group| group.identifier == identifier) {
+            Some(group) => group.sender.subscribe(),
             None => {
                 let (sender, receiver) = broadcast::channel(self.capacity);
-                streams.insert(broadcasting.to_string(), sender);
+                groups.push(Group { identifier: identifier.clone(), sender });
                 receiver
             }
         };
-        Subscriber { hub: self.clone(), broadcasting: broadcasting.to_string(), receiver: Some(receiver) }
+        Subscriber { hub: self.clone(), broadcasting: broadcasting.to_string(), identifier, receiver: Some(receiver) }
     }
 
     /// Number of broadcastings with at least one live subscriber channel.
@@ -59,9 +91,13 @@ impl Hub {
         self.streams.lock().unwrap().len()
     }
 
-    fn release(&self, broadcasting: &str) {
+    fn release(&self, broadcasting: &str, identifier: &Option<Arc<str>>) {
         let mut streams = self.streams.lock().unwrap();
-        if streams.get(broadcasting).is_some_and(|sender| sender.receiver_count() == 0) {
+        let Some(groups) = streams.get_mut(broadcasting) else {
+            return;
+        };
+        groups.retain(|group| group.identifier != *identifier || group.sender.receiver_count() > 0);
+        if groups.is_empty() {
             streams.remove(broadcasting);
         }
     }
@@ -70,7 +106,8 @@ impl Hub {
 pub struct Subscriber {
     hub: Arc<Hub>,
     broadcasting: String,
-    receiver: Option<broadcast::Receiver<Payload>>,
+    identifier: Option<Arc<str>>,
+    receiver: Option<broadcast::Receiver<Frame>>,
 }
 
 impl Subscriber {
@@ -78,9 +115,9 @@ impl Subscriber {
         &self.broadcasting
     }
 
-    pub async fn recv(&mut self) -> Result<Payload, RecvError> {
+    pub async fn recv(&mut self) -> Result<Frame, RecvError> {
         match self.receiver.as_mut().expect("receiver is present until drop").recv().await {
-            Ok(payload) => Ok(payload),
+            Ok(frame) => Ok(frame),
             Err(broadcast::error::RecvError::Lagged(_)) => Err(RecvError::Lagged),
             Err(broadcast::error::RecvError::Closed) => Err(RecvError::Closed),
         }
@@ -90,7 +127,7 @@ impl Subscriber {
 impl Drop for Subscriber {
     fn drop(&mut self) {
         drop(self.receiver.take());
-        self.hub.release(&self.broadcasting);
+        self.hub.release(&self.broadcasting, &self.identifier);
     }
 }
 
@@ -101,24 +138,45 @@ mod tests {
     #[tokio::test]
     async fn delivers_to_every_subscriber_and_cleans_up() {
         let hub = Hub::new(8);
-        let mut a = hub.subscribe("room");
-        let mut b = hub.subscribe("room");
-        assert_eq!(hub.broadcast("room", "1".into()), 2);
-        assert_eq!(&*a.recv().await.unwrap(), "1");
-        assert_eq!(&*b.recv().await.unwrap(), "1");
+        let mut a = hub.subscribe("room", None);
+        let mut b = hub.subscribe("room", None);
+        assert_eq!(hub.broadcast("room", "1"), 2);
+        assert_eq!(a.recv().await.unwrap(), "1");
+        assert_eq!(b.recv().await.unwrap(), "1");
         drop(a);
         assert_eq!(hub.stream_count(), 1);
         drop(b);
         assert_eq!(hub.stream_count(), 0);
-        assert_eq!(hub.broadcast("room", "2".into()), 0);
+        assert_eq!(hub.broadcast("room", "2"), 0);
+    }
+
+    #[tokio::test]
+    async fn wraps_payloads_once_per_identifier() {
+        let hub = Hub::new(8);
+        let identifier: Arc<str> = r#""{\"channel\":\"RoomChannel\"}""#.into();
+        let mut a = hub.subscribe("room", Some(identifier.clone()));
+        let mut b = hub.subscribe("room", Some(identifier.clone()));
+        let mut other = hub.subscribe("room", Some(r#""other""#.into()));
+        let mut raw = hub.subscribe("room", None);
+        assert_eq!(hub.broadcast("room", r#"{"id":1}"#), 4);
+
+        let (a, b) = (a.recv().await.unwrap(), b.recv().await.unwrap());
+        assert_eq!(a, r#"{"identifier":"{\"channel\":\"RoomChannel\"}","message":{"id":1}}"#);
+        assert_eq!(a.as_str().as_ptr(), b.as_str().as_ptr(), "one frame shared by both subscribers");
+        assert_eq!(other.recv().await.unwrap(), r#"{"identifier":"other","message":{"id":1}}"#);
+        assert_eq!(raw.recv().await.unwrap(), r#"{"id":1}"#);
+
+        drop(other);
+        drop(raw);
+        assert_eq!(hub.streams.lock().unwrap()["room"].len(), 1);
     }
 
     #[tokio::test]
     async fn slow_subscribers_see_lag_instead_of_gaps() {
         let hub = Hub::new(2);
-        let mut slow = hub.subscribe("room");
+        let mut slow = hub.subscribe("room", None);
         for i in 0..5 {
-            hub.broadcast("room", i.to_string().into());
+            hub.broadcast("room", &i.to_string());
         }
         assert_eq!(slow.recv().await, Err(RecvError::Lagged));
     }

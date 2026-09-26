@@ -18,7 +18,7 @@ use tokio::task::JoinHandle;
 
 use crate::channel::{Channel, Params, Subscription};
 use crate::protocol::{self, DisconnectReason};
-use crate::pubsub::RecvError;
+use crate::pubsub::{Frame, RecvError};
 use crate::server::{ConnectRequest, Identified, internal_channel};
 use crate::{Server, json};
 
@@ -26,7 +26,7 @@ pub(crate) enum Control {
     /// A stream subscriber fell behind.
     Lagged,
     /// A message on this connection's internal channel (`action_cable/<identifier>`).
-    Internal(Arc<str>),
+    Internal(Frame),
 }
 
 struct Entry<U: Send + Sync + 'static> {
@@ -45,14 +45,15 @@ struct Connection<U: Send + Sync + 'static> {
     user: Arc<U>,
     /// Keyed by the raw identifier string, in subscription order (a Ruby hash).
     subscriptions: Vec<(String, Entry<U>)>,
-    pending: Vec<String>,
-    outbound: mpsc::Sender<String>,
+    pending: Vec<Frame>,
+    outbound: mpsc::Sender<Frame>,
     control: mpsc::Sender<Control>,
 }
 
 /// Incoming messages buffered between the reader task and the connection. A client that sends
 /// commands faster than they're handled is held back by TCP once this fills.
 const INCOMING_CAPACITY: usize = 16;
+
 
 type Sink = SplitSink<WebSocket, Message>;
 
@@ -72,7 +73,7 @@ pub(crate) async fn run<U: Identified + Send + Sync + 'static>(server: Server<U>
         return;
     };
 
-    let (outbound, mut outbound_rx) = mpsc::channel::<String>(config.outbound_capacity);
+    let (outbound, mut outbound_rx) = mpsc::channel::<Frame>(config.outbound_capacity);
     let (control, mut control_rx) = mpsc::channel::<Control>(16);
     let identifier = user.connection_identifier();
     let internal = (!identifier.is_empty()).then(|| spawn_internal_subscriber(&server, &identifier, control.clone()));
@@ -111,7 +112,7 @@ pub(crate) async fn run<U: Identified + Send + Sync + 'static>(server: Server<U>
             }
             Ok(()) = heartbeat.changed() => {
                 let now = *heartbeat.borrow_and_update();
-                connection.pending.push(protocol::ping(now));
+                connection.pending.push(protocol::ping(now).into());
             }
             Ok(()) = restarts.recv() => {
                 close = Some(Close { reason: Some(DisconnectReason::ServerRestart), reconnect: Value::Bool(true) });
@@ -149,7 +150,7 @@ fn spawn_internal_subscriber<U: Send + Sync + 'static>(
     identifier: &str,
     control: mpsc::Sender<Control>,
 ) -> tokio::task::JoinHandle<()> {
-    let mut subscriber = server.hub().subscribe(&internal_channel(identifier));
+    let mut subscriber = server.hub().subscribe(&internal_channel(identifier), None);
     tokio::spawn(async move {
         loop {
             match subscriber.recv().await {
@@ -199,7 +200,7 @@ async fn close_socket(sink: &mut Sink, incoming: &mut mpsc::Receiver<Message>, t
 impl<U: Send + Sync + 'static> Connection<U> {
     async fn flush(&mut self, sink: &mut Sink) -> bool {
         for frame in self.pending.drain(..) {
-            if sink.send(Message::Text(frame.into())).await.is_err() {
+            if sink.send(Message::Text(frame)).await.is_err() {
                 return false;
             }
         }
@@ -261,16 +262,16 @@ impl<U: Send + Sync + 'static> Connection<U> {
         let index = self.position(identifier).expect("just added");
         let Entry { channel, sub } = &mut self.subscriptions[index].1;
         let result = channel.subscribed(sub).await;
-        self.pending.append(&mut sub.transmissions);
+        self.pending.extend(sub.transmissions.drain(..).map(Frame::from));
 
         if let Err(error) = result {
             return tracing::error!(identifier, error = error.0, "Could not execute command");
         }
         if sub.rejected {
             self.remove_subscription(index).await;
-            self.pending.push(protocol::rejection(identifier));
+            self.pending.push(protocol::rejection(identifier).into());
         } else {
-            self.pending.push(protocol::confirmation(identifier));
+            self.pending.push(protocol::confirmation(identifier).into());
         }
     }
 
@@ -290,7 +291,7 @@ impl<U: Send + Sync + 'static> Connection<U> {
             tracing::error!(error = error.0, "Could not execute command");
         }
         sub.stop_all_streams();
-        self.pending.append(&mut sub.transmissions);
+        self.pending.extend(sub.transmissions.drain(..).map(Frame::from));
     }
 
     /// `Subscriptions#perform_action` → `Channel::Base#perform_action`.
@@ -311,7 +312,7 @@ impl<U: Send + Sync + 'static> Connection<U> {
 
         let Entry { channel, sub } = &mut self.subscriptions[index].1;
         let result = channel.perform(&action, &payload, sub).await;
-        self.pending.append(&mut sub.transmissions);
+        self.pending.extend(sub.transmissions.drain(..).map(Frame::from));
         match result {
             Ok(true) => {}
             Ok(false) => tracing::error!(action, "Unable to process"),
