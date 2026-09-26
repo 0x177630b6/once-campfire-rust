@@ -270,6 +270,31 @@ Add requests under the owning crate's heading. The owner removes an entry once i
   roots (the system CA store, like OpenSSL's: the runtime image needs `ca-certificates`).
   Dependencies are in crates/campfire/Cargo.toml under `# integrations/`. The Ruby oracles
   behind the tests are in integrations/testdata/oracle (rerun with `parity/bin/reference runner`).
+- (from parity/candidate, first Rust-vs-Ruby comparison) **Blocker**: pages rendered through
+  `presenters_a::view_context::Layout::{page,frame}` use `c.render` (the negotiated format), so a
+  request whose Accept starts with `text/vnd.turbo-stream.html` gets its HTML page labelled
+  `Content-Type: text/vnd.turbo-stream.html`. Turbo sends that Accept on every form submission and
+  fetch follows the redirect with it, so after any Turbo form POST that redirects (sign-in, room
+  create/update, ...) Turbo treats the page as a stream and never navigates. Rails labels an HTML
+  template `text/html` whatever the Accept. Repro: `curl -H 'Accept: text/vnd.turbo-stream.html,
+  text/html' /rooms/ID` with a session. `c.render_html` in `page`/`frame` fixes it (verified: with
+  that 2-line change the harness signs in and 915/1242 cells pass).
+- (from parity/candidate) `controllers::users::avatars::asset_file` races: concurrent first requests
+  both write `<name>.tmp<pid>` (same pid), so one renames the other's file away (500, ENOENT) and
+  another serves a truncated/empty file with 200 — which Thruster then caches (`public,
+  max-age=1800`), so the default bot avatar (and the default account logo, `accounts::logos`) is
+  a broken image for every later page on that server. 203 of 221 failing cells in the first
+  comparison are this. Write each asset once under a lock/`OnceLock` per file, or use a unique temp
+  name (`tempfile::NamedTempFile::new_in(dir)?.persist(path)`).
+- (from parity/candidate) A bodiless `head :not_found` (e.g. `/join/not-a-code`) goes out with
+  `Content-Length: 0`; Puma sends it chunked and Thruster gzips it (a 20-byte body). Firefox
+  refuses the candidate's with NS_ERROR_NET_EMPTY_RESPONSE on navigation. More generally Thruster
+  gzips every reference response that reaches it without Content-Length, but skips candidate
+  responses under 1 KB because they carry one (small SVG avatars, redirects, small assets).
+  Minor header diffs seen in spot checks: hyper adds `Date` itself (libfaketime time, before
+  Thruster's), no `X-Runtime`, `X-Request-Id` on /assets (Rails' Static runs before RequestId),
+  security headers on `send_file` responses (`/account/logo`), `Last-Modified` of embedded assets
+  is the build time.
 ## parity
 - (from storage) Byte-identical variants/posters need the runtime image to ship the reference
   image's Debian trixie packages: `libvips42t64=8.16.1-1+deb13u1` and `ffmpeg=7:7.1.5-0+deb13u1`
@@ -323,3 +348,21 @@ Add requests under the owning crate's heading. The owner removes an entry once i
   ran first (seen: `rooms/show/original_with_invitation` with "All Talk" unread in one run and
   read in another). Either give unread-sensitive states their own user, or mark room-visiting
   states `mutates: true`.
+- (from parity/candidate) `parity/bin/candidate` runs the Rust image (`campfire-candidate`, built
+  from /Dockerfile + parity/docker/candidate) with the same seed copy, env file, CPU cap and
+  libfaketime clock as `reference up`; `candidate compare` runs reference vs candidate with
+  `--reset-host "parity/bin/candidate reset --app {target} --port {port} ..."` (starts a reference
+  when {target} is `reference`/`expected`, a candidate otherwise), so no harness change is needed.
+- (from parity/candidate, for the harness) Chromium runs with `--network host`, so every container
+  a reset starts or stops (a veth appearing) is a network change: in-flight requests fail with
+  `net::ERR_NETWORK_CHANGED` (17 errors in a 1242-cell run, both targets) or hang ("2 in flight").
+  Consider `--disable-features=NetworkChangeNotifier...`/a bridge network, or keeping the isolated
+  slots up and resetting their storage only.
+- (from parity/candidate, for screens.yml) Fail on the reference too: `rooms/involvement/*` (the
+  `involvement_*` frame only loads on `notifications:ready`, which needs notification permission
+  granted and a push subscription (`notifications_controller#isEnabled`); the harness has neither,
+  so the bell shows its alert instead: 72 cells),
+  `auth/transfer/expired` (`body:not(:has(form))` never true), `users/avatar/{image,initials}`
+  (302: the fragment is fetched signed out). `users/profile/qr_code` differs whenever the two
+  servers' clocks tick apart (the QR encodes a transfer URL whose `exp` has milliseconds): freeze
+  the clock for it (`mutates: true`) or mask it.
