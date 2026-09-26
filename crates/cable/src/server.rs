@@ -21,9 +21,10 @@ use crate::{connection, json, naming, protocol};
 const READ_BUFFER_SIZE: usize = 4 * 1024;
 
 /// How much tungstenite buffers before writing to the socket while a batch of frames is fed; the
-/// rest goes out on the batch's flush. The buffer keeps its high-water capacity per socket, so
-/// this bounds it at about one frame past this size (the default is 128 KiB).
-const WRITE_BUFFER_SIZE: usize = 16 * 1024;
+/// rest goes out on the batch's flush. The buffer keeps its high-water capacity per socket (at
+/// 16 KiB it averaged 47 KB per socket in a 1,000-client fan-out), so only small frames are
+/// coalesced: a frame that takes the buffer past this is written at once.
+const WRITE_BUFFER_SIZE: usize = 4 * 1024;
 
 /// `config.action_cable.*` as the production reference runs it.
 #[derive(Debug, Clone)]
