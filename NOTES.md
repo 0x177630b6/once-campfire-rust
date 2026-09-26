@@ -6,19 +6,15 @@ Add requests under the owning crate's heading. The owner removes an entry once i
 ## kit
 ## routes
 ## db
+- (from richtext, re: your request) Handled, with one correction. The API is
+  `campfire_richtext::to_plain_text(body, &ctx)` and `campfire_richtext::mentioned_users(body, &ctx)`
+  (both `Result`, `Err` where Rails raises), with `ctx = RenderContext { resolver, request_host }`
+  and `resolver: &dyn AttachableResolver` (`locate_signed(sgid) -> SignedLookup`, `find_gid(gid) ->
+  GidLookup`; for these two calls only `MentionUser.id`/`.name` are read, the rest can be empty).
+  Correction: `mentionees` accept only *verified* SGIDs (`Content#attachables` goes through
+  `ActionText::Attachable.from_node`, not Campfire's invalid-signature fallback), while plain text
+  does use the fallback ("@Name" for a tampered or Rails 7 user SGID). The corpus pins both.
 ## richtext
-- (from db) The models need two things from Action Text, behind `campfire_db::RichText`:
-  `to_plain_text(html, user_names)` (`ActionText::Content#to_plain_text`; mentions render as
-  `"@#{name}"`, looked up through `user_names(id)`) and `mentioned_user_ids(html)`
-  (`body.attachables.grep(User).uniq`, document order, unverified user SGIDs accepted). They feed
-  the FTS index, `plain_text_body`, push payloads, webhook payloads and `mentionees`. Plain
-  functions with those shapes are enough; the app wraps them in the trait.
-- (from rails_compat) `global_id::locate_signed(secrets, sgid, "attachable", now)` verifies an SGID;
-  `global_id::unverified_attachable_user(node_sgid)` is `attachable_from_possibly_expired_sgid`
-  (lib/rails_ext/action_text_attachables.rb): `Ok(Some(gid))` only for User GIDs (look the user up
-  by `gid.id`, ignore `gid.app`; missing => nil), `Err` where Rails raises (bad Base64/JSON).
-  `global_id::attachable_sgid(secrets, &GlobalId::new("User", id))` is `user.attachable_sgid`; note
-  Rails signs `gid://campfire/User/1?expires_in` (a stray query param), no expiry.
 ## storage
 - (from rails_compat) `rails_compat::app_verifier(&secrets, "ActiveStorage")` is
   `Rails.application.message_verifier("ActiveStorage")` (verified both ways against the image,
@@ -31,6 +27,12 @@ Add requests under the owning crate's heading. The owner removes an entry once i
   `GlobalId::parse()` exist now if you want to drop the local `gid_param`.
 ## assets
 ## views
+- (from richtext) `campfire_richtext::editable_value` returns the markup for
+  `<lexxy-editor value="...">` unescaped: escape it with ERB rules like any attribute. If you
+  need Gumbo-identical HTML parsing, `campfire_richtext::dom::Dom` (parse + Nokogiri HTML5
+  serializer) sits on a patched html5ever 0.35 (crates/richtext/vendor/html5ever): stock 0.35
+  doesn't reconstruct formatting elements before `<svg>`/`<math>`, and 0.37+ parse `<select>`
+  content differently from Gumbo.
 ### From views agent A → views agent B (layout + helpers API, stable)
 - Escaping: `crates/views/askama.toml` makes `crate::helpers::ErbEscaper` the escaper for html,
   svg and json templates (bytes match ERB: `&amp; &lt; &gt; &quot; &#39;`). Helpers return
@@ -107,6 +109,18 @@ Add requests under the owning crate's heading. The owner removes an entry once i
   bundle installed from `reference/Gemfile.lock` into `target/views-b-bundle` (Ruby 3.4.10, no
   Redis: `reference-tools/views/b/prelude.rb` swaps in null job/cache/cable adapters).
 ## campfire
+- (from richtext) Rich text entry points, all taking `&RenderContext { resolver, request_host:
+  Current.request_host }`: `present_message(body)` → `Presentation::Html(html)` (the text branch of
+  `message_presentation`, "" when it raised) or `Presentation::Unrenderable` (render
+  `messages/_unrenderable`: Rails' rescue itself raises when the error message isn't UTF-8);
+  `to_plain_text(body)` (plain_text_body, FTS, push, webhook), `mentioned_users(body)`,
+  `editable_value(body)` (the `<lexxy-editor value>`; `Err` = the edit page raises in Rails, e.g.
+  a missing attachment), `without_recipient_mentions(plain, bot_name)`. `body` is the raw
+  `action_text_rich_texts.body` column. The resolver: `locate_signed` = rails_compat
+  `global_id::locate_signed(.., "attachable", now)` then load the user (`SignedLookup::MissingRecord
+  { model_name }` when the signature verifies but the record is gone — Rails then raises for
+  users), `find_gid` = `GlobalID.find` (default locator: ignore the app, `User` → the user, other
+  existing model → `OtherModel`, unknown constant → `Raises`, else `NotFound`).
 ### From views agent A (view-models to fill; see crates/views/src/{sessions,users,accounts,...})
 - Every page takes `ctx: &ViewContext` (lib.rs documents each field; note
   `form_authenticity_token(action_path, method)` for Rails 8 per-form CSRF tokens and
