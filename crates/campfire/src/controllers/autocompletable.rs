@@ -49,7 +49,7 @@ pub mod users {
             // `render layout: false`: <lexxy-prompt-item> elements for the mentions prompt
             let layout = Layout::load(c).await?;
             let html = layout.render(c, |ctx| autocompletable::UsersIndex { ctx, users }.render())?;
-            Ok(c.render(StatusCode::OK, html))
+            Ok(c.render(StatusCode::OK, &format::HTML, html))
         }
     }
 

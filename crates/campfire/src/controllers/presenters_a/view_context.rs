@@ -15,7 +15,7 @@
 use std::cell::RefCell;
 
 use campfire_db::{Account, User};
-use campfire_kit::{Ctx, Error, Response, Result, StatusCode};
+use campfire_kit::{Ctx, Error, Response, Result, StatusCode, format};
 use campfire_views::{AccountSummary, CurrentUser, Platform, ViewContext};
 
 use crate::app::AppCtx;
@@ -109,12 +109,12 @@ impl Layout {
         let links = stylesheet_tags().preload_links;
         let existing = c.headers.get("link").and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
         c.set_header("link", &campfire_assets::append_preload_links(&existing, &links));
-        c.render(status, html)
+        c.render(status, &format::HTML, html)
     }
 
     /// A page rendered in turbo-rails' frame layout (no stylesheets, so no `Link` header).
     pub fn frame(&self, c: &mut Ctx, status: StatusCode, html: String) -> Response {
-        c.render(status, html)
+        c.render(status, &format::HTML, html)
     }
 }
 
@@ -150,6 +150,7 @@ pub async fn page(
     status: StatusCode,
     full: impl FnOnce(&ViewContext) -> askama::Result<String>,
 ) -> Result {
+    find_template(c, &format::HTML)?;
     let layout = Layout::load(c).await?;
     let html = layout.render(c, full)?;
     Ok(layout.page(c, status, html))
@@ -163,6 +164,7 @@ pub async fn page_or_frame(
     full: impl FnOnce(&ViewContext) -> askama::Result<String>,
     frame: impl FnOnce(&ViewContext) -> askama::Result<String>,
 ) -> Result {
+    find_template(c, &format::HTML)?;
     let layout = Layout::load(c).await?;
     if c.is_turbo_frame_request() {
         let html = layout.render(c, frame)?;
@@ -171,4 +173,12 @@ pub async fn page_or_frame(
         let html = layout.render(c, full)?;
         Ok(layout.page(c, status, html))
     }
+}
+
+/// The implicit render's template lookup (`default_render`): an action whose only template is
+/// `<action>.html.erb` can't answer a request that doesn't accept HTML, which is
+/// `ActionController::UnknownFormat` (406), and the response carries the template's format
+/// whatever the `Accept` header preferred.
+pub fn find_template(c: &mut Ctx, template: campfire_kit::Format) -> Result<()> {
+    c.respond_to(&[template]).map(|_| ())
 }

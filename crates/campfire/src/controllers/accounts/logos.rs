@@ -17,6 +17,7 @@ const STALE_WHILE_REVALIDATE: u64 = 7 * 24 * 60 * 60;
 
 /// `allow_unauthenticated_access only: :show`
 pub async fn show(c: &mut Ctx) -> Result {
+    c.use_live_response(); // `include ActiveStorage::Streaming`
     concerns::before_actions(c, Before::default().allow_unauthenticated_access()).await?;
     let account = c.app().db.read(Account::first).await.map_err(Error::internal)?;
 
@@ -55,6 +56,7 @@ pub async fn show(c: &mut Ctx) -> Result {
 
 /// `Current.account.logo.destroy`
 pub async fn destroy(c: &mut Ctx) -> Result {
+    c.use_live_response(); // `include ActiveStorage::Streaming`
     concerns::before_actions(c, Before::default()).await?;
     concerns::ensure_can_administer(c)?;
     let account = super::current_account(c).await?;

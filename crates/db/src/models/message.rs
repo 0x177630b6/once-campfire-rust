@@ -456,7 +456,7 @@ impl Message {
     /// `plain_text_body`: `body.to_plain_text.presence || attachment&.filename&.to_s || ""`
     pub fn plain_text_body(&self, conn: &Connection, rich_text: &dyn RichText) -> Result<String> {
         if let Some(html) = self.body_html(conn)? {
-            let text = rich_text.to_plain_text(&html, &|id| {
+            let text = rich_text.to_plain_text(conn, &html, &|id| {
                 User::find_by_id(conn, id).ok().flatten().map(|u| u.name)
             });
             if !text.trim().is_empty() {
@@ -492,7 +492,7 @@ impl Message {
     /// `mentionees`: mentioned users who are members of the room.
     pub fn mentionees(&self, conn: &Connection, rich_text: &dyn RichText) -> Result<Vec<User>> {
         let ids = match self.body_html(conn)? {
-            Some(html) => rich_text.mentioned_user_ids(&html),
+            Some(html) => rich_text.mentioned_user_ids(conn, &html),
             None => Vec::new(),
         };
         mentionees_in_room(conn, self.room_id, &ids)

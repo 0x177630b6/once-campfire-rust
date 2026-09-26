@@ -25,6 +25,7 @@ pub mod clock;
 pub mod cookies;
 pub mod crypto;
 pub mod ctx;
+pub mod deflater;
 pub mod error;
 pub mod exceptions;
 pub mod format;

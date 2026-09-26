@@ -40,6 +40,7 @@ pub struct Ctx {
     marked_for_same_origin_verification: bool,
     formats: Option<std::result::Result<Vec<Format>, InvalidMimeType>>,
     rendered_format: Option<Format>,
+    live: bool,
 }
 
 /// Options for `redirect_to`.
@@ -100,6 +101,7 @@ impl Ctx {
             marked_for_same_origin_verification: false,
             formats: None,
             rendered_format: None,
+            live: false,
         }
     }
 
@@ -352,10 +354,14 @@ impl Ctx {
         self.render_html(StatusCode::OK, html)
     }
 
-    /// A rendered template in the negotiated format (`respond_to` choice or request format).
-    pub fn render(&mut self, status: StatusCode, body: impl Into<Bytes>) -> Response {
-        let format = self.rendered_format();
-        self.render_as(status, &format!("{}; charset=utf-8", format.string), body)
+    /// A rendered template, labelled with *the template's* format: Rails sets `rendered_format`
+    /// from the template the lookup found, not from the request, so an `.html.erb`-only action
+    /// answers `text/html` even when the `Accept` header prefers `text/vnd.turbo-stream.html`
+    /// (every Turbo form submission, and the redirect fetch follows). Pick the template with
+    /// [`Ctx::respond_to`] (the implicit render's lookup) when an action has several.
+    pub fn render(&mut self, status: StatusCode, template: Format, body: impl Into<Bytes>) -> Response {
+        self.rendered_format = Some(template);
+        self.render_as(status, &format!("{}; charset=utf-8", template.string), body)
     }
 
     /// `render turbo_stream:` (`text/vnd.turbo-stream.html`).
@@ -570,6 +576,17 @@ impl Ctx {
         self.headers.insert(name, HeaderValue::from_str(value).expect("invalid header value"));
     }
 
+    /// A controller that includes `ActionController::Live` (`ActiveStorage::Streaming` does):
+    /// its `make_response!` builds the response with `Live::Response.new`, which skips
+    /// `ActionDispatch::Response.create` and so `config.action_dispatch.default_headers`.
+    pub fn use_live_response(&mut self) {
+        self.live = true;
+    }
+
+    fn default_headers(&self) -> &[(HeaderName, HeaderValue)] {
+        if self.live { &[] } else { &self.kit.config().default_headers }
+    }
+
     // --- Finishing -----------------------------------------------------------------------------
 
     /// Turn the action's result into the response Rails would send: halts and errors resolved,
@@ -595,7 +612,7 @@ impl Ctx {
         }
 
         self.apply_cache_headers(&mut response);
-        for (name, value) in &self.kit.config().default_headers {
+        for (name, value) in self.default_headers() {
             if !response.headers.contains_key(name) {
                 response.headers.insert(name.clone(), value.clone());
             }
@@ -641,10 +658,16 @@ impl Ctx {
         if let Some(token) = self.csrf_token.clone() {
             self.session().insert("_csrf_token", token);
         }
+        // A Live response writes the cookie jar when it commits (`Live::Response#before_committed`),
+        // and the Cookies middleware writes it again after the session store has added its
+        // cookie: the action's cookies go out twice.
+        let mut set_cookies =
+            if self.live { self.cookies.set_cookie_headers(self.request.is_ssl(), &self.request.host()) } else { Vec::new() };
         let now = self.now();
         self.session.commit(&mut self.cookies, now)?;
 
-        for cookie in self.cookies.set_cookie_headers(self.request.is_ssl(), &self.request.host()) {
+        set_cookies.extend(self.cookies.set_cookie_headers(self.request.is_ssl(), &self.request.host()));
+        for cookie in set_cookies {
             response.headers.append(header::SET_COOKIE, HeaderValue::from_str(&cookie).map_err(Error::internal)?);
         }
         Ok(())

@@ -211,6 +211,7 @@ const OVERRIDABLE_METHODS: [&str; 9] = ["GET", "HEAD", "PUT", "POST", "DELETE", 
 /// Middleware that runs before routing: request id, forced SSL, and `_method` override (which
 /// needs the parsed form body, so POST bodies are parsed here and handed on).
 pub async fn rails_middleware(State(kit): State<Kit>, req: axum::extract::Request, next: Next) -> axum::response::Response {
+    let started = std::time::Instant::now();
     let request_id = request_id(req.headers().get("x-request-id").and_then(|v| v.to_str().ok()));
     let config = kit.config();
     let ssl = config.proxy.assume_ssl || request::scheme_is_https(req.headers(), req.uri());
@@ -228,8 +229,16 @@ pub async fn rails_middleware(State(kit): State<Kit>, req: axum::extract::Reques
         }
     };
 
-    if let Ok(value) = HeaderValue::from_str(&request_id) {
-        response.headers_mut().insert("x-request-id", value);
+    // `Rack::Runtime` and `ActionDispatch::RequestId` sit below `ActionDispatch::Static`: public
+    // files get neither header.
+    if response.extensions().get::<crate::deflater::StaticFile>().is_none() {
+        if let Ok(value) = HeaderValue::from_str(&request_id) {
+            response.headers_mut().insert("x-request-id", value);
+        }
+        if !response.headers().contains_key("x-runtime") {
+            let runtime = format!("{:.6}", started.elapsed().as_secs_f64());
+            response.headers_mut().insert("x-runtime", HeaderValue::from_str(&runtime).unwrap());
+        }
     }
     if config.force_ssl && ssl {
         if let Ok(value) = HeaderValue::from_str(&config.hsts) {

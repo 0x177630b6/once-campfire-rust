@@ -43,7 +43,7 @@ pub async fn index(c: &mut Ctx) -> Result {
     }
     c.respond_to(&[&format::HTML])?;
     let views = present(c, move |presenter| presenter.messages(&messages)).await?;
-    page::bare(c, StatusCode::OK, |ctx| views::Index { ctx, messages: &views }.render()).await
+    page::bare(c, StatusCode::OK, &format::HTML, |ctx| views::Index { ctx, messages: &views }.render()).await
 }
 
 /// Stands in for the digest `ETagWithTemplateDigest` adds for `messages/index` (only the ETag's
@@ -82,7 +82,7 @@ pub async fn create(c: &mut Ctx) -> Result {
         })
         .await
         .map_err(db_error)?;
-    Ok(c.render(StatusCode::OK, html))
+    Ok(c.render(StatusCode::OK, &format::TURBO_STREAM, html))
 }
 
 pub async fn show(c: &mut Ctx) -> Result {
@@ -135,7 +135,7 @@ pub async fn destroy(c: &mut Ctx) -> Result {
 
     c.respond_to(&[&format::TURBO_STREAM])?;
     let view = present(c, move |presenter| presenter.message(&message)).await?;
-    page::bare(c, StatusCode::OK, |_| views::DestroyStream { message: &view }.render()).await
+    page::bare(c, StatusCode::OK, &format::TURBO_STREAM, |_| views::DestroyStream { message: &view }.render()).await
 }
 
 // --- Before-actions and params --------------------------------------------------------------------

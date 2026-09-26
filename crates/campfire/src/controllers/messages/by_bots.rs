@@ -30,7 +30,7 @@ pub async fn index(c: &mut Ctx) -> Result {
         Ok(json::by_bots_index(&messages))
     })
     .await?;
-    Ok(c.render(StatusCode::OK, body))
+    Ok(c.render(StatusCode::OK, &format::JSON, body))
 }
 
 pub async fn create(c: &mut Ctx) -> Result {
@@ -149,5 +149,5 @@ async fn set_pagination_headers(c: &mut Ctx, room: &Room, messages: &[Message]) 
 async fn render_show(c: &mut Ctx, message: Message) -> Result<Response> {
     let base_url = c.url_for("");
     let body = present(c, move |presenter| Ok(json::by_bots_show(&presenter.message_json(&message, &base_url)?))).await?;
-    Ok(c.render(StatusCode::OK, body))
+    Ok(c.render(StatusCode::OK, &format::JSON, body))
 }

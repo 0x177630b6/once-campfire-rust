@@ -3,14 +3,14 @@
 //! broadcasts (`ApplicationController.render`).
 
 use campfire_db::{Account, Boost, Membership, Message, Room};
-use campfire_kit::{Ctx, Error, Result, StatusCode};
+use campfire_kit::{Ctx, Error, Format, Result, StatusCode};
 use campfire_views::helpers as h;
 use campfire_views::layouts::{Application, FrameLayout};
 use campfire_views::{Platform, ViewContext};
 
 use crate::app::App;
 use crate::channels::Partials;
-use crate::controllers::presenters_a::view_context::{Layout, account_summary};
+use crate::controllers::presenters_a::view_context::{Layout, account_summary, find_template};
 
 /// A template that extends `layouts/application` itself (with `blocks = ["head", "content"]`):
 /// the full page, or for a Turbo-Frame request its `head` and `content` in turbo-rails' frame
@@ -37,6 +37,7 @@ pub(crate) use framed_page;
 pub async fn content(c: &mut Ctx, status: StatusCode, render: impl FnOnce(&ViewContext) -> askama::Result<String>) -> Result {
     use askama::Template;
 
+    find_template(c, &campfire_kit::format::HTML)?;
     let layout = Layout::load(c).await?;
     let frame = c.is_turbo_frame_request();
     let html = layout.render(c, |ctx| {
@@ -56,16 +57,19 @@ pub async fn content_in_application_layout(
 ) -> Result {
     use askama::Template;
 
+    find_template(c, &campfire_kit::format::HTML)?;
     let layout = Layout::load(c).await?;
     let html = layout.render(c, |ctx| Application::new(ctx, h::raw(render(ctx)?)).render())?;
     Ok(layout.page(c, status, html))
 }
 
-/// A template rendered with `layout false` (or a turbo stream): the negotiated format, no layout.
-pub async fn bare(c: &mut Ctx, status: StatusCode, render: impl FnOnce(&ViewContext) -> askama::Result<String>) -> Result {
+/// A template rendered with `layout false` (or a turbo stream), no layout, labelled with the
+/// template's format.
+pub async fn bare(c: &mut Ctx, status: StatusCode, template: Format, render: impl FnOnce(&ViewContext) -> askama::Result<String>) -> Result {
+    find_template(c, template)?;
     let layout = Layout::load(c).await?;
     let html = layout.render(c, render)?;
-    Ok(c.render(status, html))
+    Ok(c.render(status, template, html))
 }
 
 /// Renders with the `ViewContext` `ApplicationController.render` has: no request, no

@@ -140,13 +140,13 @@ async fn messages(c: &mut Ctx) -> Result {
     } else if format == &JSON {
         c.json(StatusCode::OK, &json!([]))
     } else {
-        Ok(c.render(StatusCode::OK, "<p>messages</p>"))
+        Ok(c.render(StatusCode::OK, &HTML, "<p>messages</p>"))
     }
 }
 
 async fn autocomplete(c: &mut Ctx) -> Result {
-    c.respond_to(&[&HTML, &JSON])?;
-    Ok(c.render(StatusCode::OK, "x"))
+    let format = c.respond_to(&[&HTML, &JSON])?;
+    Ok(c.render(StatusCode::OK, format, "x"))
 }
 
 async fn redirects(c: &mut Ctx) -> Result {

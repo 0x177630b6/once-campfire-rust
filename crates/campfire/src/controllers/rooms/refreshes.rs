@@ -36,7 +36,7 @@ pub async fn show(c: &mut Ctx) -> Result {
         })
         .await
         .map_err(db_error)?;
-    page::bare(c, StatusCode::OK, |ctx| RefreshShow { ctx, refresh: &refresh }.render()).await
+    page::bare(c, StatusCode::OK, &format::TURBO_STREAM, |ctx| RefreshShow { ctx, refresh: &refresh }.render()).await
 }
 
 /// `Time.at(0, params[:since].to_i, :millisecond)`

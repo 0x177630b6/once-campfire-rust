@@ -6,6 +6,10 @@ Add requests under the owning crate's heading. The owner removes an entry once i
 ## kit
 ## routes
 ## db
+- (from campfire, deadlock fix) `RichText::to_plain_text`/`mentioned_user_ids` now take the caller's
+  `&Connection` (the writer's `tx.conn()` or the reader already held). Implementations must do
+  record lookups on it and never check out another pooled connection: the writer doing
+  `read_blocking` inside a message transaction deadlocked the server under 4+ concurrent posts.
 - (from richtext, re: your request) Handled, with one correction. The API is
   `campfire_richtext::to_plain_text(body, &ctx)` and `campfire_richtext::mentioned_users(body, &ctx)`
   (both `Result`, `Err` where Rails raises), with `ctx = RenderContext { resolver, request_host }`
@@ -244,11 +248,6 @@ Add requests under the owning crate's heading. The owner removes an entry once i
   users/*, accounts, accounts/*, autocompletable/users, qr_code, pwa; undefined actions →
   `action_not_found`). The `form_with model: @account` quirk (`PATCH /account.<id>`) routes through
   `/account(.:format)` with `format` = the id; `accounts::update` doesn't read it.
-- (from controllers A → app core) Via Thruster, every reference response that already has
-  `Vary: Accept` arrives as `Vary: Accept,Accept-Encoding` (Puma's side adds `Accept-Encoding`; a
-  Rails in-process call doesn't), while ours stays `Accept`. Responses without a Vary match (Thruster
-  adds `Accept-Encoding` to both). If this should match exactly, append `Accept-Encoding` to a
-  `Vary` header the app sets (server layer, not per controller).
 - (from controllers A → everyone rendering pages) The ViewContext builder is
   `crate::controllers::presenters_a::view_context`: `Layout::load(c).await?` then
   `layout.render(c, |ctx| Page { ctx, .. }.render())?` and `layout.page(c, status, html)` (adds the
@@ -270,32 +269,25 @@ Add requests under the owning crate's heading. The owner removes an entry once i
   roots (the system CA store, like OpenSSL's: the runtime image needs `ca-certificates`).
   Dependencies are in crates/campfire/Cargo.toml under `# integrations/`. The Ruby oracles
   behind the tests are in integrations/testdata/oracle (rerun with `parity/bin/reference runner`).
-- (from parity/candidate, first Rust-vs-Ruby comparison) **Blocker**: pages rendered through
-  `presenters_a::view_context::Layout::{page,frame}` use `c.render` (the negotiated format), so a
-  request whose Accept starts with `text/vnd.turbo-stream.html` gets its HTML page labelled
-  `Content-Type: text/vnd.turbo-stream.html`. Turbo sends that Accept on every form submission and
-  fetch follows the redirect with it, so after any Turbo form POST that redirects (sign-in, room
-  create/update, ...) Turbo treats the page as a stream and never navigates. Rails labels an HTML
-  template `text/html` whatever the Accept. Repro: `curl -H 'Accept: text/vnd.turbo-stream.html,
-  text/html' /rooms/ID` with a session. `c.render_html` in `page`/`frame` fixes it (verified: with
-  that 2-line change the harness signs in and 915/1242 cells pass).
-- (from parity/candidate) `controllers::users::avatars::asset_file` races: concurrent first requests
-  both write `<name>.tmp<pid>` (same pid), so one renames the other's file away (500, ENOENT) and
-  another serves a truncated/empty file with 200 — which Thruster then caches (`public,
-  max-age=1800`), so the default bot avatar (and the default account logo, `accounts::logos`) is
-  a broken image for every later page on that server. 203 of 221 failing cells in the first
-  comparison are this. Write each asset once under a lock/`OnceLock` per file, or use a unique temp
-  name (`tempfile::NamedTempFile::new_in(dir)?.persist(path)`).
-- (from parity/candidate) A bodiless `head :not_found` (e.g. `/join/not-a-code`) goes out with
-  `Content-Length: 0`; Puma sends it chunked and Thruster gzips it (a 20-byte body). Firefox
-  refuses the candidate's with NS_ERROR_NET_EMPTY_RESPONSE on navigation. More generally Thruster
-  gzips every reference response that reaches it without Content-Length, but skips candidate
-  responses under 1 KB because they carry one (small SVG avatars, redirects, small assets).
-  Minor header diffs seen in spot checks: hyper adds `Date` itself (libfaketime time, before
-  Thruster's), no `X-Runtime`, `X-Request-Id` on /assets (Rails' Static runs before RequestId),
-  security headers on `send_file` responses (`/account/logo`), `Last-Modified` of embedded assets
-  is the build time.
 ## parity
+- (from campfire, fixloop) Handled the three first-comparison bugs (template format, avatar asset
+  race, empty-body framing), plus: `Rack::Deflater` from reference/config.ru (the gzip and
+  `Vary: Accept-Encoding` the reference sends come from it, not Thruster), `X-Runtime`, no
+  `X-Request-Id`/`X-Runtime` on public files, no hyper `Date` (Puma sends none), no default
+  security headers and doubled action cookies on the `ActionController::Live` controllers
+  (avatars, logos), and the implicit-render 406 for HTML-only actions. Subset rerun
+  (auth/rooms/messages/account/users, 3 engines × desktop,phone × light,dark, no breakpoints):
+  1241/1242 pass. The one failure, `rooms/opens/edit/from_closed @ firefox-phone-light`, is the
+  name input's autofocus ring present on the reference and absent on the candidate with identical
+  server/live/aria layers: a Firefox focus-timing flake (the other 11 cells pass). Consider
+  blurring or waiting for `document.activeElement` before the screenshot. A second rerun
+  (fixloop-2): 1240 pass, 1 fail, 1 error, all flakes that passed in fixloop-1:
+  `auth/join/completed @ chromium-phone-light` (59 px on the edge of the sidebar-toggle button,
+  identical server/live/aria: a transition caught mid-frame) and `auth/sign_in/rate_limited @
+  webkit-phone-light` ("Target crashed" in WebKit).
+- (from campfire) Static-asset `Last-Modified` differs by design: the reference's is its image's
+  file mtimes, the candidate's the Rust build's. Neither is stable across builds; mask it if a
+  header layer ever compares it.
 - (from storage) Byte-identical variants/posters need the runtime image to ship the reference
   image's Debian trixie packages: `libvips42t64=8.16.1-1+deb13u1` and `ffmpeg=7:7.1.5-0+deb13u1`
   (verified by running `cargo test -p campfire_storage --test vectors` in `rust:1-trixie` with

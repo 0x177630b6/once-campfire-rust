@@ -31,7 +31,7 @@ pub async fn create(c: &mut Ctx) -> Result {
     c.respond_to(&[&format::JSON])?;
     let base_url = c.url_for("");
     let body = present(c, move |presenter| Ok(json::boosts_by_bots_show(&presenter.boost_json(&boost, &message, &base_url)?))).await?;
-    Ok(c.render(StatusCode::CREATED, body))
+    Ok(c.render(StatusCode::CREATED, &format::JSON, body))
 }
 
 pub async fn destroy(c: &mut Ctx) -> Result {

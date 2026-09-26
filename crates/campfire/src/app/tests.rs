@@ -354,3 +354,69 @@ async fn jobs_run_ad_hoc_work_and_purge_unattached_blobs() {
     let Booted { jobs, .. } = test.booted;
     jobs.shutdown(std::time::Duration::from_secs(5)).await;
 }
+
+/// Regression: every message create runs rich text (plain text for the search index, mentions)
+/// inside the writer's transaction. It once checked out a pooled reader for that, so with as many
+/// concurrent posts as readers, the writer waited on a reader while the readers' holders waited
+/// on the writer, and the server stopped answering for good.
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn concurrent_message_posts_all_complete() {
+    let Some(test) = boot_seeded().await else { return };
+    let router = test.booted.router.clone();
+    let session = &vectors().sessions[0];
+    let user_name = session.user_name.clone();
+    let room_id: i64 = test
+        .booted
+        .app
+        .db
+        .read(move |conn| {
+            Ok(conn.query_row(
+                r#"SELECT "memberships"."room_id" FROM "memberships" JOIN "users" ON "users"."id" = "memberships"."user_id"
+                   JOIN "rooms" ON "rooms"."id" = "memberships"."room_id"
+                   WHERE "users"."name" = ? AND "rooms"."type" = 'Rooms::Open' ORDER BY "rooms"."id" LIMIT 1"#,
+                [user_name],
+                |row| row.get(0),
+            )?)
+        })
+        .await
+        .unwrap();
+
+    let page = send(&router, get_with_cookie(&format!("/rooms/{room_id}"), &session.cookie_header)).await;
+    assert_eq!(page.status, StatusCode::OK);
+    let html = page.text();
+    let token = html.split(r#"<meta name="csrf-token" content=""#).nth(1).and_then(|rest| rest.split('"').next()).unwrap().to_string();
+    let rails_session = page
+        .headers
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .find(|c| c.starts_with("_campfire_session="))
+        .and_then(|c| c.split(';').next())
+        .unwrap()
+        .to_string();
+    let cookie = format!("{}; {rails_session}", session.cookie_header);
+
+    let posts = (0..32).map(|n| {
+        let router = router.clone();
+        let request = Request::post(format!("/rooms/{room_id}/messages"))
+            .header(header::HOST, "campfire.test")
+            .header(header::COOKIE, &cookie)
+            .header("x-csrf-token", &token)
+            .header(header::ACCEPT, "text/vnd.turbo-stream.html, text/html, application/xhtml+xml")
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(Body::from(format!("message%5Bbody%5D=%3Cp%3EHello+{n}%3C%2Fp%3E&message%5Bclient_message_id%5D=concurrent-{n}")))
+            .unwrap();
+        tokio::spawn(async move { send(&router, request).await.status })
+    });
+    let statuses = tokio::time::timeout(std::time::Duration::from_secs(60), futures_util::future::join_all(posts))
+        .await
+        .expect("concurrent message posts deadlocked");
+    for status in statuses {
+        assert_eq!(status.unwrap(), StatusCode::OK);
+    }
+
+    let after = tokio::time::timeout(std::time::Duration::from_secs(10), send(&router, get_with_cookie(&format!("/rooms/{room_id}"), &session.cookie_header)))
+        .await
+        .expect("the server stopped answering");
+    assert_eq!(after.status, StatusCode::OK);
+}

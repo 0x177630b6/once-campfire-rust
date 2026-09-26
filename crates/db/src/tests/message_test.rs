@@ -54,7 +54,7 @@ fn mentionees() {
             crate::models::message::mentionees_in_room(
                 c,
                 pets,
-                &crate::RichText::mentioned_user_ids(&rich_text, &html),
+                &crate::RichText::mentioned_user_ids(&rich_text, c, &html),
             )
         })
     };

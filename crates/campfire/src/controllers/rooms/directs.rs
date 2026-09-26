@@ -3,7 +3,6 @@
 //! `ensure_can_administer` that always passes); `show` is RoomsController's without `set_room`,
 //! so `remember_last_room_visited` raises on the nil `@room` ([`show`]).
 
-use askama::Template;
 use campfire_db::{Account, Membership, Room, User};
 use campfire_kit::{Ctx, Error, Result, StatusCode};
 use campfire_views::rooms::{DirectEditView, DirectsEdit, DirectsNew};

@@ -3,19 +3,23 @@
 //! for this crate's tests.
 
 use base64::Engine;
+use rusqlite::Connection;
 
 /// Looks up a user's name by id, for rendering mentions as `@Name`.
 pub type UserNames<'a> = &'a dyn Fn(i64) -> Option<String>;
 
+/// Both methods get the connection the caller is already on (the writer's transaction, or the
+/// reader it holds) for any record lookups: they must never check out another connection, which
+/// deadlocks once every pooled reader waits on the writer.
 pub trait RichText: Send + Sync {
     /// `ActionText::Content#to_plain_text` of a stored body. Mention attachments render as
     /// `attachable_plain_text_representation`, i.e. `"@#{name}"`
     /// (`reference/app/models/user/mentionable.rb`), hence the name lookup.
-    fn to_plain_text(&self, html: &str, user_names: UserNames<'_>) -> String;
+    fn to_plain_text(&self, conn: &Connection, html: &str, user_names: UserNames<'_>) -> String;
 
     /// `body.attachables.grep(User).uniq`: user ids from mention attachments, in document
     /// order, deduplicated (`reference/app/models/message/mentionee.rb`).
-    fn mentioned_user_ids(&self, html: &str) -> Vec<i64>;
+    fn mentioned_user_ids(&self, conn: &Connection, html: &str) -> Vec<i64>;
 }
 
 /// Tag stripping plus unverified SGID decoding. Campfire accepts unverified user SGIDs
@@ -25,7 +29,7 @@ pub trait RichText: Send + Sync {
 pub struct BasicRichText;
 
 impl RichText for BasicRichText {
-    fn to_plain_text(&self, html: &str, user_names: UserNames<'_>) -> String {
+    fn to_plain_text(&self, _conn: &Connection, html: &str, user_names: UserNames<'_>) -> String {
         let mut out = String::new();
         let mut rest = html;
         while let Some(start) = rest.find('<') {
@@ -70,7 +74,7 @@ impl RichText for BasicRichText {
         decode_entities(out.trim())
     }
 
-    fn mentioned_user_ids(&self, html: &str) -> Vec<i64> {
+    fn mentioned_user_ids(&self, _conn: &Connection, html: &str) -> Vec<i64> {
         let mut ids = Vec::new();
         for sgid in attribute_values(html, "sgid") {
             if let Some(id) = user_id_from_sgid(&sgid)
@@ -141,6 +145,10 @@ fn decode_entities(s: &str) -> String {
 mod tests {
     use super::*;
 
+    fn memory() -> Connection {
+        Connection::open_in_memory().unwrap()
+    }
+
     fn no_users(_: i64) -> Option<String> {
         None
     }
@@ -148,11 +156,11 @@ mod tests {
     #[test]
     fn plain_text_strips_tags() {
         assert_eq!(
-            BasicRichText.to_plain_text("<span>My hovercraft is full of eels</span>", &no_users),
+            BasicRichText.to_plain_text(&memory(), "<span>My hovercraft is full of eels</span>", &no_users),
             "My hovercraft is full of eels"
         );
         assert_eq!(
-            BasicRichText.to_plain_text("Hello <b>there</b>", &no_users),
+            BasicRichText.to_plain_text(&memory(), "Hello <b>there</b>", &no_users),
             "Hello there"
         );
     }
@@ -161,7 +169,7 @@ mod tests {
     fn plain_text_renders_mentions() {
         let html = format!("Hey {}", mention_attachment_for(7));
         assert_eq!(
-            BasicRichText.to_plain_text(&html, &|id| (id == 7).then(|| "Kevin".to_string())),
+            BasicRichText.to_plain_text(&memory(), &html, &|id| (id == 7).then(|| "Kevin".to_string())),
             "Hey @Kevin"
         );
     }
@@ -173,6 +181,6 @@ mod tests {
             mention_attachment_for(127326141),
             mention_attachment_for(127326141)
         );
-        assert_eq!(BasicRichText.mentioned_user_ids(&html), vec![127326141]);
+        assert_eq!(BasicRichText.mentioned_user_ids(&memory(), &html), vec![127326141]);
     }
 }

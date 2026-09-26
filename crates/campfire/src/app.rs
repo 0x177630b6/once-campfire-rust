@@ -4,8 +4,8 @@
 //! [`AppState`] is what controllers, channels, jobs and integrations share. Actions reach it with
 //! `c.app()` ([`AppCtx`]).
 //!
-//! Request flow (mirroring the Rails middleware order): kit's pre-routing middleware
-//! (`ActionDispatch::SSL`, request id, `_method` override) → public files
+//! Request flow (mirroring the Rails middleware order): `Rack::Deflater` (config.ru) → kit's
+//! pre-routing middleware (`ActionDispatch::SSL`, request id, `_method` override) → public files
 //! (`ActionDispatch::Static`, from `campfire_assets`) → `/cable` (Action Cable) or the Rails route
 //! table (`controllers::dispatch`).
 
@@ -78,7 +78,6 @@ pub async fn boot(config: Config) -> anyhow::Result<Booted> {
     let (jobs, queue) = jobs::Jobs::new(jobs::QUEUE_CAPACITY);
     let rich_text = Arc::new(AppRichText::new(secrets.clone(), clock.clone()));
     let db = open_database(&config, clock.clone(), jobs.clone(), rich_text.clone()).await?;
-    rich_text.set_database(db.clone());
 
     // config/puma.rb: `Membership.disconnect_all` when the server boots.
     db.write(|tx| campfire_db::Membership::disconnect_all(tx).map(|_| ())).await?;
@@ -141,34 +140,8 @@ fn router(app: &App, kit: Kit) -> Router {
         .route("/", dispatch())
         .route("/{*path}", dispatch())
         .layer(axum::middleware::from_fn(public_files));
-    campfire_kit::app(routes, kit).layer(axum::middleware::from_fn(vary_accept_encoding))
-}
-
-/// Thruster, the proxy in front of Puma in the reference image, compresses responses and adds
-/// `Accept-Encoding` to `Vary` on every response. For GET and HEAD (its cacheable requests) it's
-/// merged into the app's value (`Vary: Accept,Accept-Encoding`); for anything else (other methods,
-/// WebSocket upgrades) a separate `Vary: Accept-Encoding` comes first, then the merged value.
-/// Verified against the reference container.
-async fn vary_accept_encoding(request: axum::extract::Request, next: Next) -> axum::response::Response {
-    use axum::http::{HeaderValue, Method, header};
-
-    let cacheable = matches!(*request.method(), Method::GET | Method::HEAD) && !request.headers().contains_key(header::UPGRADE);
-    let mut response = next.run(request).await;
-    let headers = response.headers_mut();
-    let existing: Vec<String> = headers.get_all(header::VARY).iter().filter_map(|value| value.to_str().ok()).map(str::to_string).collect();
-    let mut values = existing;
-    if !values.iter().flat_map(|value| value.split(',')).any(|token| token.trim().eq_ignore_ascii_case("accept-encoding")) {
-        values.push("Accept-Encoding".to_string());
-    }
-    let merged = values.join(",");
-    headers.remove(header::VARY);
-    if !cacheable {
-        headers.append(header::VARY, HeaderValue::from_static("Accept-Encoding"));
-    }
-    if let Ok(merged) = HeaderValue::from_str(&merged) {
-        headers.append(header::VARY, merged);
-    }
-    response
+    // config.ru: `use Rack::Deflater` around the whole app.
+    campfire_kit::app(routes, kit).layer(axum::middleware::from_fn(campfire_kit::deflater::deflater))
 }
 
 /// The Rails route table, with the app's fragment cache current while the action runs.
@@ -196,6 +169,7 @@ fn static_response(request: &axum::extract::Request) -> Option<axum::response::R
     })?;
     let mut response = axum::response::Response::new(axum::body::Body::from(served.body.into_owned()));
     *response.status_mut() = axum::http::StatusCode::from_u16(served.status).unwrap_or(axum::http::StatusCode::OK);
+    response.extensions_mut().insert(campfire_kit::deflater::StaticFile);
     for (name, value) in served.headers {
         if let (Ok(name), Ok(value)) =
             (axum::http::HeaderName::from_bytes(name.as_bytes()), axum::http::HeaderValue::from_str(&value))
