@@ -443,6 +443,14 @@ The first review raised these, and DHH answered:
    with equivalent meaning (content type, location, cache intent, cookies set or cleared). It
    doesn't require byte-exact values. That applies to the Thruster replacement too.
 
+4. **A lean parity gate.** The frontend is byte-identical and the browser build is pinned, so the
+   port can only change pixels by sending different bytes. The primary gate is therefore
+   server-output parity for every state: the HTML, the live DOM, the accessibility tree, every
+   subresource (status, header shape, body hash) and the cable frames, all on one engine and one
+   viewport. A thin pixel layer backs it up: Chromium on desktop and phone in light and dark, plus
+   a smoke set of about 20 states on Firefox and WebKit. Self-parity runs once on that matrix. The
+   full matrix is kept for a final pre-release check.
+
 ## Review log
 
 We reviewed the first draft with Codex (`codex exec`, read-only, with the codebase available). Its
