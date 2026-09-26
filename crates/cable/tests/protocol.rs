@@ -283,7 +283,7 @@ async fn pings_every_three_seconds_with_a_unix_timestamp() {
     };
     assert!(started.elapsed() <= Duration::from_millis(3100));
     let ping: Value = serde_json::from_str(&ping).unwrap();
-    assert_eq!(ping.as_object().unwrap().keys().collect::<Vec<_>>(), ["message", "type"]);
+    assert_eq!(ping.as_object().unwrap().keys().collect::<Vec<_>>(), ["type", "message"]);
     assert_eq!(ping["type"], "ping");
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
     assert!((ping["message"].as_i64().unwrap() - now).abs() <= 1);

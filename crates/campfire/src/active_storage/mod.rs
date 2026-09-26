@@ -1,1 +1,491 @@
-//! See main.rs for ownership.
+//! The Active Storage endpoints (`activestorage/config/routes.rb`) over `campfire_storage`, as the
+//! engine's controllers serve them, plus `ActiveStorage::Blob#purge` for the purge job.
+//!
+//! Downloads stay public behind signed URLs; the disk `PUT` and direct uploads require a
+//! Campfire session (`reference/config/initializers/active_storage_authentication.rb`). The disk
+//! service's `show` gets `Cache-Control: max-age=3600, public`
+//! (`reference/config/initializers/active_storage.rb`). These controllers inherit from
+//! `ActiveStorage::BaseController` (`protect_from_forgery with: :exception`), not
+//! `ApplicationController`, so none of Campfire's concerns run.
+
+use std::sync::Arc;
+
+use campfire_kit::{Ctx, Error, ExpiresIn, Freshness, Response, Result, SendOptions, StatusCode, halt, http::header};
+use campfire_storage::file_server::{self, BodyPart};
+use campfire_storage::{Blob, Filename, Json, Storage, Variation, content_types, disk, paths};
+use rusqlite::params;
+
+use crate::app::{App, AppCtx};
+use crate::concerns::{find_session_by_cookie, head};
+
+/// `ActiveStorage.service_urls_expire_in`
+const SERVICE_URLS_EXPIRE_IN: i64 = 5 * 60;
+/// `http_cache_forever`: `expires_in 100.years`.
+const HUNDRED_YEARS: u64 = 3_155_695_200;
+
+// --- Blobs -----------------------------------------------------------------------------------------
+
+/// `ActiveStorage::Blobs::RedirectController#show`
+pub async fn blobs_redirect(c: &mut Ctx) -> Result {
+    c.verify_authenticity_token()?;
+    let blob = set_blob(c).await?;
+    c.expires_in(SERVICE_URLS_EXPIRE_IN as u64, ExpiresIn::default());
+    let disposition = c.param_str("disposition").map(str::to_string);
+    let url = blob_url(c, &blob, disposition.as_deref());
+    c.redirect_to_with(&url, campfire_kit::Redirect { allow_other_host: true, ..Default::default() })
+}
+
+/// `ActiveStorage::Blobs::ProxyController#show`
+pub async fn blobs_proxy(c: &mut Ctx) -> Result {
+    c.verify_authenticity_token()?;
+    let blob = set_blob(c).await?;
+    let disposition = c.param_str("disposition").map(str::to_string);
+    if let Some(range) = c.request.header("range").filter(|r| !r.trim().is_empty()).map(str::to_string) {
+        return send_blob_byte_range_data(c, &blob, &range);
+    }
+    if let Some(not_modified) = http_cache_forever(c) {
+        return Ok(not_modified);
+    }
+    let response = send_blob_stream(c, &blob, disposition.as_deref())?;
+    Ok(response.header(header::ACCEPT_RANGES, "bytes"))
+}
+
+// --- Representations -------------------------------------------------------------------------------
+
+/// `ActiveStorage::Representations::RedirectController#show`
+pub async fn representations_redirect(c: &mut Ctx) -> Result {
+    c.verify_authenticity_token()?;
+    let blob = set_blob(c).await?;
+    let image = set_representation(c, blob).await?;
+    c.expires_in(SERVICE_URLS_EXPIRE_IN as u64, ExpiresIn::default());
+    let disposition = c.param_str("disposition").map(str::to_string);
+    let url = blob_url(c, &image, disposition.as_deref());
+    c.redirect_to_with(&url, campfire_kit::Redirect { allow_other_host: true, ..Default::default() })
+}
+
+/// `ActiveStorage::Representations::ProxyController#show`
+pub async fn representations_proxy(c: &mut Ctx) -> Result {
+    c.verify_authenticity_token()?;
+    let blob = set_blob(c).await?;
+    let image = set_representation(c, blob).await?;
+    if let Some(not_modified) = http_cache_forever(c) {
+        return Ok(not_modified);
+    }
+    let disposition = c.param_str("disposition").map(str::to_string);
+    send_blob_stream(c, &image, disposition.as_deref())
+}
+
+/// `ActiveStorage::SetBlob#set_blob`: `Blob.find_signed!(params[:signed_blob_id] || params[:signed_id])`.
+/// A bad signature is `head :not_found`; a valid one for a missing blob is `RecordNotFound`.
+async fn set_blob(c: &mut Ctx) -> Result<Blob> {
+    let signed_id = c.param_str("signed_blob_id").or_else(|| c.param_str("signed_id")).unwrap_or("").to_string();
+    let storage = c.app().storage.clone();
+    let Some(blob_id) = paths::verify_signed_blob_id(&*storage.verifier, &signed_id, c.now()) else {
+        return halt(head(StatusCode::NOT_FOUND));
+    };
+    c.app()
+        .db
+        .read(move |conn| Blob::find(conn, blob_id).map_err(storage_error))
+        .await
+        .map_err(Error::internal)?
+        .ok_or(Error::NotFound)
+}
+
+/// `set_representation`: `@blob.representation(params[:variation_key]).processed`. A bad
+/// variation key is `head :not_found`. Returns the blob that represents it (the variant's or
+/// preview's image).
+async fn set_representation(c: &mut Ctx, blob: Blob) -> Result<Blob> {
+    let storage = c.app().storage.clone();
+    let key = c.param_str("variation_key").unwrap_or("").to_string();
+    let variation = match Variation::decode(&*storage.verifier, &key, c.now()) {
+        Ok(variation) => variation,
+        Err(campfire_storage::Error::InvalidSignature) => return halt(head(StatusCode::NOT_FOUND)),
+        Err(error) => return Err(Error::internal(error)),
+    };
+    processed_representation(c.app(), blob, variation).await
+}
+
+/// `blob.representation(variation).processed`, reusing an existing variant or preview.
+///
+/// Processing inserts rows, so it runs on the writer. TODO: move the libvips/ffmpeg work off the
+/// writer thread once campfire_storage can split transforming from recording.
+pub async fn processed_representation(app: &App, blob: Blob, variation: Variation) -> Result<Blob> {
+    let storage = app.storage.clone();
+    let now = app.clock.now();
+    app.db
+        .write(move |tx| storage.process_representation(tx.conn(), &blob, &variation, now).map_err(storage_error))
+        .await
+        .map_err(Error::internal)
+}
+
+/// `blob.url(disposition:)` on the disk service: a signed `/rails/active_storage/disk/...` URL
+/// on this request's host that expires in `service_urls_expire_in`.
+fn blob_url(c: &Ctx, blob: &Blob, disposition: Option<&str>) -> String {
+    let storage = &c.app().storage;
+    let content_type = content_types::for_serving(blob.content_type());
+    let disposition = content_types::forced_disposition(blob.content_type()).or(disposition).unwrap_or("inline");
+    let expires_at = c.now() + jiff::SignedDuration::from_secs(SERVICE_URLS_EXPIRE_IN);
+    let path = storage.service.url_path(
+        &*storage.verifier,
+        &blob.key,
+        Some(expires_at),
+        &blob.filename,
+        Some(content_type),
+        disposition,
+    );
+    c.url_for(&path)
+}
+
+/// `http_cache_forever(public: true)`: cache for 100 years, ETag on the full path, and a fixed
+/// Last-Modified. `Some(304)` when the client's copy is fresh.
+fn http_cache_forever(c: &mut Ctx) -> Option<Response> {
+    c.expires_in(HUNDRED_YEARS, ExpiresIn { public: true, immutable: true, ..ExpiresIn::default() });
+    let last_modified: jiff::Timestamp = "2011-01-01T00:00:00Z".parse().expect("valid timestamp");
+    c.fresh_when(Freshness {
+        etag: Some(c.request.fullpath()),
+        last_modified: Some(last_modified),
+        public: true,
+        ..Freshness::default()
+    })
+}
+
+/// `send_blob_stream(blob, disposition:)`: the whole file, inline unless the type is forced to
+/// download.
+fn send_blob_stream(c: &mut Ctx, blob: &Blob, disposition: Option<&str>) -> Result {
+    let storage = c.app().storage.clone();
+    let path = storage.path_for(blob);
+    if !path.is_file() {
+        // `rescue ActiveStorage::FileNotFoundError`: expires_now, head :not_found.
+        c.expires_now();
+        return Ok(c.head(StatusCode::NOT_FOUND));
+    }
+    let disposition = content_types::forced_disposition(blob.content_type()).or(disposition).unwrap_or("inline");
+    c.send_file(
+        &path,
+        SendOptions {
+            filename: Some(blob.filename.sanitized()),
+            content_type: Some(content_types::for_serving(blob.content_type()).to_string()),
+            disposition: Some(disposition.to_string()),
+            ..SendOptions::default()
+        },
+    )
+}
+
+/// `send_blob_byte_range_data(blob, range_header)`
+fn send_blob_byte_range_data(c: &mut Ctx, blob: &Blob, range: &str) -> Result {
+    let storage = c.app().storage.clone();
+    let size = blob.byte_size.max(0) as u64;
+    let ranges = match file_server::byte_ranges(Some(range), size) {
+        Some(ranges) if !ranges.is_empty() => ranges,
+        _ => return Ok(c.head(StatusCode::RANGE_NOT_SATISFIABLE)),
+    };
+    let content_type_for_serving = content_types::for_serving(blob.content_type()).to_string();
+    let read = |start: u64, end: u64| storage.service.download_chunk(&blob.key, start..end + 1).map_err(storage_error_to_kit);
+    let (content_type, data, content_range) = if let [(start, end)] = ranges[..] {
+        (content_type_for_serving, read(start, end)?, Some(format!("bytes {start}-{end}/{size}")))
+    } else {
+        let boundary = random_hex(16);
+        let mut data = Vec::new();
+        for &(start, end) in &ranges {
+            data.extend_from_slice(format!("\r\n--{boundary}\r\n").as_bytes());
+            data.extend_from_slice(format!("Content-Type: {content_type_for_serving}\r\n").as_bytes());
+            data.extend_from_slice(format!("Content-Range: bytes {start}-{end}/{size}\r\n\r\n").as_bytes());
+            data.extend_from_slice(&read(start, end)?);
+        }
+        data.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+        (format!("multipart/byteranges; boundary={boundary}"), data, None)
+    };
+    let disposition = content_types::forced_disposition(blob.content_type()).unwrap_or("inline");
+    let mut response = c.send_data(
+        data,
+        SendOptions {
+            filename: Some(blob.filename.sanitized()),
+            content_type: Some(content_type),
+            disposition: Some(disposition.to_string()),
+            status: StatusCode::PARTIAL_CONTENT,
+            ..SendOptions::default()
+        },
+    );
+    if let Some(content_range) = content_range {
+        response = response.header(header::CONTENT_RANGE, &content_range);
+    }
+    Ok(response.header(header::ACCEPT_RANGES, "bytes"))
+}
+
+// --- Disk service ----------------------------------------------------------------------------------
+
+/// `ActiveStorage::DiskController#show`, plus the initializer's `after_action` cache header.
+pub async fn disk_show(c: &mut Ctx) -> Result {
+    let response = disk_serve(c)?;
+    Ok(response.header(header::CACHE_CONTROL, "max-age=3600, public"))
+}
+
+fn disk_serve(c: &mut Ctx) -> Result {
+    let storage = c.app().storage.clone();
+    let encoded_key = c.param_str("encoded_key").unwrap_or("").to_string();
+    let Some(key) = disk::decode_verified_key(&*storage.verifier, &encoded_key, c.now()) else {
+        return Ok(c.head(StatusCode::NOT_FOUND));
+    };
+    let request = file_server::Request {
+        method: c.request.method.as_str(),
+        range: c.request.header("range"),
+        if_modified_since: c.request.header("if-modified-since"),
+    };
+    let served = match file_server::serve_file(&request, &storage.service.path_for(&key.key), key.content_type.as_deref(), Some(&key.disposition)) {
+        Ok(served) => served,
+        Err(campfire_storage::Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(c.head(StatusCode::NOT_FOUND));
+        }
+        Err(error) => return Err(Error::internal(error)),
+    };
+    let mut response = Response::new(StatusCode::from_u16(served.status).map_err(Error::internal)?);
+    for (name, value) in &served.headers {
+        response = response.header(name.as_str(), value);
+    }
+    response.body = match served.body.as_slice() {
+        [] => campfire_kit::Body::Empty,
+        [BodyPart::File { path, start, end }] => campfire_kit::Body::File(campfire_kit::response::FileBody {
+            path: path.clone(),
+            offset: *start,
+            len: end - start + 1,
+        }),
+        parts => campfire_kit::Body::Bytes(read_parts(parts)?.into()),
+    };
+    Ok(response)
+}
+
+fn read_parts(parts: &[BodyPart]) -> Result<Vec<u8>> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut data = Vec::new();
+    for part in parts {
+        match part {
+            BodyPart::Bytes(bytes) => data.extend_from_slice(bytes),
+            BodyPart::File { path, start, end } => {
+                let mut file = std::fs::File::open(path)?;
+                file.seek(SeekFrom::Start(*start))?;
+                file.take(end - start + 1).read_to_end(&mut data)?;
+            }
+        }
+    }
+    Ok(data)
+}
+
+/// `ActiveStorage::DiskController#update` (the direct-upload PUT), behind
+/// `require_active_storage_authentication`.
+pub async fn disk_update(c: &mut Ctx) -> Result {
+    require_active_storage_authentication(c).await?;
+    let storage = c.app().storage.clone();
+    let encoded_token = c.param_str("encoded_token").unwrap_or("").to_string();
+    let Some(token) = disk::decode_verified_token(&*storage.verifier, &encoded_token, c.now()) else {
+        return Ok(c.head(StatusCode::NOT_FOUND));
+    };
+    if !acceptable_content(c, &token) {
+        return Ok(c.head(StatusCode::UNPROCESSABLE_ENTITY));
+    }
+    let body = c.request.raw_post().clone();
+    let (key, checksum) = (token.key.clone(), token.checksum.clone());
+    let uploaded = tokio::task::spawn_blocking(move || storage.service.upload(&key, body.as_ref(), Some(&checksum)))
+        .await
+        .map_err(Error::internal)?;
+    match uploaded {
+        Ok(()) => Ok(c.head(StatusCode::NO_CONTENT)),
+        Err(campfire_storage::Error::Integrity) => Ok(c.head(StatusCode::UNPROCESSABLE_ENTITY)),
+        Err(error) => Err(Error::internal(error)),
+    }
+}
+
+/// `token[:content_type] == request.content_mime_type && token[:content_length] == request.content_length`
+fn acceptable_content(c: &Ctx, token: &disk::DiskToken) -> bool {
+    let media_type = c.request.media_type();
+    let content_length = c.request.header("content-length").and_then(|l| l.trim().parse::<i64>().ok());
+    token.content_type.as_deref().map(str::to_ascii_lowercase) == media_type.map(|m| m.to_ascii_lowercase())
+        && Some(token.content_length) == content_length
+}
+
+/// `ActiveStorage::DirectUploadsController#create`, behind CSRF and
+/// `require_active_storage_authentication`.
+pub async fn direct_uploads_create(c: &mut Ctx) -> Result {
+    c.verify_authenticity_token()?;
+    require_active_storage_authentication(c).await?;
+    // `params.expect(blob: [:filename, :byte_size, :checksum, :content_type, metadata: {}])`
+    let blob_params = c.params.require("blob")?.as_hash().cloned().ok_or_else(|| Error::ParameterMissing("blob".into()))?;
+    let text = |key: &str| blob_params.get(key).and_then(|p| p.as_str()).map(str::to_string);
+    let (Some(filename), Some(checksum)) = (text("filename").filter(|f| !f.is_empty()), text("checksum").filter(|c| !c.is_empty())) else {
+        return Err(Error::Status(StatusCode::UNPROCESSABLE_ENTITY));
+    };
+    let Some(byte_size) = text("byte_size").and_then(|s| crate::concerns::cast_integer(&s)) else {
+        return Err(Error::Status(StatusCode::UNPROCESSABLE_ENTITY));
+    };
+    let content_type = text("content_type");
+    let metadata = match blob_params.get("metadata").and_then(|m| m.as_hash()) {
+        Some(metadata) => Json::parse(&metadata.to_json().to_string()).map_err(Error::internal)?,
+        None => Json::object(),
+    };
+
+    let storage = c.app().storage.clone();
+    let now = c.now();
+    let new_blob = campfire_storage::NewBlob {
+        key: campfire_storage::key::generate_key(),
+        filename: Filename::new(filename),
+        content_type: content_type.clone(),
+        metadata,
+        service_name: storage.service.name().to_string(),
+        byte_size,
+        checksum: checksum.clone(),
+    };
+    let blob = c
+        .app()
+        .db
+        .write(move |tx| new_blob.insert(tx.conn(), now).map_err(storage_error))
+        .await
+        .map_err(Error::internal)?;
+
+    let expires_at = now + jiff::SignedDuration::from_secs(SERVICE_URLS_EXPIRE_IN);
+    let url = c.url_for(&storage.service.url_path_for_direct_upload(
+        &*storage.verifier,
+        &blob.key,
+        expires_at,
+        content_type.as_deref(),
+        byte_size,
+        &checksum,
+    ));
+    let signed_id = paths::signed_blob_id(&*storage.verifier, blob.id, None);
+    let json = direct_upload_json(&blob, &signed_id, &url, content_type.as_deref());
+    Ok(Response::with_body(StatusCode::OK, campfire_kit::response::JSON_UTF8, json))
+}
+
+/// `blob.as_json(root: false, methods: :signed_id).merge(direct_upload: { url:, headers: })`
+fn direct_upload_json(blob: &Blob, signed_id: &str, url: &str, content_type: Option<&str>) -> String {
+    let text = |s: Option<&str>| s.map_or(Json::Null, Json::from);
+    Json::Object(vec![
+        ("id".into(), Json::Int(blob.id)),
+        ("key".into(), blob.key.as_str().into()),
+        ("filename".into(), blob.filename.raw().into()),
+        ("content_type".into(), text(blob.content_type.as_deref())),
+        ("metadata".into(), blob.metadata.clone()),
+        ("service_name".into(), blob.service_name.as_str().into()),
+        ("byte_size".into(), Json::Int(blob.byte_size)),
+        ("checksum".into(), text(blob.checksum.as_deref())),
+        ("created_at".into(), Json::String(json_time(&blob.created_at))),
+        ("signed_id".into(), signed_id.into()),
+        (
+            "direct_upload".into(),
+            Json::Object(vec![
+                ("url".into(), url.into()),
+                ("headers".into(), Json::Object(vec![("Content-Type".into(), text(content_type))])),
+            ]),
+        ),
+    ])
+    .encode()
+}
+
+/// A stored `created_at` (`YYYY-MM-DD HH:MM:SS[.ffffff]`, UTC) as `ActiveSupport::JSON` encodes
+/// times: ISO 8601 with milliseconds.
+fn json_time(db_time: &str) -> String {
+    let parsed = jiff::civil::DateTime::strptime("%Y-%m-%d %H:%M:%S%.f", db_time)
+        .or_else(|_| jiff::civil::DateTime::strptime("%Y-%m-%d %H:%M:%S", db_time));
+    match parsed {
+        Ok(time) => time.strftime("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
+        Err(_) => db_time.to_string(),
+    }
+}
+
+/// `ActiveStorageAuthentication#require_active_storage_authentication`: 401 without a session.
+async fn require_active_storage_authentication(c: &mut Ctx) -> Result<()> {
+    if find_session_by_cookie(c).await?.is_none() {
+        return halt(head(StatusCode::UNAUTHORIZED));
+    }
+    Ok(())
+}
+
+// --- Purging ---------------------------------------------------------------------------------------
+
+/// `ActiveStorage::Blob#purge`: `destroy` (refused while any attachment still points at the
+/// blob; destroys its variant records and preview image attachment, whose blobs are purged
+/// later), then delete the files.
+pub async fn purge(app: &App, blob_id: i64) -> anyhow::Result<()> {
+    let destroyed = app
+        .db
+        .write(move |tx| {
+            let conn = tx.conn();
+            let Some(blob) = Blob::find(conn, blob_id).map_err(storage_error)? else { return Ok(None) };
+            // before_destroy(prepend: true) { raise ActiveRecord::InvalidForeignKey if attachments.exists? }
+            if !campfire_storage::blob::attachment_records(conn, blob_id).map_err(storage_error)?.is_empty() {
+                return Ok(None);
+            }
+            let mut dependents = Vec::new();
+            // before_destroy { variant_records.destroy_all }: each record's image attachment goes too.
+            let variant_records: Vec<i64> = query_ids(conn, "SELECT id FROM active_storage_variant_records WHERE blob_id = ?1", blob_id)?;
+            for record_id in variant_records {
+                dependents.extend(destroy_attachment(conn, "ActiveStorage::VariantRecord", record_id, "image")?);
+                conn.execute("DELETE FROM active_storage_variant_records WHERE id = ?1", [record_id])?;
+            }
+            // has_one_attached :preview_image (dependent: :destroy on the attachment)
+            dependents.extend(destroy_attachment(conn, "ActiveStorage::Blob", blob_id, "preview_image")?);
+            conn.execute("DELETE FROM active_storage_blobs WHERE id = ?1", [blob_id])?;
+            // after_destroy_commit :purge_dependent_blob_later
+            for dependent in &dependents {
+                tx.emit_after_commit(campfire_db::Event::PurgeBlob { blob_id: *dependent });
+            }
+            Ok(Some(blob))
+        })
+        .await?;
+    if let Some(blob) = destroyed {
+        delete_files(app.storage.clone(), blob).await?;
+    }
+    Ok(())
+}
+
+async fn delete_files(storage: Arc<Storage>, blob: Blob) -> anyhow::Result<()> {
+    tokio::task::spawn_blocking(move || storage.delete_files(&blob)).await??;
+    Ok(())
+}
+
+/// Deletes the attachment row, returning its blob id.
+fn destroy_attachment(conn: &rusqlite::Connection, record_type: &str, record_id: i64, name: &str) -> campfire_db::Result<Option<i64>> {
+    let attachment: Option<(i64, i64)> = conn
+        .query_row(
+            "SELECT id, blob_id FROM active_storage_attachments WHERE record_type = ?1 AND record_id = ?2 AND name = ?3 LIMIT 1",
+            params![record_type, record_id, name],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map(Some)
+        .or_else(|error| if error == rusqlite::Error::QueryReturnedNoRows { Ok(None) } else { Err(error) })?;
+    let Some((id, blob_id)) = attachment else { return Ok(None) };
+    conn.execute("DELETE FROM active_storage_attachments WHERE id = ?1", [id])?;
+    Ok(Some(blob_id))
+}
+
+fn query_ids(conn: &rusqlite::Connection, sql: &str, id: i64) -> campfire_db::Result<Vec<i64>> {
+    let mut statement = conn.prepare(sql)?;
+    let ids = statement.query_map([id], |row| row.get(0))?.collect::<rusqlite::Result<Vec<i64>>>()?;
+    Ok(ids)
+}
+
+fn storage_error(error: campfire_storage::Error) -> campfire_db::Error {
+    match error {
+        campfire_storage::Error::Sql(error) => error.into(),
+        other => campfire_db::Error::Other(other.to_string()),
+    }
+}
+
+fn storage_error_to_kit(error: campfire_storage::Error) -> Error {
+    Error::internal(error)
+}
+
+fn random_hex(bytes: usize) -> String {
+    use rand::Rng;
+    let mut rng = rand::rng();
+    (0..bytes).map(|_| format!("{:02x}", rng.random::<u8>())).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn json_times_have_milliseconds() {
+        assert_eq!(json_time("2026-03-02 16:00:00.123456"), "2026-03-02T16:00:00.123Z");
+        assert_eq!(json_time("2026-03-02 16:00:00"), "2026-03-02T16:00:00.000Z");
+    }
+}

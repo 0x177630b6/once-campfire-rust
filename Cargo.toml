@@ -32,6 +32,7 @@ jiff         = { version = "0.2", features = ["serde"] }
 thiserror    = "2"
 anyhow       = "1"
 tracing      = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 base64       = "0.22"
 hmac         = "0.12"
 sha1         = "0.10"
@@ -55,3 +56,13 @@ tempfile     = "3"
 md-5         = "0.10"
 multer       = "3"
 http-body-util = "0.1"
+# integrations (crates/campfire/src/integrations): HTTP/1.1 client, TLS, Web Push crypto
+hyper-util   = { version = "0.1", features = ["tokio"] }
+http         = "1"
+bytes        = "1"
+rustls       = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+rustls-native-certs = "0.8"
+p256         = { version = "0.13", features = ["ecdh", "ecdsa"] }
+hkdf         = "0.12"
+flate2       = "1"

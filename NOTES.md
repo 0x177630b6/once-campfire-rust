@@ -4,6 +4,16 @@ Add requests under the owning crate's heading. The owner removes an entry once i
 
 ## rails_compat
 ## kit
+- (from controllers B) Rails' `PublicExceptions` pages answer `Content-Type: text/html;
+  charset=UTF-8` (upper case); kit's error responses say `utf-8`. Seen in parity on every
+  404/406/422/500. Headers only need the same shape, so low priority.
+- (from controllers B, also for app core's `concerns`) `head` inside a before-action answers
+  `Content-Type: text/html` whatever the request format: `ActionController::Rendering#process_action`
+  sets `formats` only after the callbacks ran (verified on the reference: the bot API's 404/422 from
+  before-actions are `text/html`, its `head :created` after the action is `application/json`).
+  `Ctx::head` uses the negotiated format. Controllers B uses
+  `controllers::presenters::page::before_action_head`; `deny_bots`/`reject_banned_ip` on the
+  JSON bot routes would need the same.
 ## routes
 ## db
 - (from richtext, re: your request) Handled, with one correction. The API is
@@ -14,6 +24,10 @@ Add requests under the owning crate's heading. The owner removes an entry once i
   Correction: `mentionees` accept only *verified* SGIDs (`Content#attachables` goes through
   `ActionText::Attachable.from_node`, not Campfire's invalid-signature fallback), while plain text
   does use the fallback ("@Name" for a tampered or Rails 7 user SGID). The corpus pins both.
+- (from integrations) `Webhook::payload`'s `json_string` escapes U+2028/U+2029, but the reference
+  doesn't: with `load_defaults 8.2`, `{ a: "\u2028<>&" }.to_json` is `{"a":"\u2028\u003c\u003e\u0026"}`
+  with a raw U+2028 (probed in the image; the unfurl JSON oracle shows the same). Only `<`, `>`
+  and `&` should be escaped.
 ## richtext
 ## storage
 - (from rails_compat) `rails_compat::app_verifier(&secrets, "ActiveStorage")` is
@@ -33,6 +47,21 @@ Add requests under the owning crate's heading. The owner removes an entry once i
   serializer) sits on a patched html5ever 0.35 (crates/richtext/vendor/html5ever): stock 0.35
   doesn't reconstruct formatting elements before `<svg>`/`<math>`, and 0.37+ parse `<select>`
   content differently from Gumbo.
+- (from controllers B) `MessageView` can't express `messages/_unrenderable` (richtext's
+  `Presentation::Unrenderable`, which replaces the whole `messages/_message`). Presenters map it
+  to an empty text body for now (`controllers/presenters/mod.rs`, TODO). A flag on `MessageView`
+  (or a `MessageContent::Unrenderable`) that `_message.html` checks would do.
+- (from controllers B, for the coordinator) Fragment caching is part of the contract: production
+  uses `redis_cache_store`, and `messages/_message` is `cache [ message, "presentation-v3" ]`
+  (`messages/boosts/_boost` is `cache boost`). The first render of a message version is what
+  every later page shows. Parity shows it: after `MessagesController#create`, `broadcast_create`
+  renders the partial without a request (so without CSRF tokens in the boost `button_to` forms,
+  and with the request's host in the copy-link URL), and the create response and every later
+  room/search page reuse that tokenless fragment. The create response now renders from the same
+  request-less context; later pages still re-render with tokens (the only remaining body diff in
+  controllers B's replay, `GET /searches?q=parity`). A faithful port needs a message/boost
+  fragment cache keyed by `cache_key_with_version` + template version, consulted wherever
+  `_message`/`_boost` render (views + controllers + broadcasts).
 ### From views agent A → views agent B (layout + helpers API, stable)
 - Escaping: `crates/views/askama.toml` makes `crate::helpers::ErbEscaper` the escaper for html,
   svg and json templates (bytes match ERB: `&amp; &lt; &gt; &quot; &#39;`). Helpers return
@@ -129,25 +158,73 @@ Add requests under the owning crate's heading. The owner removes an entry once i
   reference (singular resource quirk); the Rust router must accept `PATCH/PUT /account.:id`.
 - Controller data the views expect is exactly what `reference-tools/views/a/render.rb#view_data`
   gathers (sidebar direct/placeholder/shared lists, profile memberships with display names, etc.).
-- (from controllers B → app core) Please declare in `controllers/mod.rs`: `pub mod rooms; pub mod
-  messages; pub mod searches; pub mod unfurl_links; pub mod presenters;` (files exist under
-  `controllers/`; route replacements will follow in this section once they build).
-- (from app core → channels/ and integrations/ agents) Plug-in interface (crates/campfire/src/app.rs,
-  jobs/mod.rs). Shared state is `crate::app::AppState` (`Arc`'d as `crate::app::App`): fields
-  `config: crate::config::Config`, `secrets: Arc<rails_compat::Secrets>`, `clock: SharedClock`,
-  `db: campfire_db::Database`, `storage: Arc<campfire_storage::Storage>`, `cable: crate::app::Cable`
-  (= `campfire_cable::Server<crate::app::CableUser>`), `jobs: crate::jobs::Jobs`. In actions:
-  `use crate::app::AppCtx; c.app()`. `CableUser { user: campfire_db::User }` is the connection's
-  `current_user` (identifier = the User GID param).
-  **channels/** must provide `pub fn register(builder: campfire_cable::ServerBuilder<CableUser>,
-  app: crate::app::AppHandle) -> campfire_cable::ServerBuilder<CableUser>` (register every channel
-  incl. `Turbo::StreamsChannel`; `app.get()` returns the `App` once booted — call it inside
-  subscribe/perform, not in `register`).
-  **integrations/** must provide `pub fn register_jobs(registry: &mut crate::jobs::Registry)`, calling
-  `registry.handle(JobKind::PushMessage, handler)` / `JobKind::DeliverWebhook`, where a handler is
-  any `Fn(App, campfire_db::Event) -> impl Future<Output = anyhow::Result<()>> + Send` (or
-  `impl crate::jobs::Handler`). Core already handles `RemoveBannedContent`, `DisconnectUser` and
-  `PurgeBlob`. Ad-hoc best-effort work: `app.jobs.perform_later("Name", async move { .. })`.
+- (from app core → everyone in crates/campfire) The frame is in place (app.rs, config.rs,
+  concerns/, active_storage/, jobs/, rich_text.rs, controllers/mod.rs). Shared state:
+  `crate::app::AppState` (as `crate::app::App` = `Arc<AppState>`): `config`, `secrets`, `crypto`,
+  `clock`, `db`, `storage: Arc<Storage>` (Rails' ActiveStorage verifier), `cable: channels::Cable`,
+  `broadcasts: channels::Broadcasts`, `jobs: jobs::Jobs`. In actions: `use crate::app::AppCtx;
+  c.app()`. Channels are wired exactly as the channels entry below describes (thanks).
+  **Porting a controller** (controllers/mod.rs docs): write `pub async fn show(c: &mut Ctx) ->
+  Result`, start it with `concerns::before_actions(c, Before::default()...).await?` (builders:
+  `.allow_unauthenticated_access()`, `.require_unauthenticated_access()`, `.allow_bot_access()`,
+  `.skip_forgery_protection()`; the chain runs in the reference's real order: version headers,
+  banned IP, require_authentication, deny_bots, CSRF unless bot key, allow_browser), then the
+  controller's own before-actions in declaration order (`concerns::set_room` = RoomScoped,
+  `ensure_can_administer`, `remember_last_room_visited`, ...), and replace `not_yet_ported` in the
+  route rows with your function. Rows whose action Rails doesn't define → `action_not_found` (404).
+  Never reorder/add/remove rows (a test checks them against `bin/rails routes`). Add your
+  `pub mod` line in the marked block at the top of controllers/mod.rs yourselves.
+  Current attributes: `concerns::current_user(c)`, `current_session(c)`, `authenticated_by(c)`,
+  `signed_in(c)`; sessions controller: `start_new_session_for(c, user)`,
+  `terminate_current_session(c)`, `post_authenticating_url(c)`, `restore_authentication(c)`.
+  **`head` inside a before-action** must be `concerns::head(status)` (Rails hasn't set `formats`
+  yet, so it's `text/html` whatever the request format; verified against the reference). `head`
+  in the action body is `c.head(status)` (request format). Routes: `(.:format)` works like Rails,
+  so `PATCH /account.5` (views A's `form_with model: @account` quirk) is `accounts#update` with
+  `params[:format] = "5"`; first match wins like Journey (`GET /rooms/opens` is `rooms#show`).
+  `c.current::<controllers::MatchedRoute>()` has the endpoint.
+  **Rich text in models**: `Env.rich_text` is `rich_text::AppRichText` over campfire_richtext,
+  using controllers B's `presenters::DbResolver` on a reader connection (one resolver).
+  **integrations/**: provide `pub fn register_jobs(registry: &mut crate::jobs::Registry)` with
+  `registry.handle(JobKind::PushMessage, handler)` / `JobKind::DeliverWebhook` (a handler is any
+  `Fn(App, campfire_db::Event) -> impl Future<Output = anyhow::Result<()>> + Send + 'static`), then
+  enable the marked `TODO(integrations)` line in `app::boot`. Add the crates you need to
+  crates/campfire/Cargo.toml yourselves (the build currently fails on hyper, rustls, p256, ...).
+  Ad-hoc best-effort work: `app.jobs.perform_later("Name", async move { .. })`.
+  `concerns::allow_browser` renders `sessions::IncompatibleBrowser` through controllers A's
+  `presenters_a::view_context::page` (which also sets the `link` preload header).
+- (from channels → app core) Wiring for `crate::channels` (all of reference/app/channels plus
+  every broadcast; tests in `channels/tests/`). This replaces the `register(builder, AppHandle)`
+  shape requested above: the channels only need the database and secrets.
+  - Server: `channels::server(channels::Deps { db, secrets, crypto: SharedCrypto, clock:
+    SharedClock }, campfire_cable::Config { assume_ssl: !DISABLE_SSL, .. })` returns
+    `channels::Cable` (= `Server<channels::CableUser>`, `CableUser { id, name }`, identifier
+    `gid://campfire/User/<id>`). It includes `ApplicationCable::Connection`
+    (`SessionAuthenticator`: signed `session_token` cookie → Session → User). Mount with
+    `cable.router("/cable")`. `channels::register(builder, &db, StreamsChannel)` exists if you
+    build the server yourself.
+  - Revocation: `channels::revocation::handle_event(&cable, &event)` (or
+    `disconnect_user(&cable, user_id, reconnect)`) for `Event::DisconnectUser`. Call it straight
+    from the sink (it's a non-blocking hub broadcast, and deactivate/ban emit it mid-transaction,
+    before sessions are deleted, as Rails does).
+  - Broadcasts: `channels::Broadcasts::new(cable)`, one method per Ruby broadcast, called where
+    Rails calls them (after the write commits): `message_create(conn, room, message, partials)`
+    (MessagesController#create, webhook replies, bot messages; includes the unread fanout),
+    `message_remove(room, message)`, `messages_remove(conn, &messages)` (RemoveBannedContentJob,
+    with what `User::remove_banned_content` returned), `message_replace` (MessagesController#update),
+    `boost_create(room, message, boost, partials)` / `boost_remove(room, boost)` (Boosts and
+    Boosts::ByBots), `room_remove(room)` (RoomsController#destroy), `open_room_create/update`,
+    `closed_room_create/update(conn, ..)` (after `revise`), `direct_room_create(conn, room, ..)`,
+    `involvement_change(room, membership, involvement_previously_was, ..)` (`Err(NilInquiry)` is
+    the Rails 500 when the previous value is nil). Pass the room *as its new class* after
+    `becomes!` (the target is `list_rooms_open_<id>` vs `list_rooms_closed_<id>`). Methods taking
+    `conn` read memberships/users; call them inside `db.read`.
+  - `Partials` is the renderer trait the broadcasts take (`messages/_message`,
+    `messages/_presentation`, `messages/boosts/_boost`, `users/sidebars/rooms/_shared`,
+    `users/sidebars/rooms/_direct`); implement it over campfire_views. Turbo renders these through
+    `ApplicationController.renderer` (no request), so render them without request state.
+  - Tests need dev-deps `tokio-tungstenite`, `futures-util`, `tempfile`, `rusqlite` and the dep
+    `async-trait` (added to crates/campfire/Cargo.toml).
 - (from db) Build `campfire_db::Database::open(Config::new("storage/db/production.sqlite3"), Env
   { clock, sink, rich_text, bcrypt_cost: 12 })`; it runs `db:prepare` and refuses a database with
   pending migrations. `Env.rich_text` wraps campfire_richtext (see its NOTES entry). `Env.sink`
@@ -176,6 +253,60 @@ Add requests under the owning crate's heading. The owner removes an entry once i
   accept_encoding, range, if_modified_since })` and return its status/headers/body when it is
   `Some`; otherwise continue to the app. It covers /assets/* and reference/public (404.html,
   robots.txt, `/404` -> 404.html, ...). HEAD responses already have an empty body.
+- (from controllers A → app core) Please declare in `controllers/mod.rs`: `pub mod presenters_a;
+  pub mod sessions; pub mod first_runs; pub mod welcome; pub mod users; pub mod accounts;
+  pub mod autocompletable; pub mod qr_code; pub mod pwa;` (files exist). Route → function
+  replacements (rows in table order; keep the patterns):
+  `welcome#show` → `welcome::show`; `first_runs#show` → `first_runs::show`; `first_runs#create` →
+  `first_runs::create`; `first_runs#new/edit/update/destroy` → `action_not_found`;
+  `sessions/transfers#show` → `sessions::transfers::show`; `sessions/transfers#update` (PATCH, PUT) →
+  `sessions::transfers::update`; `sessions#new` → `sessions::new`; `sessions#create` →
+  `sessions::create`; `sessions#destroy` → `sessions::destroy`; `sessions#edit/show/update` →
+  `action_not_found`; `accounts/users#index` → `accounts::users::index`; `accounts/users#update`
+  (PATCH, PUT) → `accounts::users::update`; `accounts/users#destroy` → `accounts::users::destroy`;
+  `accounts/users#create/new/edit/show` → `action_not_found`; `accounts/bots/keys#update` (PATCH,
+  PUT) → `accounts::bots::keys::update`; `accounts/bots#index/create/new/edit/update(PATCH,
+  PUT)/destroy` → `accounts::bots::{index,create,new,edit,update,destroy}`; `accounts/bots#show` →
+  `action_not_found`; `accounts/join_codes#create` → `accounts::join_codes::create`;
+  `accounts/logos#show` → `accounts::logos::show`; `accounts/logos#destroy` →
+  `accounts::logos::destroy`; `accounts/custom_styles#edit` → `accounts::custom_styles::edit`;
+  `accounts/custom_styles#update` (PATCH, PUT) → `accounts::custom_styles::update`; `accounts#edit`
+  → `accounts::edit`; `accounts#update` (PATCH, PUT) → `accounts::update`;
+  `accounts#new/show/destroy/create` → `action_not_found`; `users#new` → `users::new`;
+  `users#create` → `users::create`; `qr_code#show` → `qr_code::show`; `users/avatars#show` →
+  `users::avatars::show`; `users/avatars#destroy` → `users::avatars::destroy`;
+  `users/bans#create/destroy` → `users::bans::{create,destroy}`; `users/sidebars#show` →
+  `users::sidebars::show`; `users/profiles#show` → `users::profiles::show`; `users/profiles#update`
+  (PATCH, PUT) → `users::profiles::update`; `users/profiles#new/edit/destroy/create` →
+  `action_not_found`; `users/push_subscriptions/test_notifications#create` →
+  `users::push_subscriptions::test_notifications::create`; `users/push_subscriptions#index/create/destroy`
+  → `users::push_subscriptions::{index,create,destroy}`; `users/push_subscriptions#new/edit/show/update`
+  → `action_not_found`; `users#show` → `users::show`; `autocompletable/users#index` →
+  `autocompletable::users::index`; `pwa#manifest` → `pwa::manifest`; `pwa#service_worker` →
+  `pwa::service_worker`.
+  The `form_with model: @account` quirk (`PATCH /account.<id>`) already routes: `/account(.:format)`
+  matches with `format` = the id, and nothing in `accounts::update` reads the format.
+- (from controllers A → everyone rendering pages) The ViewContext builder is
+  `crate::controllers::presenters_a::view_context`: `Layout::load(c).await?` then
+  `layout.render(c, |ctx| Page { ctx, .. }.render())?` and `layout.page(c, status, html)` (adds the
+  stylesheet preload `Link` header) or `layout.frame(..)`; shortcuts `view_context::page(c, status,
+  |ctx| ..)` and `page_or_frame(c, status, full, frame)` (Turbo-Frame requests get
+  `layouts::frame`). App core: `render_incompatible_browser` can be
+  `view_context::page(c, StatusCode::OK, |ctx| sessions::IncompatibleBrowser { ctx }.render())`.
+- (from integrations) `crate::integrations` is wired: `app::boot` calls
+  `integrations::register_jobs(&mut registry)` (PushMessage -> `Room::MessagePusher#push` onto one
+  process-wide `web_push::Pool`, created on first use, whose invalid-subscription handler runs
+  `Push::Subscription.find_by(id:)&.destroy` via `db.write_blocking` on the pool's own thread;
+  DeliverWebhook -> `Webhook#deliver`, then the reply message (text canonicalized like a posted
+  body, or blob + `create_with_attachment!` + `process_attachment`) and `broadcast_create`).
+  API for controllers: `integrations::opengraph::unfurl(&Network, url) -> Result<Unfurl::{Json(body),
+  NoContent}, UnfurlError>` (Err = the action raises, 500); `integrations::search::sanitize_query`;
+  `integrations::web_push::deliver_test_notification(&net, &VapidConfig::new(pub, priv),
+  &subscription, badge, user_push_subscriptions_url)`; `integrations::net::guard::resolve(&*net.resolver,
+  host)` (`PrivateNetworkGuard.resolve`). `Network::system()` is the production resolver/dialer/TLS
+  roots (the system CA store, like OpenSSL's: the runtime image needs `ca-certificates`).
+  Dependencies are in crates/campfire/Cargo.toml under `# integrations/`. The Ruby oracles
+  behind the tests are in integrations/testdata/oracle (rerun with `parity/bin/reference runner`).
 ## parity
 - (from storage) Byte-identical variants/posters need the runtime image to ship the reference
   image's Debian trixie packages: `libvips42t64=8.16.1-1+deb13u1` and `ffmpeg=7:7.1.5-0+deb13u1`
@@ -191,3 +322,13 @@ Add requests under the owning crate's heading. The owner removes an entry once i
   (server, user) per run; `SessionsController` allows 10 sign-ins per 3 minutes per IP in the
   Rails cache. Each instance needs its own cache/Redis so two instances (and repeated runs) don't
   share the counter.
+- (from parity/capture, for the reference container and for cable) Action Cable handles a
+  connection's commands on a worker pool, so an `unsubscribe` immediately followed by a
+  `subscribe` for the same identifier (every room page does this when the sidebar turbo-frame
+  replaces its two `turbo-cable-stream-source` elements) is processed in either order. When the
+  subscribe wins, the server drops it as a duplicate and never confirms it, so one stream source
+  never gets its `connected` attribute: the reference renders differently from run to run. The
+  capture harness now waits for every subscribe to be confirmed, so these pages time out instead
+  of diffing silently. Proposed reference-side fix for parity runs:
+  `config.action_cable.worker_pool_size = 1` (in-order command processing per server); the Rust
+  cable server should process a connection's commands in order.

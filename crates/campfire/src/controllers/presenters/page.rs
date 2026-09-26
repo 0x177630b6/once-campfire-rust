@@ -1,0 +1,140 @@
+//! Rendering helpers for these controllers: pages in the application layout (or turbo-rails'
+//! frame layout for Turbo-Frame requests), and partials rendered outside a request for
+//! broadcasts (`ApplicationController.render`).
+
+use campfire_db::{Account, Boost, Membership, Message, Room};
+use campfire_kit::{Ctx, Error, Result, StatusCode};
+use campfire_views::helpers as h;
+use campfire_views::layouts::{Application, FrameLayout};
+use campfire_views::{Platform, ViewContext};
+
+use crate::app::App;
+use crate::channels::Partials;
+use crate::controllers::presenters_a::view_context::{Layout, account_summary};
+
+/// A template that extends `layouts/application` itself.
+pub async fn page(c: &mut Ctx, status: StatusCode, render: impl FnOnce(&ViewContext) -> askama::Result<String>) -> Result {
+    let layout = Layout::load(c).await?;
+    let html = layout.render(c, render)?;
+    Ok(layout.page(c, status, html))
+}
+
+/// A content-only template: Rails wraps it in the application layout, or in turbo-rails'
+/// `layouts/turbo_rails/frame` when the request carries a `Turbo-Frame` header.
+pub async fn content(c: &mut Ctx, status: StatusCode, render: impl FnOnce(&ViewContext) -> askama::Result<String>) -> Result {
+    use askama::Template;
+
+    let layout = Layout::load(c).await?;
+    let frame = c.is_turbo_frame_request();
+    let html = layout.render(c, |ctx| {
+        let content = h::raw(render(ctx)?);
+        if frame { FrameLayout { ctx, head: h::empty(), content }.render() } else { Application::new(ctx, content).render() }
+    })?;
+    Ok(if frame { layout.frame(c, status, html) } else { layout.page(c, status, html) })
+}
+
+/// A content-only template in the application layout even for Turbo-Frame requests: a controller
+/// that declares its own `layout` (MessagesController's `layout false, only: :index`) replaces
+/// turbo-rails' frame layout choice.
+pub async fn content_in_application_layout(
+    c: &mut Ctx,
+    status: StatusCode,
+    render: impl FnOnce(&ViewContext) -> askama::Result<String>,
+) -> Result {
+    use askama::Template;
+
+    let layout = Layout::load(c).await?;
+    let html = layout.render(c, |ctx| Application::new(ctx, h::raw(render(ctx)?)).render())?;
+    Ok(layout.page(c, status, html))
+}
+
+/// A template rendered with `layout false` (or a turbo stream): the negotiated format, no layout.
+pub async fn bare(c: &mut Ctx, status: StatusCode, render: impl FnOnce(&ViewContext) -> askama::Result<String>) -> Result {
+    let layout = Layout::load(c).await?;
+    let html = layout.render(c, render)?;
+    Ok(c.render(status, html))
+}
+
+/// Renders with the `ViewContext` `ApplicationController.render` has: no request, no
+/// `Current.user`, no CSRF tokens, and the renderer's default host (`http://example.org`).
+pub fn render_detached<T>(app: &App, account: Option<&Account>, render: impl FnOnce(&ViewContext) -> T) -> T {
+    render_detached_at(app, account, "http://example.org", render)
+}
+
+/// [`render_detached`] during a request: URLs get the request's host through
+/// `default_url_options` (`SetCurrentRequest`).
+pub fn render_detached_at<T>(app: &App, account: Option<&Account>, base_url: &str, render: impl FnOnce(&ViewContext) -> T) -> T {
+    let no_token = |_: &str, _: &str| String::new();
+    let asset_path = |path: &str| campfire_assets::asset_path(path);
+    let stylesheets = campfire_assets::stylesheet_link_tag_all(&[("data-turbo-track", "reload")]);
+    let ctx = ViewContext {
+        current_user: None,
+        account: account_summary(account, false),
+        csrf_token: String::new(),
+        form_authenticity_token: &no_token,
+        flash_notice: None,
+        flash_alert: None,
+        platform: Platform::default(),
+        vapid_public_key: app.config.vapid_public_key.clone(),
+        asset_path: &asset_path,
+        importmap_tags: campfire_assets::javascript_importmap_tags(),
+        stylesheet_tags: &stylesheets.html,
+        custom_styles: None,
+        cable_url: "/cable".into(),
+        base_url: base_url.to_string(),
+        request_url: format!("{base_url}/"),
+        referrer: None,
+        last_room_visited_id: None,
+        app_version: app.config.app_version.clone(),
+    };
+    render(&ctx)
+}
+
+/// The broadcast partials, rendered up front by the controller (which has the view models) and
+/// handed to `channels::Broadcasts`.
+#[derive(Default)]
+pub struct Rendered {
+    pub message: Option<String>,
+    pub message_presentation: Option<String>,
+    pub boost: Option<String>,
+    pub shared_room: Option<String>,
+    /// `users/sidebars/rooms/_direct`, per membership id.
+    pub direct_rooms: Vec<(i64, String)>,
+}
+
+impl Partials for Rendered {
+    fn message(&self, _: &Message) -> String {
+        self.message.clone().unwrap_or_default()
+    }
+
+    fn message_presentation(&self, _: &Message) -> String {
+        self.message_presentation.clone().unwrap_or_default()
+    }
+
+    fn boost(&self, _: &Boost) -> String {
+        self.boost.clone().unwrap_or_default()
+    }
+
+    fn shared_room(&self, _: &Room) -> String {
+        self.shared_room.clone().unwrap_or_default()
+    }
+
+    fn direct_room(&self, membership: &Membership) -> String {
+        self.direct_rooms.iter().find(|(id, _)| *id == membership.id).map(|(_, html)| html.clone()).unwrap_or_default()
+    }
+}
+
+/// `head status` from a before-action. `ActionController::Rendering#process_action` sets the
+/// controller's formats only after the callbacks ran, so `head` there falls back to `text/html`
+/// whatever the request format (the bot API's JSON routes included).
+pub fn before_action_head(status: StatusCode) -> campfire_kit::Response {
+    let response = campfire_kit::Response::new(status);
+    if matches!(status.as_u16(), 100..=199 | 204 | 205 | 304) { response } else { response.content_type("text/html") }
+}
+
+pub fn db_error(error: campfire_db::Error) -> Error {
+    match error {
+        campfire_db::Error::RecordNotFound(_) => Error::NotFound,
+        other => Error::internal(other),
+    }
+}

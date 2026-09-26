@@ -1,1 +1,203 @@
-//! Environment configuration (ONCE env vars).
+//! Environment configuration: the env vars the reference reads in production, plus a few
+//! `CAMPFIRE_*` knobs for things Rails gets from its directory layout.
+//!
+//! Reference sources:
+//! - `SECRET_KEY_BASE`: Rails' `secret_key_base` (required in production; `SECRET_KEY_BASE_DUMMY`
+//!   makes a throwaway one, as Rails does for asset precompilation).
+//! - `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`: `config/initializers/vapid.rb`.
+//! - `DISABLE_SSL`: `config/environments/production.rb` (`assume_ssl`/`force_ssl` unless present).
+//! - `APP_VERSION`, `GIT_REVISION`: `config/initializers/version.rb` (`X-Version`, `X-Rev`).
+//! - `PORT`: `config/puma.rb` (default 3000; Thruster proxies 80/443 to it).
+//! - `RAILS_ENV`: names the database file (`storage/db/<env>.sqlite3`, `config/database.yml`).
+//! - `RAILS_MAX_THREADS`: `config/database.yml` pool size, used for the reader pool.
+//! - `JOB_CONCURRENCY`: Resque worker count (`config/puma.rb`), used for job concurrency.
+//! - `RAILS_LOG_LEVEL`: `config/environments/production.rb` log level.
+//! - `SENTRY_DSN`, `SKIP_TELEMETRY`: `config/initializers/sentry.rb`. Read but not acted on: the
+//!   port sends no telemetry.
+//! - `TLS_DOMAIN`/`SSL_DOMAIN`, `HTTP_*_TIMEOUT`: Thruster's, which still fronts this binary.
+//! - `REDIS_URL`, `WEB_CONCURRENCY`: not applicable (no Redis, one process).
+//!
+//! Storage paths mirror `Rails.root.join("storage")`: the database under `db/`, blobs under
+//! `files/` (`config/storage.yml`), backups under `backups/` (`script/admin/prepare-backup`).
+
+use std::path::PathBuf;
+
+use anyhow::{Context, bail};
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct Config {
+    pub secret_key_base: String,
+    pub vapid_public_key: Option<String>,
+    pub vapid_private_key: Option<String>,
+    /// `DISABLE_SSL` present: no `assume_ssl`, no `force_ssl`.
+    pub disable_ssl: bool,
+    /// `Rails.application.config.app_version`
+    pub app_version: String,
+    /// `Rails.application.config.git_revision`
+    pub git_revision: Option<String>,
+    pub bind: String,
+    pub port: u16,
+    pub environment: String,
+    pub storage: StoragePaths,
+    pub db_readers: usize,
+    pub job_concurrency: usize,
+    pub log_level: String,
+    pub sentry_dsn: Option<String>,
+    pub tls_domain: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct StoragePaths {
+    /// `Rails.root.join("storage")`
+    pub root: PathBuf,
+    /// `storage/db/<env>.sqlite3`
+    pub database: PathBuf,
+    /// The `local` Disk service root, `storage/files`.
+    pub files: PathBuf,
+    /// `storage/backups`
+    pub backups: PathBuf,
+}
+
+impl StoragePaths {
+    pub fn new(root: impl Into<PathBuf>, environment: &str) -> Self {
+        let root = root.into();
+        Self {
+            database: root.join("db").join(format!("{environment}.sqlite3")),
+            files: root.join("files"),
+            backups: root.join("backups"),
+            root,
+        }
+    }
+
+    /// `config/initializers/storage_paths.rb`: `storage/{db,files}` exist after boot.
+    pub fn create_dirs(&self) -> std::io::Result<()> {
+        if let Some(db_dir) = self.database.parent() {
+            std::fs::create_dir_all(db_dir)?;
+        }
+        std::fs::create_dir_all(&self.files)
+    }
+
+    /// Where `prepare-backup` writes the snapshot: `storage/backups/<database file name>`.
+    pub fn backup_file(&self) -> PathBuf {
+        self.backups.join(self.database.file_name().unwrap_or_else(|| "production.sqlite3".as_ref()))
+    }
+}
+
+impl Config {
+    pub fn from_env() -> anyhow::Result<Self> {
+        Self::from_lookup(|name| std::env::var(name).ok())
+    }
+
+    /// Builds the config from any variable lookup (tests pass a map).
+    pub fn from_lookup(get: impl Fn(&str) -> Option<String>) -> anyhow::Result<Self> {
+        let present = |name: &str| get(name).filter(|v| !v.trim().is_empty());
+
+        let secret_key_base = match present("SECRET_KEY_BASE") {
+            Some(secret) => secret,
+            None if present("SECRET_KEY_BASE_DUMMY").is_some() => dummy_secret(),
+            None => bail!("Missing `secret_key_base` for 'production' environment, set SECRET_KEY_BASE"),
+        };
+        let environment = present("RAILS_ENV").unwrap_or_else(|| "production".into());
+
+        let storage_root = present("CAMPFIRE_STORAGE_PATH").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("storage"));
+        let mut storage = StoragePaths::new(storage_root, &environment);
+        if let Some(database) = present("CAMPFIRE_DATABASE_PATH") {
+            storage.database = database.into();
+        }
+        if let Some(files) = present("CAMPFIRE_FILES_PATH") {
+            storage.files = files.into();
+        }
+        if let Some(backups) = present("CAMPFIRE_BACKUPS_PATH") {
+            storage.backups = backups.into();
+        }
+
+        let number = |name: &str, default: usize| -> anyhow::Result<usize> {
+            match present(name) {
+                Some(value) => value.trim().parse().with_context(|| format!("{name}={value:?} is not a number")),
+                None => Ok(default),
+            }
+        };
+        let port = number("PORT", 3000)?;
+        let port = u16::try_from(port).with_context(|| format!("PORT={port} is out of range"))?;
+
+        Ok(Self {
+            secret_key_base,
+            vapid_public_key: get("VAPID_PUBLIC_KEY"),
+            vapid_private_key: get("VAPID_PRIVATE_KEY"),
+            disable_ssl: present("DISABLE_SSL").is_some(),
+            app_version: present("APP_VERSION").or_else(|| present("GIT_REVISION")).unwrap_or_else(|| "0".into()),
+            git_revision: get("GIT_REVISION"),
+            bind: present("BIND").unwrap_or_else(|| "0.0.0.0".into()),
+            port,
+            environment,
+            storage,
+            db_readers: number("RAILS_MAX_THREADS", 5)?.max(1),
+            job_concurrency: number("JOB_CONCURRENCY", 2)?.max(1),
+            log_level: present("RAILS_LOG_LEVEL").unwrap_or_else(|| "info".into()),
+            sentry_dsn: present("SENTRY_DSN"),
+            tls_domain: present("TLS_DOMAIN").or_else(|| present("SSL_DOMAIN")),
+        })
+    }
+}
+
+fn dummy_secret() -> String {
+    use rand::Rng;
+    let bytes: [u8; 64] = rand::rng().random();
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn config(vars: &[(&str, &str)]) -> anyhow::Result<Config> {
+        let vars: HashMap<String, String> = vars.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        Config::from_lookup(|name| vars.get(name).cloned())
+    }
+
+    #[test]
+    fn requires_a_secret_key_base() {
+        assert!(config(&[]).is_err());
+        assert_eq!(config(&[("SECRET_KEY_BASE_DUMMY", "1")]).unwrap().secret_key_base.len(), 128);
+    }
+
+    #[test]
+    fn production_defaults() {
+        let config = config(&[("SECRET_KEY_BASE", "abc")]).unwrap();
+        assert!(!config.disable_ssl);
+        assert_eq!(config.app_version, "0");
+        assert_eq!(config.git_revision, None);
+        assert_eq!(config.port, 3000);
+        assert_eq!(config.storage.database, PathBuf::from("storage/db/production.sqlite3"));
+        assert_eq!(config.storage.files, PathBuf::from("storage/files"));
+        assert_eq!(config.storage.backup_file(), PathBuf::from("storage/backups/production.sqlite3"));
+    }
+
+    #[test]
+    fn version_falls_back_to_the_revision() {
+        let config = config(&[("SECRET_KEY_BASE", "abc"), ("APP_VERSION", ""), ("GIT_REVISION", "abc123")]).unwrap();
+        assert_eq!(config.app_version, "abc123");
+        assert_eq!(config.git_revision.as_deref(), Some("abc123"));
+    }
+
+    #[test]
+    fn disable_ssl_is_any_non_blank_value() {
+        assert!(config(&[("SECRET_KEY_BASE", "abc"), ("DISABLE_SSL", "false")]).unwrap().disable_ssl);
+        assert!(!config(&[("SECRET_KEY_BASE", "abc"), ("DISABLE_SSL", " ")]).unwrap().disable_ssl);
+    }
+
+    #[test]
+    fn storage_overrides() {
+        let config = config(&[
+            ("SECRET_KEY_BASE", "abc"),
+            ("CAMPFIRE_STORAGE_PATH", "/rails/storage"),
+            ("CAMPFIRE_FILES_PATH", "/seed/storage"),
+        ])
+        .unwrap();
+        assert_eq!(config.storage.database, PathBuf::from("/rails/storage/db/production.sqlite3"));
+        assert_eq!(config.storage.files, PathBuf::from("/seed/storage"));
+    }
+}
