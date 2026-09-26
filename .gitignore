@@ -2,3 +2,4 @@
 /parity/node_modules
 /parity/out
 /parity/.seed
+/parity/.native
