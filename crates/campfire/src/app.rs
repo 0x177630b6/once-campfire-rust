@@ -9,7 +9,6 @@
 //! (`ActionDispatch::Static`, from `campfire_assets`) → `/cable` (Action Cable) or the Rails route
 //! table (`controllers::dispatch`).
 
-use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -222,7 +221,8 @@ const USAGE: &str = "usage: campfire [server|backup]";
 
 /// The binary's entry point.
 ///
-/// - `campfire` / `campfire server`: serve HTTP on `BIND:PORT` (`bin/boot`, `bin/start-app`).
+/// - `campfire` / `campfire server`: serve the app behind the front server, as `bin/boot` did
+///   with Thruster in front of `bin/start-app` (see `campfire_kit::front`).
 /// - `campfire backup`: the ONCE `pre-backup` hook (`script/admin/prepare-backup`): snapshot the
 ///   live database into `storage/backups/` with SQLite's online backup API.
 ///
@@ -251,18 +251,21 @@ fn init_logging(config: &Config) {
         "error" | "fatal" | "unknown" => "error",
         _ => "info",
     };
-    let filter = tracing_subscriber::EnvFilter::try_from_env("CAMPFIRE_LOG").unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(level));
+    // The front server logs on its own terms, as Thruster did: requests at info, more with DEBUG.
+    let front = if campfire_kit::front::FrontConfig::from_env().debug { "debug" } else { "info" };
+    let default = format!("{level},thruster={front},campfire_kit::front={front}");
+    let filter = tracing_subscriber::EnvFilter::try_from_env("CAMPFIRE_LOG").unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default));
     let _ = tracing_subscriber::fmt().with_env_filter(filter).try_init();
 }
 
 /// How long in-flight requests and queued jobs get after SIGTERM/SIGINT.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(10);
 
+/// `bin/boot`'s `thrust bin/start-app`: the front server (kit's Thruster) on HTTP_PORT and, with
+/// TLS_DOMAIN, HTTPS_PORT, and the app itself on TARGET_PORT.
 async fn serve(config: Config) -> anyhow::Result<()> {
-    let address: SocketAddr = format!("{}:{}", config.bind, config.port).parse()?;
+    let front = campfire_kit::front::FrontConfig::from_env();
     let Booted { app, router, jobs } = boot(config).await?;
-    let listener = tokio::net::TcpListener::bind(address).await?;
-    tracing::info!(%address, "Campfire listening");
 
     let (stopping_tx, stopping) = tokio::sync::watch::channel(false);
     let cable = app.cable.clone();
@@ -274,7 +277,7 @@ async fn serve(config: Config) -> anyhow::Result<()> {
         cable.restart();
         let _ = stopping_tx.send(true);
     };
-    let server = campfire_kit::server::serve(listener, router, signal);
+    let server = campfire_kit::front::serve(front, router, signal);
     let deadline = async move {
         let mut stopping = stopping;
         let _ = stopping.wait_for(|stopping| *stopping).await;

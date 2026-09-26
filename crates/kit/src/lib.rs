@@ -29,6 +29,7 @@ pub mod deflater;
 pub mod error;
 pub mod exceptions;
 pub mod format;
+pub mod front;
 pub mod params;
 pub mod request;
 pub mod response;

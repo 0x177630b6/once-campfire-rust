@@ -2,8 +2,9 @@
 #
 # Production image for the Rust port. A drop-in for the reference image (reference/Dockerfile):
 # same user (uid 1000), working directory, storage layout (/rails/storage/{db,files,backups}), env
-# vars, ports and ONCE hooks. The app runs behind Thruster, like the reference's Procfile does
-# (`thrust bin/start-app`), until TLS termination moves into the binary.
+# vars, ports and ONCE hooks. The binary does Thruster's job itself (crates/kit/src/front): HTTP on
+# 80, and with TLS_DOMAIN, HTTPS on 443 with Let's Encrypt certificates cached in
+# /rails/storage/thruster, where the reference's Thruster keeps them.
 #
 #   docker build -t campfire-rust --build-arg APP_VERSION=... --build-arg GIT_REVISION=... .
 #
@@ -16,8 +17,6 @@ ARG RUST_VERSION=1.98.1
 ARG DEBIAN_RELEASE=trixie
 ARG LIBVIPS_VERSION=8.16.1-1+deb13u1
 ARG FFMPEG_VERSION=7:7.1.5-0+deb13u1
-ARG THRUSTER_VERSION=0.1.23
-ARG RUBY_VERSION=3.4.10
 
 
 # Build the binary. libvips-dev (same version as the runtime's libvips) provides the link-time
@@ -40,18 +39,11 @@ RUN --mount=type=cache,id=campfire-rust-cargo-registry,target=/usr/local/cargo/r
     install -D -m 755 target/release/campfire /out/campfire
 
 
-# Thruster: the same release the reference bundles (Gemfile.lock), from the platform gem.
-FROM docker.io/library/ruby:${RUBY_VERSION}-slim-${DEBIAN_RELEASE} AS thruster
-ARG THRUSTER_VERSION
-RUN gem install thruster -v ${THRUSTER_VERSION} --no-document && \
-    install -D -m 755 "$(find "$(gem env gemdir)/gems" -path "*/thruster-${THRUSTER_VERSION}-*/exe/*-linux/thrust" -type f)" /out/thrust
-
-
 FROM docker.io/library/debian:${DEBIAN_RELEASE}-slim
 
 ARG LIBVIPS_VERSION
 ARG FFMPEG_VERSION
-# ca-certificates: the system CA store, for webhooks, unfurling and Web Push over TLS.
+# ca-certificates: the system CA store, for webhooks, unfurling, Web Push and the ACME directory.
 RUN apt-get update -qq && \
     apt-get install --no-install-recommends -y \
       ca-certificates libvips42t64=${LIBVIPS_VERSION} ffmpeg=${FFMPEG_VERSION} && \
@@ -70,14 +62,15 @@ RUN groupadd --system --gid 1000 rails && \
 
 WORKDIR /rails
 
-COPY --from=thruster /out/thrust /usr/local/bin/thrust
 COPY --from=build /out/campfire /usr/local/bin/campfire
 
-# bin/boot, as in the reference: Thruster on HTTP_PORT (80) and, with TLS_DOMAIN, 443, proxying to
-# the app on TARGET_PORT (3000), which it passes to the app as PORT.
+# bin/boot: what the reference's `thrust bin/start-app` did, in one process: HTTP_PORT (80) and,
+# with TLS_DOMAIN, HTTPS_PORT (443), with the app itself also on TARGET_PORT (3000). Thruster's
+# environment (HTTP_*_TIMEOUT, TLS_DOMAIN, ACME_DIRECTORY, CACHE_SIZE, ... and their THRUSTER_
+# forms) means the same.
 COPY --chmod=755 <<'EOF' /rails/bin/boot
 #!/bin/sh
-exec thrust /usr/local/bin/campfire server
+exec /usr/local/bin/campfire server
 EOF
 
 # The storage root is Rails.root.join("storage"): storage/db/<env>.sqlite3, storage/files,

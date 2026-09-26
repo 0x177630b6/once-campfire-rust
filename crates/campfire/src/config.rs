@@ -7,14 +7,16 @@
 //! - `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`: `config/initializers/vapid.rb`.
 //! - `DISABLE_SSL`: `config/environments/production.rb` (`assume_ssl`/`force_ssl` unless present).
 //! - `APP_VERSION`, `GIT_REVISION`: `config/initializers/version.rb` (`X-Version`, `X-Rev`).
-//! - `PORT`: `config/puma.rb` (default 3000; Thruster proxies 80/443 to it).
+//! - `PORT`: `config/puma.rb` (default 3000). Unused by `campfire server`, which (like Thruster,
+//!   which set `PORT` for Puma) puts the app on `TARGET_PORT`.
 //! - `RAILS_ENV`: names the database file (`storage/db/<env>.sqlite3`, `config/database.yml`).
 //! - `RAILS_MAX_THREADS`: `config/database.yml` pool size, used for the reader pool.
 //! - `JOB_CONCURRENCY`: Resque worker count (`config/puma.rb`), used for job concurrency.
 //! - `RAILS_LOG_LEVEL`: `config/environments/production.rb` log level.
 //! - `SENTRY_DSN`, `SKIP_TELEMETRY`: `config/initializers/sentry.rb`. Read but not acted on: the
 //!   port sends no telemetry.
-//! - `TLS_DOMAIN`/`SSL_DOMAIN`, `HTTP_*_TIMEOUT`: Thruster's, which still fronts this binary.
+//! - Thruster's (`TLS_DOMAIN`, `HTTP_PORT`, `HTTP_*_TIMEOUT`, `TARGET_PORT`, ...): read by
+//!   `campfire_kit::front::FrontConfig`, which does Thruster's job in this binary.
 //! - `REDIS_URL`, `WEB_CONCURRENCY`: not applicable (no Redis, one process).
 //!
 //! Storage paths mirror `Rails.root.join("storage")`: the database under `db/`, blobs under
@@ -44,7 +46,6 @@ pub struct Config {
     pub job_concurrency: usize,
     pub log_level: String,
     pub sentry_dsn: Option<String>,
-    pub tls_domain: Option<String>,
 }
 
 #[allow(dead_code)]
@@ -137,7 +138,6 @@ impl Config {
             job_concurrency: number("JOB_CONCURRENCY", 2)?.max(1),
             log_level: present("RAILS_LOG_LEVEL").unwrap_or_else(|| "info".into()),
             sentry_dsn: present("SENTRY_DSN"),
-            tls_domain: present("TLS_DOMAIN").or_else(|| present("SSL_DOMAIN")),
         })
     }
 }

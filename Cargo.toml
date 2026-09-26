@@ -66,3 +66,8 @@ rustls-native-certs = "0.8"
 p256         = { version = "0.13", features = ["ecdh", "ecdsa"] }
 hkdf         = "0.12"
 flate2       = "1"
+# kit's front server (crates/kit/src/front): what Thruster did in front of the app
+instant-acme = { version = "0.8", default-features = false, features = ["ring", "hyper-rustls", "rcgen"] }
+rcgen        = { version = "0.14", default-features = false, features = ["ring", "pem", "crypto"] }
+x509-parser  = "0.18"
+zstd         = "0.13"
