@@ -89,7 +89,7 @@ async fn broadcast_create_room(c: &Ctx, room: &Room) -> Result<()> {
             for membership in Membership::for_room(conn, room.id)? {
                 let direct = presenter.sidebar_direct(&membership)?;
                 let html = page::render_detached_at(&app, account.as_ref(), &base_url, |ctx| {
-                    campfire_views::users::SidebarDirectPartial { ctx, membership: direct }.render()
+                    Ok::<_, askama::Error>(campfire_views::users::direct_room(ctx, &direct))
                 })
                 .map_err(|e| campfire_db::Error::Other(e.to_string()))?;
                 partials.direct_rooms.push((membership.id, html));

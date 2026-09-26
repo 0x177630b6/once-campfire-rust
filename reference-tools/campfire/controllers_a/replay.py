@@ -272,6 +272,10 @@ def default(rails_base, rust_base, cross):
              "/account/users.turbo_stream?page=2", "/account/users?page=2", "/first_run", "/account/join_code", "/users/me/profile/edit"]
     for path in pages:
         compare(f"admin GET {path}", *both(admins, lambda b: b.get(path)))
+    for path in pages:
+        compare(f"admin GET {path} in a Turbo frame", *both(admins, lambda b: b.get(path, {"Turbo-Frame": "frame"})))
+    for path in ["/session/new", f"/join/{ids['join_codes.signal']}", "/first_run"]:
+        compare(f"anon GET {path} in a Turbo frame", *both(anon, lambda b: b.get(path, {"Turbo-Frame": "frame"})))
     compare("admin GET /users/me/sidebar in a Turbo frame", *both(admins, lambda b: b.get("/users/me/sidebar", {"Turbo-Frame": "user_sidebar"})))
     compare("admin GET /account/users as a turbo stream", *both(admins, lambda b: b.get("/account/users?page=2", {"Accept": "text/vnd.turbo-stream.html"})))
     compare("admin GET /users/me/profile with a referrer", *both(admins, lambda b: b.get("/users/me/profile", {"Referer": f"http://{HOST}/rooms/1"})))
