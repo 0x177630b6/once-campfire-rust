@@ -20,6 +20,11 @@ use crate::{connection, json, naming, protocol};
 /// rest of a fan-out and stays resident per socket). Larger incoming frames still grow it.
 const READ_BUFFER_SIZE: usize = 4 * 1024;
 
+/// How much tungstenite buffers before writing to the socket while a batch of frames is fed; the
+/// rest goes out on the batch's flush. The buffer keeps its high-water capacity per socket, so
+/// this bounds it at about one frame past this size (the default is 128 KiB).
+const WRITE_BUFFER_SIZE: usize = 16 * 1024;
+
 /// `config.action_cable.*` as the production reference runs it.
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -150,7 +155,7 @@ impl<U: Identified + Send + Sync + 'static> Server<U> {
             Some(protocol) => upgrade.protocols([protocol]),
             None => upgrade,
         };
-        let upgrade = upgrade.read_buffer_size(READ_BUFFER_SIZE);
+        let upgrade = upgrade.read_buffer_size(READ_BUFFER_SIZE).write_buffer_size(WRITE_BUFFER_SIZE);
         upgrade.on_upgrade(move |socket| connection::run(server, socket, request))
     }
 

@@ -54,6 +54,9 @@ struct Connection<U: Send + Sync + 'static> {
 /// commands faster than they're handled is held back by TCP once this fills.
 const INCOMING_CAPACITY: usize = 16;
 
+/// Frames coalesced into one socket write at most. Queued frames are written together (one
+/// `write` for several frames) rather than one syscall each.
+const MAX_WRITE_BATCH: usize = 64;
 
 type Sink = SplitSink<WebSocket, Message>;
 
@@ -100,7 +103,15 @@ pub(crate) async fn run<U: Identified + Send + Sync + 'static>(server: Server<U>
                 Some(Message::Ping(_) | Message::Pong(_)) => {}
                 Some(Message::Close(_)) | None => break,
             },
-            Some(frame) = outbound_rx.recv() => connection.pending.push(frame),
+            Some(frame) = outbound_rx.recv() => {
+                // Whatever else is already queued goes out in the same write.
+                connection.pending.push(frame);
+                while connection.pending.len() < MAX_WRITE_BATCH
+                    && let Ok(frame) = outbound_rx.try_recv()
+                {
+                    connection.pending.push(frame);
+                }
+            }
             Some(control) = control_rx.recv() => {
                 close = Some(match control {
                     Control::Lagged => Close { reason: None, reconnect: Value::Bool(true) },
@@ -198,13 +209,17 @@ async fn close_socket(sink: &mut Sink, incoming: &mut mpsc::Receiver<Message>, t
 }
 
 impl<U: Send + Sync + 'static> Connection<U> {
+    /// Writes the pending frames in order and flushes once.
     async fn flush(&mut self, sink: &mut Sink) -> bool {
+        if self.pending.is_empty() {
+            return true;
+        }
         for frame in self.pending.drain(..) {
-            if sink.send(Message::Text(frame)).await.is_err() {
+            if sink.feed(Message::Text(frame)).await.is_err() {
                 return false;
             }
         }
-        true
+        sink.flush().await.is_ok()
     }
 
     /// `Subscriptions#execute_command`. Anything malformed raises in Rails, which is logged and
