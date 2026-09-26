@@ -21,7 +21,7 @@
     {% include "rooms/show/_invitation.html" %}
     {%- endif %}
     {%- for message in show.messages %}
-    {{ crate::messages::cached_message(ctx, message) }}
+    {{ crate::messages::cached_message_item(ctx, message) }}
     {%- endfor %}
   </div>
 

@@ -17,7 +17,7 @@ use campfire_storage::{Storage, Variation};
 use campfire_views::messages::json::{BoostJson, BoostMessageJson, IdJson, MessageBodyJson, MessageJson, UserJson};
 use campfire_views::messages::support::json_time;
 use campfire_views::messages::{
-    AttachmentPreview, AttachmentView, BoostView, MessageContent, MessageView, RoomKind, SoundImage, SoundView, UserView,
+    AttachmentPreview, AttachmentView, BoostView, MessageContent, MessageItem, MessageView, RoomKind, SoundImage, SoundView, UserView,
 };
 use campfire_views::messages::support::RubyNumber;
 use campfire_views::fragment_cache;
@@ -174,8 +174,19 @@ impl<'a> Presenter<'a> {
         message.plain_text_body(self.conn, self.rich_text)
     }
 
-    pub fn messages(&self, messages: &[Message]) -> Result<Vec<MessageView>> {
-        messages.iter().map(|message| self.message(message)).collect()
+    /// `render @messages`: each message's cached fragment when the current store has its version
+    /// (`cache [ message, "presentation-v3" ]` wraps the whole partial, so Rails evaluates none of
+    /// it on a hit), else its view.
+    pub fn messages(&self, messages: &[Message]) -> Result<Vec<MessageItem>> {
+        messages.iter().map(|message| self.message_item(message)).collect()
+    }
+
+    /// `render message`, as [`Self::messages`] does it.
+    pub fn message_item(&self, message: &Message) -> Result<MessageItem> {
+        Ok(match campfire_views::messages::cached_message_fragment(message.id, message.updated_at.jiff()) {
+            Some(html) => MessageItem::Fragment { client_message_id: message.client_message_id.clone(), room_id: message.room_id, html },
+            None => MessageItem::View(self.message(message)?),
+        })
     }
 
     /// A message as `messages/_message` shows it.

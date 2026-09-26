@@ -27,11 +27,13 @@ pub async fn show(c: &mut Ctx) -> Result {
             let new_ids: Vec<i64> = new_messages.iter().map(|message| message.id).collect();
             let updated_messages = Message::page_updated_since(conn, room.id, last_updated_at, &new_ids)?;
             let presenter = Presenter::new(conn, &app.secrets, &app.storage, &*app.db.env().rich_text, app.clock.now(), request_host);
-            Ok(RefreshView {
-                room_id: room.id,
-                room_kind: room_kind(room.room_type),
-                new_messages: presenter.messages(&new_messages)?,
-                updated_messages: presenter.messages(&updated_messages)?,
+            campfire_views::fragment_cache::with(&app.fragment_cache, || {
+                Ok(RefreshView {
+                    room_id: room.id,
+                    room_kind: room_kind(room.room_type),
+                    new_messages: presenter.messages(&new_messages)?,
+                    updated_messages: presenter.messages(&updated_messages)?,
+                })
             })
         })
         .await

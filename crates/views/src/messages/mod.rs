@@ -153,6 +153,48 @@ pub struct BoostView {
     pub booster: UserView,
 }
 
+/// A message on its way into `messages/_message`: the fragment itself when the cache already
+/// holds this message version, else the view to render it from. `cache [ message,
+/// "presentation-v3" ]` wraps the whole partial, so on a hit Rails evaluates none of it (no rich
+/// text, attachment, avatar or boosts); [`cached_message_fragment`] lets the presenter look first
+/// and build a [`MessageView`] only on a miss.
+#[derive(Clone, Debug, PartialEq)]
+pub enum MessageItem {
+    Fragment { client_message_id: String, room_id: i64, html: String },
+    View(MessageView),
+}
+
+impl MessageItem {
+    /// `dom_id(message)` / `dom_id(message, prefix)`.
+    pub fn dom_id(&self, prefix: &str) -> String {
+        match self {
+            MessageItem::Fragment { client_message_id, .. } if prefix.is_empty() => format!("message_{client_message_id}"),
+            MessageItem::Fragment { client_message_id, .. } => format!("{prefix}_message_{client_message_id}"),
+            MessageItem::View(message) => message.dom_id(prefix),
+        }
+    }
+
+    pub fn room_id(&self) -> i64 {
+        match self {
+            MessageItem::Fragment { room_id, .. } => *room_id,
+            MessageItem::View(message) => message.room_id,
+        }
+    }
+}
+
+impl From<MessageView> for MessageItem {
+    fn from(message: MessageView) -> Self {
+        MessageItem::View(message)
+    }
+}
+
+/// Deserializes a [`MessageView`] (fixtures describe views, never cached fragments).
+impl<'de> Deserialize<'de> for MessageItem {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        MessageView::deserialize(deserializer).map(MessageItem::View)
+    }
+}
+
 /// `EmojiHelper::REACTIONS`.
 pub const REACTIONS: [(&str, &str); 8] = [
     ("👍", "Thumbs up"),
@@ -241,13 +283,7 @@ pub struct MessagePartial<'a> {
 /// (and whose collection renders are `cached: true`), so a message version renders once.
 pub fn message(ctx: &ViewContext, message: &MessageView) -> String {
     fragment_cache::fetch(
-        || {
-            format!(
-                "views/messages/_message:{}/{}/presentation-v3",
-                message_digest(),
-                fragment_cache::cache_key_with_version("messages", message.id, message.updated_at)
-            )
-        },
+        || message_fragment_key(message.id, message.updated_at),
         || MessagePartial { ctx, message }.render().expect("messages/_message renders"),
     )
 }
@@ -255,6 +291,28 @@ pub fn message(ctx: &ViewContext, message: &MessageView) -> String {
 /// [`message`] where a template renders the partial.
 pub fn cached_message(ctx: &ViewContext, message: &MessageView) -> crate::helpers::Html {
     crate::helpers::raw(self::message(ctx, message))
+}
+
+/// [`cached_message`] for a [`MessageItem`]: a fragment found up front goes out as it is.
+pub fn cached_message_item(ctx: &ViewContext, item: &MessageItem) -> crate::helpers::Html {
+    match item {
+        MessageItem::Fragment { html, .. } => crate::helpers::raw(html.clone()),
+        MessageItem::View(message) => cached_message(ctx, message),
+    }
+}
+
+/// `messages/_message`'s fragment for this message version, if the current store holds it. The
+/// key needs only the message's id and `updated_at`.
+pub fn cached_message_fragment(id: i64, updated_at: Timestamp) -> Option<String> {
+    fragment_cache::read(&message_fragment_key(id, updated_at))
+}
+
+fn message_fragment_key(id: i64, updated_at: Timestamp) -> String {
+    format!(
+        "views/messages/_message:{}/{}/presentation-v3",
+        message_digest(),
+        fragment_cache::cache_key_with_version("messages", id, updated_at)
+    )
 }
 
 /// `render partial: "messages/message", collection: messages`.
@@ -307,7 +365,7 @@ fn boost_digest() -> &'static str {
 #[template(path = "messages/index.html")]
 pub struct Index<'a> {
     pub ctx: &'a ViewContext<'a>,
-    pub messages: &'a [MessageView],
+    pub messages: &'a [MessageItem],
 }
 
 /// `messages/show`: the message partial, inside the application layout.
@@ -367,7 +425,7 @@ pub struct Edit<'a> {
 #[template(path = "messages/create.turbo_stream.html")]
 pub struct CreateStream<'a> {
     pub ctx: &'a ViewContext<'a>,
-    pub message: &'a MessageView,
+    pub message: &'a MessageItem,
     pub room_kind: RoomKind,
 }
 

@@ -6,7 +6,7 @@ use serde::Deserialize;
 use crate::helpers as h;
 use crate::layouts::Page;
 use crate::messages::support::query_escape;
-use crate::messages::MessageView;
+use crate::messages::MessageItem;
 use crate::ViewContext;
 
 /// What `searches/index` shows.
@@ -17,7 +17,7 @@ pub struct IndexView {
     /// `params[:q]` as submitted, the search field's value.
     pub q: Option<String>,
     /// `Current.user.reachable_messages.search(query).last(100)`.
-    pub messages: Vec<MessageView>,
+    pub messages: Vec<MessageItem>,
     /// `Current.user.searches.ordered.pluck(:query)`.
     pub recent_searches: Vec<String>,
     /// `last_room_visited.id`, where the exit button goes.

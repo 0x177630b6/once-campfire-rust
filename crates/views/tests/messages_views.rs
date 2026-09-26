@@ -23,7 +23,7 @@ fn show_image_message() {
 #[test]
 fn index() {
     let g = golden("messages_index");
-    let messages: Vec<MessageView> = g.input_at("messages");
+    let messages: Vec<messages::MessageItem> = g.input_at("messages");
     g.assert_content(&g.render(|ctx| messages::Index { ctx, messages: &messages }.render().unwrap()));
 }
 
@@ -44,7 +44,7 @@ fn edit_attachment_message() {
 #[test]
 fn create_stream() {
     let g = golden("messages_create");
-    let message: MessageView = g.input_at("message");
+    let message: messages::MessageItem = g.input_at("message");
     let room_kind: RoomKind = g.input_at("room_kind");
     g.assert_dom(&g.render(|ctx| messages::CreateStream { ctx, message: &message, room_kind }.render().unwrap()));
 }

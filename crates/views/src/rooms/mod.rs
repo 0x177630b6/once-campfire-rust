@@ -8,7 +8,7 @@ use serde::Deserialize;
 use crate::helpers as h;
 use crate::layouts::Page;
 use crate::messages::support::{epoch_ms, query_escape, to_sentence};
-use crate::messages::{room_dom_id, MessageView, RoomKind, UserView};
+use crate::messages::{room_dom_id, MessageItem, RoomKind, UserView};
 use crate::ViewContext;
 
 /// `room_display_name(room, for_user:)`: a direct room is named after its other members
@@ -70,7 +70,7 @@ pub struct ShowView {
     pub updated_at: Timestamp,
     /// `Current.user`, for the client-side message template.
     pub user: UserView,
-    pub messages: Vec<MessageView>,
+    pub messages: Vec<MessageItem>,
     /// `@room == Room.original && !@room.messages.paged?` (`rooms/show/_invitation`).
     pub invitation: bool,
     /// `Current.account.join_code`, for the invitation's join link.
@@ -137,8 +137,8 @@ impl InvolvementShow<'_> {
 pub struct RefreshView {
     pub room_id: i64,
     pub room_kind: RoomKind,
-    pub new_messages: Vec<MessageView>,
-    pub updated_messages: Vec<MessageView>,
+    pub new_messages: Vec<MessageItem>,
+    pub updated_messages: Vec<MessageItem>,
 }
 
 /// `rooms/refreshes/show.turbo_stream`.

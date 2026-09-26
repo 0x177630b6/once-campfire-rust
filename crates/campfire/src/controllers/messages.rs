@@ -75,9 +75,9 @@ pub async fn create(c: &mut Ctx) -> Result {
         .db
         .read(move |conn| {
             let presenter = Presenter::new(conn, &app.secrets, &app.storage, &*app.db.env().rich_text, app.clock.now(), None);
-            let view = presenter.message(&message)?;
+            let item = campfire_views::fragment_cache::with(&app.fragment_cache, || presenter.message_item(&message))?;
             let account = campfire_db::Account::first(conn)?;
-            page::render_detached_at(&app, account.as_ref(), &base_url, |ctx| views::CreateStream { ctx, message: &view, room_kind: kind }.render())
+            page::render_detached_at(&app, account.as_ref(), &base_url, |ctx| views::CreateStream { ctx, message: &item, room_kind: kind }.render())
                 .map_err(|e| campfire_db::Error::Other(e.to_string()))
         })
         .await

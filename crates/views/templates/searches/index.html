@@ -32,7 +32,7 @@
 
   <div id="search-results" class="messages searches__results" data-controller="search-results" data-search-results-target="messages" data-search-results-me-class="message--me" data-search-results-threaded-class="message--threaded" data-search-results-mentioned-class="message--mentioned" data-search-results-formatted-class="message--formatted">
     {%- for message in index.messages %}
-    {{ crate::messages::cached_message(ctx, message) }}
+    {{ crate::messages::cached_message_item(ctx, message) }}
     {%- endfor %}
   </div></div>
 {%- endblock %}

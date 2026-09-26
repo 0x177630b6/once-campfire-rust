@@ -71,6 +71,11 @@ impl FragmentCache {
         Ok(value)
     }
 
+    /// The value `key` holds, if any (a use, for eviction).
+    pub fn get<T: Clone + 'static>(&self, key: &str) -> Option<T> {
+        self.read(key)
+    }
+
     pub fn len(&self) -> usize {
         self.lock().values.len()
     }
@@ -142,6 +147,12 @@ pub fn fetch(key: impl FnOnce() -> String, render: impl FnOnce() -> String) -> S
         Some(cache) => cache.fetch(&key(), render),
         None => render(),
     }
+}
+
+/// The fragment `key` holds in the current store, if any. For callers that gather a fragment's
+/// inputs only on a miss, as `cache key do ... end` evaluates its block only then.
+pub fn read(key: &str) -> Option<String> {
+    current()?.get(key)
 }
 
 /// `json.cache! key do ... end` against the current store (uncached without one).
@@ -229,6 +240,15 @@ mod tests {
         assert_eq!(cache.len(), 2);
         assert!(current().is_none(), "the store is only current inside `with`");
         assert_eq!(fetch(|| "outer".into(), || "uncached".into()), "uncached");
+    }
+
+    #[test]
+    fn fragments_can_be_looked_up_before_rendering() {
+        let cache = FragmentCache::new(10);
+        assert_eq!(with(&cache, || read("a")), None);
+        with(&cache, || fetch(|| "a".into(), || "rendered".into()));
+        assert_eq!(with(&cache, || read("a")), Some("rendered".to_string()));
+        assert_eq!(read("a"), None, "no store, no fragments");
     }
 
     #[test]
