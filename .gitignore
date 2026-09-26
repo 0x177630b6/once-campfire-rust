@@ -1,0 +1,4 @@
+/target
+/parity/node_modules
+/parity/out
+/parity/.seed

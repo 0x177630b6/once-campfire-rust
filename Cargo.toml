@@ -1,0 +1,47 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+publish = false
+
+[workspace.dependencies]
+rails_compat      = { path = "crates/rails_compat" }
+campfire_kit      = { path = "crates/kit" }
+campfire_routes   = { path = "crates/routes" }
+campfire_db       = { path = "crates/db" }
+campfire_richtext = { path = "crates/richtext" }
+campfire_storage  = { path = "crates/storage" }
+campfire_cable    = { path = "crates/cable" }
+campfire_assets   = { path = "crates/assets" }
+campfire_views    = { path = "crates/views" }
+
+tokio        = { version = "1", features = ["full"] }
+axum         = { version = "0.8", features = ["ws", "multipart"] }
+tower        = "0.5"
+tower-http   = { version = "0.6", features = ["limit", "timeout", "fs"] }
+hyper        = "1"
+serde        = { version = "1", features = ["derive"] }
+serde_json   = "1"
+serde_yaml   = "0.9"
+rusqlite     = { version = "0.37", features = ["bundled", "functions", "serde_json"] }
+askama       = "0.14"
+jiff         = { version = "0.2", features = ["serde"] }
+thiserror    = "2"
+anyhow       = "1"
+tracing      = "0.1"
+base64       = "0.22"
+hmac         = "0.12"
+sha1         = "0.10"
+sha2         = "0.10"
+pbkdf2       = "0.12"
+aes-gcm      = "0.10"
+rand         = "0.9"
+hex          = "0.4"
+html5ever    = "0.35"
+bcrypt       = "0.17"
+uuid         = { version = "1", features = ["v4"] }
+percent-encoding = "2"
+url          = "2"
