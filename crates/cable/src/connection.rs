@@ -3,12 +3,18 @@
 //! Commands are handled one at a time in arrival order. Stream deliveries arrive from per-stream
 //! forwarder tasks through a bounded queue, so a client that stops reading eventually makes its
 //! streams lag, which closes the connection with `reconnect: true`.
+//!
+//! The socket's read half lives in a task of its own that hands incoming messages over in order,
+//! so it's only polled when the socket is readable, not every time a delivery wakes the
+//! connection (tungstenite zero-fills its free read buffer on each read attempt).
 use std::sync::Arc;
 
 use axum::extract::ws::{CloseFrame, Message, WebSocket};
+use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::Value;
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 
 use crate::channel::{Channel, Params, Subscription};
 use crate::protocol::{self, DisconnectReason};
@@ -44,8 +50,15 @@ struct Connection<U: Send + Sync + 'static> {
     control: mpsc::Sender<Control>,
 }
 
+/// Incoming messages buffered between the reader task and the connection. A client that sends
+/// commands faster than they're handled is held back by TCP once this fills.
+const INCOMING_CAPACITY: usize = 16;
+
+type Sink = SplitSink<WebSocket, Message>;
+
 pub(crate) async fn run<U: Identified + Send + Sync + 'static>(server: Server<U>, socket: WebSocket, request: ConnectRequest) {
-    let (mut sink, mut stream) = socket.split();
+    let (mut sink, stream) = socket.split();
+    let (reader, mut incoming) = spawn_reader(stream);
     let config = server.config().clone();
 
     // handle_open: connect, subscribe to the internal channel, welcome, then process whatever
@@ -54,7 +67,8 @@ pub(crate) async fn run<U: Identified + Send + Sync + 'static>(server: Server<U>
         tracing::error!("An unauthorized connection attempt was rejected");
         let frame = protocol::disconnect(Some(DisconnectReason::Unauthorized), &Value::Bool(false));
         let _ = sink.send(Message::Text(frame.into())).await;
-        close_socket(&mut sink, &mut stream, config.close_timeout).await;
+        close_socket(&mut sink, &mut incoming, config.close_timeout).await;
+        reader.abort();
         return;
     };
 
@@ -72,17 +86,18 @@ pub(crate) async fn run<U: Identified + Send + Sync + 'static>(server: Server<U>
 
     let mut close: Option<Close> = None;
     if sink.send(Message::Text(protocol::welcome().into())).await.is_err() {
+        reader.abort();
         connection.handle_close().await;
         return;
     }
 
     loop {
         tokio::select! {
-            incoming = stream.next() => match incoming {
-                Some(Ok(Message::Text(text))) => connection.dispatch(text.as_str()).await,
-                Some(Ok(Message::Binary(_))) => tracing::error!("Couldn't handle non-string message: Array"),
-                Some(Ok(Message::Ping(_) | Message::Pong(_))) => {}
-                Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
+            message = incoming.recv() => match message {
+                Some(Message::Text(text)) => connection.dispatch(text.as_str()).await,
+                Some(Message::Binary(_)) => tracing::error!("Couldn't handle non-string message: Array"),
+                Some(Message::Ping(_) | Message::Pong(_)) => {}
+                Some(Message::Close(_)) | None => break,
             },
             Some(frame) = outbound_rx.recv() => connection.pending.push(frame),
             Some(control) = control_rx.recv() => {
@@ -108,11 +123,12 @@ pub(crate) async fn run<U: Identified + Send + Sync + 'static>(server: Server<U>
         }
         if let Some(Close { reason, reconnect }) = close.take() {
             let _ = sink.send(Message::Text(protocol::disconnect(reason, &reconnect).into())).await;
-            close_socket(&mut sink, &mut stream, config.close_timeout).await;
+            close_socket(&mut sink, &mut incoming, config.close_timeout).await;
             break;
         }
     }
 
+    reader.abort();
     if let Some(internal) = internal {
         internal.abort();
     }
@@ -149,17 +165,28 @@ fn spawn_internal_subscriber<U: Send + Sync + 'static>(
     })
 }
 
+/// Reads the socket until it closes or errors, handing each message to the connection. It stops
+/// after a close frame, as the connection does.
+fn spawn_reader(mut stream: SplitStream<WebSocket>) -> (JoinHandle<()>, mpsc::Receiver<Message>) {
+    let (sender, receiver) = mpsc::channel(INCOMING_CAPACITY);
+    let reader = tokio::spawn(async move {
+        while let Some(Ok(message)) = stream.next().await {
+            let close = matches!(message, Message::Close(_));
+            if sender.send(message).await.is_err() || close {
+                break;
+            }
+        }
+    });
+    (reader, receiver)
+}
+
 /// Sends a normal close (1000, no reason, as `ClientSocket#close` defaults) and waits briefly
 /// for the client to finish the handshake.
-async fn close_socket(
-    sink: &mut futures_util::stream::SplitSink<WebSocket, Message>,
-    stream: &mut futures_util::stream::SplitStream<WebSocket>,
-    timeout: std::time::Duration,
-) {
+async fn close_socket(sink: &mut Sink, incoming: &mut mpsc::Receiver<Message>, timeout: std::time::Duration) {
     let frame = CloseFrame { code: 1000, reason: "".into() };
     if sink.send(Message::Close(Some(frame))).await.is_ok() {
         let _ = tokio::time::timeout(timeout, async {
-            while let Some(Ok(message)) = stream.next().await {
+            while let Some(message) = incoming.recv().await {
                 if matches!(message, Message::Close(_)) {
                     break;
                 }
@@ -170,7 +197,7 @@ async fn close_socket(
 }
 
 impl<U: Send + Sync + 'static> Connection<U> {
-    async fn flush(&mut self, sink: &mut futures_util::stream::SplitSink<WebSocket, Message>) -> bool {
+    async fn flush(&mut self, sink: &mut Sink) -> bool {
         for frame in self.pending.drain(..) {
             if sink.send(Message::Text(frame.into())).await.is_err() {
                 return false;

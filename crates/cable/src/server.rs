@@ -15,6 +15,11 @@ use crate::channel::Channel;
 use crate::pubsub::Hub;
 use crate::{connection, json, naming, protocol};
 
+/// The WebSocket read buffer per connection. Clients only send small commands, and tungstenite
+/// zero-fills the buffer's free space on every read (its 128 KiB default costs more CPU than the
+/// rest of a fan-out and stays resident per socket). Larger incoming frames still grow it.
+const READ_BUFFER_SIZE: usize = 4 * 1024;
+
 /// `config.action_cable.*` as the production reference runs it.
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -145,6 +150,7 @@ impl<U: Identified + Send + Sync + 'static> Server<U> {
             Some(protocol) => upgrade.protocols([protocol]),
             None => upgrade,
         };
+        let upgrade = upgrade.read_buffer_size(READ_BUFFER_SIZE);
         upgrade.on_upgrade(move |socket| connection::run(server, socket, request))
     }
 
