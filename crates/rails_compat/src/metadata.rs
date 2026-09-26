@@ -55,7 +55,7 @@ impl Serializer {
         }
     }
 
-    fn encode_json(&self, value: &Value) -> String {
+    pub(crate) fn encode_json(&self, value: &Value) -> String {
         match self {
             Serializer::Json => json::generate(value),
             _ => json::encode(value),
@@ -75,15 +75,21 @@ pub fn iso8601_millis(time: Timestamp) -> String {
 }
 
 pub(crate) fn serialize_with_metadata(serializer: Serializer, value: &Value, purpose: Option<&str>, expires_at: Option<Timestamp>) -> Vec<u8> {
+    serialize_dumped_with_metadata(serializer, &serializer.dump(value), purpose, expires_at)
+}
+
+/// Like [`serialize_with_metadata`] for a value the caller already dumped with `serializer`
+/// (so the caller controls key order and escaping).
+pub(crate) fn serialize_dumped_with_metadata(serializer: Serializer, dumped: &[u8], purpose: Option<&str>, expires_at: Option<Timestamp>) -> Vec<u8> {
     if purpose.is_none() && expires_at.is_none() {
-        return serializer.dump(value);
+        return dumped.to_vec();
     }
 
     let expiry = expires_at.map(|t| Value::String(iso8601_millis(t)));
     let purpose = purpose.map(|p| Value::String(p.to_string()));
 
     if serializer.uses_envelope() {
-        let mut out = format!(r#"{{"_rails":{{"data":{}"#, String::from_utf8_lossy(&serializer.dump(value)));
+        let mut out = format!(r#"{{"_rails":{{"data":{}"#, String::from_utf8_lossy(dumped));
         if let Some(expiry) = expiry {
             out.push_str(&format!(r#","exp":{}"#, serializer.encode_json(&expiry)));
         }
@@ -93,7 +99,7 @@ pub(crate) fn serialize_with_metadata(serializer: Serializer, value: &Value, pur
         out.push_str("}}");
         out.into_bytes()
     } else {
-        let message = Value::String(encoding::strict_encode(&serializer.dump(value)));
+        let message = Value::String(encoding::strict_encode(dumped));
         format!(
             r#"{{"_rails":{{"message":{},"exp":{},"pur":{}}}}}"#,
             json::encode(&message),

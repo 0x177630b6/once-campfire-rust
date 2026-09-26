@@ -114,19 +114,14 @@ fn encrypted_cookie_plaintext_matches_rails() {
         let plaintext = encryptor.decrypt(str(&case["raw"])).expect("decrypts");
         assert_eq!(String::from_utf8(plaintext).unwrap(), str(&case["plaintext"]));
 
-        // Rust's envelope is byte-identical wherever key order can't differ (serde_json sorts keys).
-        let dumped = crate::json::encode(&case["value"]);
+        // With serde_json's preserve_order (on workspace-wide), Rust's plaintext is byte-identical.
         let ours = metadata::serialize_with_metadata(
             Serializer::Null,
-            &Value::String(dumped.clone()),
+            &Value::String(crate::json::encode(&case["value"])),
             Some(&format!("cookie.{}", str(&case["name"]))),
             opt_time(&case["expires_at"]),
         );
-        let theirs: Value = serde_json::from_str(str(&case["plaintext"])).unwrap();
-        let their_dump = encoding::strict_decode(str(&theirs["_rails"]["message"])).unwrap();
-        if their_dump == dumped.as_bytes() {
-            assert_eq!(String::from_utf8(ours).unwrap(), str(&case["plaintext"]));
-        }
+        assert_eq!(String::from_utf8(ours).unwrap(), str(&case["plaintext"]));
 
         let raw = cookies::encrypt(&SECRETS, str(&case["name"]), &case["value"], opt_time(&case["expires_at"]));
         assert_eq!(cookies::decrypt(&SECRETS, str(&case["name"]), &raw, now()), Some(case["value"].clone()));
@@ -294,6 +289,20 @@ fn turbo_stream_names() {
 }
 
 #[test]
+fn app_verifiers() {
+    for case in cases("app_verifiers.generate") {
+        let verifier = crate::app_verifier(&SECRETS, str(&case["name"]));
+        let message = verifier.generate_raw(str(&case["data_json"]), opt_str(&case["purpose"]), opt_time(&case["expires_at"]));
+        assert_eq!(message, str(&case["message"]), "{} {}", case["name"], case["data_json"]);
+    }
+    for case in cases("app_verifiers.verify") {
+        let verifier = crate::app_verifier(&SECRETS, str(&case["name"]));
+        let data = verifier.verify_raw(str(&case["message"]), opt_str(&case["purpose"]), time(&case["now"])).ok();
+        assert_eq!(data.as_deref(), opt_str(&case["expected_json"]), "{}", label(case));
+    }
+}
+
+#[test]
 fn passwords() {
     assert_eq!(v("passwords.cost"), password::COST);
     for case in cases("passwords.digests") {
@@ -378,7 +387,20 @@ fn write_rust_output_for_rails_to_verify() {
         .map(|(pw, cost)| json!({ "password": pw, "digest": password::digest_with_cost(pw, *cost) }))
         .collect();
 
+    let app_verifiers: Vec<Value> = [
+        (r#"{"key":"k1","disposition":"inline; filename=\"a\u0026b.png\"","content_type":"image/png","service_name":"local"}"#, Some("blob_key"), Some(four_hours)),
+        ("42", Some("blob_id"), None),
+        (r#"{"z":1,"a":2}"#, Some("x"), None),
+    ]
+    .iter()
+    .map(|(data_json, purpose, expires_at)| {
+        json!({ "name": "ActiveStorage", "data_json": data_json, "purpose": purpose,
+                "message": crate::app_verifier(secrets, "ActiveStorage").generate_raw(data_json, *purpose, *expires_at) })
+    })
+    .collect();
+
     let output = json!({
+        "app_verifiers": app_verifiers,
         "now": v("now"),
         "signed_cookies": signed_cookies,
         "encrypted_cookies": encrypted_cookies,

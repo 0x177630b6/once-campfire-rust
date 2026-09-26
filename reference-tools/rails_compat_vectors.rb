@@ -29,6 +29,7 @@ class RailsCompatVectors
         "sgids" => sgid_vectors,
         "unverified_sgids" => unverified_sgid_vectors,
         "turbo_stream_names" => turbo_vectors,
+        "app_verifiers" => app_verifier_vectors,
         "passwords" => password_vectors
       }
     ensure
@@ -542,6 +543,48 @@ class RailsCompatVectors
         [ "json non-string", Turbo.signed_stream_verifier.generate(42) ]
       ]
       verify = cases.map { |label, signed| { "case" => label, "signed" => signed, "expected" => Turbo::StreamsChannel.verified_stream_name(signed) } }
+
+      { "generate" => generate, "verify" => verify }
+    end
+
+    # --- Named app verifiers (Rails.application.message_verifier) -------------------------------
+
+    def app_verifier_vectors
+      verifier = ActiveStorage.verifier
+      blob_key = { key: "xtapjjcjiudrlk3tmwyjgpuobabd", disposition: "inline; filename=\"a&b.png\"; filename*=UTF-8''a%26b.png",
+                   content_type: "image/png", service_name: "local" }
+      generate = [
+        [ "ActiveStorage", 42, "blob_id", nil ],
+        [ "ActiveStorage", 9_007_199_254_740_993, "blob_id", nil ],
+        [ "ActiveStorage", blob_key, "blob_key", NOW + 5.minutes ],
+        [ "ActiveStorage", { key: "k", content_type: "text/plain", content_length: 12, checksum: "abc==", service_name: "local" }, "blob_token", NOW + 5.minutes ],
+        [ "ActiveStorage", "0123abc", "variation", nil ],
+        [ "ActiveStorage", "no purpose", nil, nil ],
+        [ "something else", { "b" => 1, "a" => [ "<&>" ] }, "x", nil ]
+      ].map do |name, data, purpose, expires_at|
+        { "name" => name, "data_json" => ActiveSupport::JSON.encode(data), "purpose" => purpose, "expires_at" => iso(expires_at),
+          "message" => app.message_verifier(name).generate(data, purpose: purpose, expires_at: expires_at) }
+      end
+      generate << { "name" => "ActiveStorage", "data_json" => "42", "purpose" => "blob_id", "expires_at" => nil,
+                    "message" => ActiveStorage::Blob.instantiate("id" => 42, "service_name" => "local").signed_id, "via" => "ActiveStorage::Blob#signed_id" }
+
+      blob = generate.first["message"]
+      short = generate[2]["message"]
+      rotated = ActiveSupport::MessageVerifier.new(rotated_key_generator.generate_key("ActiveStorage"), serializer: :json_allow_marshal)
+      cases = generate.map { |g| [ "valid #{g["name"]} #{g["purpose"]}", g["name"], g["message"], g["purpose"], NOW ] } + [
+        [ "wrong purpose", "ActiveStorage", blob, "blob_key", NOW ],
+        [ "wrong verifier name", "ActionText", blob, "blob_id", NOW ],
+        [ "expired", "ActiveStorage", short, "blob_key", NOW + 5.minutes ],
+        [ "before expiry", "ActiveStorage", short, "blob_key", NOW + 4.minutes ],
+        [ "tampered", "ActiveStorage", tamper_last(blob), "blob_id", NOW ],
+        [ "rotated secret", "ActiveStorage", rotated.generate(42, purpose: "blob_id"), "blob_id", NOW ],
+        [ "url-safe encoding", "ActiveStorage", ActiveSupport::MessageVerifier.new(app.key_generator.generate_key("ActiveStorage"), url_safe: true, serializer: :json_allow_marshal).generate("x" * 50 + "?>", purpose: "p"), "p", NOW ]
+      ]
+      verify = cases.map do |label, name, message, purpose, now|
+        value = at(now) { app.message_verifier(name).verified(message, purpose: purpose) }
+        { "case" => label, "name" => name, "message" => message, "purpose" => purpose, "now" => iso(now),
+          "expected_json" => value.nil? ? nil : ActiveSupport::JSON.encode(value) }
+      end
 
       { "generate" => generate, "verify" => verify }
     end

@@ -47,11 +47,28 @@ impl MessageVerifier {
     }
 
     pub fn generate(&self, value: &Value, purpose: Option<&str>, expires_at: Option<Timestamp>) -> String {
-        let serialized = metadata::serialize_with_metadata(self.serializer, value, purpose, expires_at);
+        self.sign(&metadata::serialize_with_metadata(self.serializer, value, purpose, expires_at))
+    }
+
+    /// `generate` for data the caller already encoded as JSON (in this verifier's serializer, e.g.
+    /// `ActiveSupport::JSON` escaping for app verifiers), so key order is under the caller's
+    /// control: `{"_rails":{"data":<data_json>,"exp":..,"pur":..}}`.
+    pub fn generate_raw(&self, data_json: &str, purpose: Option<&str>, expires_at: Option<Timestamp>) -> String {
+        self.sign(&metadata::serialize_dumped_with_metadata(self.serializer, data_json.as_bytes(), purpose, expires_at))
+    }
+
+    /// `verified`, returning the data re-encoded as JSON in this verifier's serializer. Key order
+    /// is kept (serde_json `preserve_order`); escapes and number formatting are normalized, which
+    /// only matters if the caller re-signs the returned string.
+    pub fn verify_raw(&self, message: &str, purpose: Option<&str>, now: Timestamp) -> Result<String, Error> {
+        self.verify(message, purpose, now).map(|value| self.serializer.encode_json(&value))
+    }
+
+    fn sign(&self, serialized: &[u8]) -> String {
         let encoded = match self.encoding {
-            Encoding::Strict => encoding::strict_encode(&serialized),
-            Encoding::UrlSafe => encoding::urlsafe_encode_unpadded(&serialized),
-            Encoding::UrlSafePadded => encoding::urlsafe_encode_padded(&serialized),
+            Encoding::Strict => encoding::strict_encode(serialized),
+            Encoding::UrlSafe => encoding::urlsafe_encode_unpadded(serialized),
+            Encoding::UrlSafePadded => encoding::urlsafe_encode_padded(serialized),
         };
         let digest = self.hex_digest(&encoded);
         format!("{encoded}--{digest}")

@@ -1,5 +1,5 @@
-//! The two JSON encoders Rails messages use. Both emit keys in the order given; build ordered
-//! output by hand where it matters (serde_json's `Map` is sorted unless `preserve_order` is on).
+//! The two JSON encoders Rails messages use. Both emit keys in insertion order, which relies on
+//! serde_json's `preserve_order` feature (enabled in the workspace manifest).
 use serde_json::Value;
 
 /// `::JSON.generate` / `JSON.dump`: plain JSON, non-ASCII left as UTF-8.

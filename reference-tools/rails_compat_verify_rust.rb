@@ -28,6 +28,7 @@ class RailsCompatVerifyRust
     verify_sgids
     verify_turbo_stream_names
     verify_passwords
+    verify_app_verifiers
 
     travel_back
     report
@@ -117,6 +118,15 @@ class RailsCompatVerifyRust
       end
       user = User.new(password_digest: @output["passwords"].first["digest"])
       check "has_secure_password authenticate", user.authenticate(@output["passwords"].first["password"]), user
+    end
+
+    def verify_app_verifiers
+      @output["app_verifiers"].each do |signed|
+        value = app.message_verifier(signed["name"]).verified(signed["message"], purpose: signed["purpose"])
+        check "app verifier #{signed["data_json"]}", ActiveSupport::JSON.encode(value), signed["data_json"]
+      end
+      blob_id = @output["app_verifiers"].find { |s| s["purpose"] == "blob_id" }["message"]
+      check "ActiveStorage::Blob signed id", ActiveStorage::Blob.signed_id_verifier.verified(blob_id, purpose: :blob_id), 42
     end
 
     def report

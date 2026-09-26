@@ -35,6 +35,16 @@ impl Secrets {
     }
 }
 
+/// `Rails.application.message_verifier(name)`: `message_verifiers[name]` with the app defaults
+/// (key `generate_key(name, 64)`, HMAC-SHA1, strict Base64, `:json_allow_marshal`, `_rails`
+/// envelope). Active Storage uses `app_verifier(secrets, "ActiveStorage")` for blob signed ids
+/// (purpose `"blob_id"`, *not* `signed_id`'s `model/purpose` scheme), variation keys, disk URLs
+/// and upload tokens. Use `generate_raw`/`verify_raw` to control the JSON key order.
+pub fn app_verifier(secrets: &Secrets, name: &str) -> MessageVerifier {
+    use message_verifier::{Digest, Encoding, Serializer};
+    MessageVerifier::new(secrets.key_generator.generate_key(name, 64), Digest::Sha1, Encoding::Strict, Serializer::JsonWithFallback { allow_marshal: true })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
     /// Malformed message or bad signature (Ruby's `:invalid_message_format`).
