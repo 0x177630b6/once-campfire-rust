@@ -3,9 +3,6 @@
 
 use campfire_kit::Ctx;
 
-/// `GearedPagination::Ratios::DEFAULTS`
-pub const DEFAULT_RATIOS: &[i64] = &[15, 30, 50, 100];
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Page {
     /// `page.number`
@@ -187,7 +184,8 @@ mod tests {
 
     #[test]
     fn offsets_with_default_ratios() {
-        let page = |n: &str| Page::new(Some(n), 1000, DEFAULT_RATIOS);
+        // `GearedPagination::Ratios::DEFAULTS`
+        let page = |n: &str| Page::new(Some(n), 1000, &[15, 30, 50, 100]);
         assert_eq!((page("1").offset(), page("1").limit()), (0, 15));
         assert_eq!((page("3").offset(), page("3").limit()), (45, 50));
         assert_eq!((page("5").offset(), page("5").limit()), (195, 100));

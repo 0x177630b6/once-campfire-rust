@@ -83,21 +83,41 @@ async fn avatar_variant(c: &Ctx, user: &User) -> Result<Option<campfire_storage:
 
 /// `send_file Rails.root.join("app/assets/images/default-bot-avatar.svg"), content_type: "image/svg+xml", disposition: :inline`
 fn render_default_bot(c: &mut Ctx) -> Result {
-    let data = asset_bytes("default-bot-avatar.svg")?;
-    Ok(c.send_data(data, SendOptions { filename: Some("default-bot-avatar.svg".into()), ..SendOptions::inline("image/svg+xml") }))
+    let path = asset_file("default-bot-avatar.svg")?;
+    c.send_file(path, SendOptions::inline("image/svg+xml"))
 }
 
 /// `render formats: :svg` (`users/avatars/show.svg.erb`).
 fn render_initials(user: &User) -> Result {
     let svg = AvatarSvg { user_id: user.id, initials: user.initials() }.render().map_err(Error::internal)?;
+    // No `Vary: Accept` here: ActiveStorage::Streaming makes this an ActionController::Live
+    // response, which the reference sends without it.
     Ok(campfire_kit::Response::with_body(campfire_kit::StatusCode::OK, "image/svg+xml; charset=utf-8", svg))
 }
 
-/// The bytes of a file under `app/assets/images` (embedded by campfire_assets).
-pub fn asset_bytes(logical_path: &str) -> Result<Vec<u8>> {
-    let path = campfire_assets::asset_path(logical_path);
-    let request = campfire_assets::StaticRequest { method: "GET", path: &path, ..Default::default() };
-    campfire_assets::serve(&request)
-        .map(|served| served.body.into_owned())
-        .ok_or_else(|| Error::internal(anyhow::anyhow!("missing asset {logical_path}")))
+/// A file under `app/assets/images` (embedded by campfire_assets) on disk, for `send_file`: it's
+/// written once per process to a private directory under its own name, so the response carries
+/// the same filename and, like Rails' file bodies, gets no `Rack::ETag` digest.
+pub fn asset_file(logical_path: &str) -> Result<std::path::PathBuf> {
+    static DIR: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+    let dir = match DIR.get() {
+        Some(dir) => dir,
+        None => {
+            let dir = tempfile::Builder::new().prefix("campfire-assets-").tempdir()?;
+            DIR.get_or_init(|| dir)
+        }
+    };
+    let path = dir.path().join(logical_path);
+    if !path.exists() {
+        let url = campfire_assets::asset_path(logical_path);
+        let request = campfire_assets::StaticRequest { method: "GET", path: &url, ..Default::default() };
+        let data = campfire_assets::serve(&request).ok_or_else(|| Error::internal(anyhow::anyhow!("missing asset {logical_path}")))?.body;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let partial = path.with_extension(format!("tmp{}", std::process::id()));
+        std::fs::write(&partial, &data)?;
+        std::fs::rename(&partial, &path)?;
+    }
+    Ok(path)
 }

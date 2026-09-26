@@ -419,8 +419,8 @@ async fn manages_bots() {
 
     let edit = admin.get(&format!("/account/bots/{bender}/edit")).await;
     let key_action = format!("/account/bots/{bender}/key");
-    let token = edit.button_token(&key_action, "patch");
-    assert_redirect(&admin.form("patch", &key_action, &token, &[]).await, "http://campfire.test/account/bots");
+    let token = edit.button_token(&key_action, "put");
+    assert_redirect(&admin.form("put", &key_action, &token, &[]).await, "http://campfire.test/account/bots");
     assert!(!admin.get("/account/bots").await.text().contains(&test.label("bot_keys.bender")));
 
     let token = admin.get(&format!("/account/bots/{bender}/edit")).await.button_token(&action, "delete");

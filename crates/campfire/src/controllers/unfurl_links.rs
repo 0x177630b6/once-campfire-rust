@@ -9,7 +9,9 @@ use crate::integrations::opengraph::{self, Unfurl};
 
 pub async fn create(c: &mut Ctx) -> Result {
     before_actions(c, Before::default()).await?;
-    let url = url_param(c)?;
+    // A hash or array passes `require`, but `URI.parse` can't take it (`InvalidURIError`,
+    // rescued), so the metadata has no title and isn't valid.
+    let Some(url) = url_param(c)? else { return Ok(c.head(StatusCode::NO_CONTENT)) };
     match opengraph_json(c, &url).await? {
         // `render json: opengraph`
         Some(json) => Ok(campfire_kit::Response::with_body(StatusCode::OK, campfire_kit::response::JSON_UTF8, json)),
@@ -18,10 +20,8 @@ pub async fn create(c: &mut Ctx) -> Result {
 }
 
 /// `params.require(:url)`
-fn url_param(c: &Ctx) -> Result<String> {
-    let url = c.params.require("url")?;
-    // A hash or array passes `require`; `Opengraph::Location.new` then fails to parse it.
-    url.as_str().map(str::to_string).ok_or_else(|| Error::internal(anyhow::anyhow!("url must be a string")))
+fn url_param(c: &Ctx) -> Result<Option<String>> {
+    Ok(c.params.require("url")?.as_str().map(str::to_string))
 }
 
 /// `Opengraph::Metadata.from_url(url)`, as JSON when `valid?` (`crate::integrations::opengraph`).
@@ -48,5 +48,9 @@ mod tests {
         assert_eq!(private.status, StatusCode::NO_CONTENT);
         let missing = david.write(Req::new(Method::POST, "/unfurl_link").form(&[("url", "")])).await;
         assert_eq!(missing.status, StatusCode::BAD_REQUEST);
+        let hash = david.write(Req::new(Method::POST, "/unfurl_link").form(&[("url[a]", "http://example.com")])).await;
+        assert_eq!(hash.status, StatusCode::NO_CONTENT);
+        let array = david.write(Req::new(Method::POST, "/unfurl_link").form(&[("url[]", "http://example.com")])).await;
+        assert_eq!(array.status, StatusCode::NO_CONTENT);
     }
 }

@@ -25,6 +25,8 @@ UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML,
 PASSWORD = "secret123456"
 LABELS = json.load(open("parity/.seed/default/labels.json"))
 COMPARED_HEADERS = ["location", "content-type", "cache-control", "link", "x-version", "x-rev", "x-total-count", "content-disposition", "vary"]
+# Blob keys are random: a variant sent inline is named after its key.
+KEYED = re.compile(r'filename="[a-z0-9]{28}"; filename\*=UTF-8\'\'[a-z0-9]{28}')
 
 
 class Reply:
@@ -49,6 +51,15 @@ class Reply:
                 match = re.search(r'name="authenticity_token" value="([^"]+)"', html[at:])
                 return match.group(1)
         raise KeyError(f"no form for {action}")
+
+    def button_token(self, action, method):
+        for form in self.text().split("<form")[1:]:
+            form = form.split("</form>")[0]
+            # An action ending in "?" matches any query string (`fresh_account_logo_path`).
+            target = f'action="{action}' if action.endswith("?") else f'action="{action}"'
+            if target in form and f'name="_method" value="{method}"' in form:
+                return re.search(r'name="authenticity_token" value="([^"]+)"', form).group(1)
+        raise KeyError(f"no {method} button for {action}")
 
     def meta_token(self):
         return re.search(r'name="csrf-token" content="([^"]+)"', self.text()).group(1)
@@ -89,6 +100,17 @@ class Browser:
         body = urllib.parse.urlencode(pairs)
         return self.request("POST", path, body, {"Content-Type": "application/x-www-form-urlencoded"})
 
+    def multipart(self, method, path, token, fields=(), files=()):
+        boundary = "----replayboundary7MA4YWxkTrZu0gW"
+        parts = [("authenticity_token", token)] + ([("_method", method)] if method != "post" else []) + list(fields)
+        body = b""
+        for name, value in parts:
+            body += f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n'.encode()
+        for name, filename, content_type, data in files:
+            body += f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"; filename="{filename}"\r\nContent-Type: {content_type}\r\n\r\n'.encode() + data + b"\r\n"
+        body += f"--{boundary}--\r\n".encode()
+        return self.request("POST", path, body, {"Content-Type": f"multipart/form-data; boundary={boundary}"})
+
     def sign_in(self, email):
         token = self.get("/session/new").form_token("/session")
         reply = self.form("post", "/session", token, [("email_address", email), ("password", PASSWORD)])
@@ -103,6 +125,8 @@ def normalize_body(text):
     text = re.sub(r"transfers/[^\"'\s<]+", "transfers/«transfer»", text)
     text = re.sub(r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}", "«uuid»", text)
     text = re.sub(r"/qr_code/[A-Za-z0-9_=-]+", "/qr_code/«qr»", text)
+    text = re.sub(r"/(\d+)-[A-Za-z0-9]{12}/messages", r"/\1-«bot_token»/messages", text)
+    text = re.sub(r"/join/[A-Za-z0-9]{4}-[A-Za-z0-9]{4}-[A-Za-z0-9]{4}", "/join/«join_code»", text)
     text = re.sub(r">\s+<", ">\n<", text)
     text = re.sub(r"[ \t]+\n", "\n", text)
     return text.strip()
@@ -128,6 +152,8 @@ def compare(name, rails, rust, body=True, headers=COMPARED_HEADERS):
         a, b = rails.header(header), rust.header(header)
         if header == "location" and a and b:
             a, b = normalize_body(a), normalize_body(b)
+        if header == "content-disposition" and a and b:
+            a, b = KEYED.sub("«key»", a), KEYED.sub("«key»", b)
         if a != b:
             problems.append(f"{header}: {a!r} != {b!r}")
     if (rails.header("etag") is None) != (rust.header("etag") is None):
@@ -159,7 +185,50 @@ def both(servers, fn):
     return [fn(server) for server in servers]
 
 
-def run(rails_base, rust_base, cross):
+def run(rails_base, rust_base, cross, seed="default"):
+    if seed == "crowd":
+        return finish(crowd(rails_base, rust_base))
+    if seed == "first_run":
+        return finish(first_run(rails_base, rust_base))
+    return finish(default(rails_base, rust_base, cross))
+
+
+def finish(_):
+    print(f"\n{len(PASSES)} matched, {len(FAILURES)} differed")
+    return 1 if FAILURES else 0
+
+
+PNG = open("reference/app/assets/images/campfire-icon.png", "rb").read()
+
+
+def crowd(rails_base, rust_base):
+    admins = [Browser(rails_base, "203.0.113.70"), Browser(rust_base, "203.0.113.70")]
+    both(admins, lambda b: b.sign_in(LABELS["emails.david"]))
+    members = [Browser(rails_base, "203.0.113.71"), Browser(rust_base, "203.0.113.71")]
+    both(members, lambda b: b.sign_in(LABELS["emails.kevin"]))
+    for path in ["/account/edit", "/users/me/sidebar", "/autocompletable/users", "/autocompletable/users.json",
+                 "/autocompletable/users.json?page=2", "/autocompletable/users.json?page=27", "/autocompletable/users.json?page=99",
+                 "/autocompletable/users.json?query=a&page=3&z=1", "/autocompletable/users?filter=Ada"]:
+        compare(f"crowd admin GET {path}", *both(admins, lambda b: b.get(path)))
+    for page in ["1", "2", "3", "x"]:
+        compare(f"crowd admin GET /account/users?page={page} (turbo stream)", *both(admins, lambda b: b.get(f"/account/users?page={page}", {"Accept": "text/vnd.turbo-stream.html"})))
+    for path in ["/account/edit", "/users/me/sidebar"]:
+        compare(f"crowd member GET {path}", *both(members, lambda b: b.get(path)))
+
+
+def first_run(rails_base, rust_base):
+    browsers = [Browser(rails_base, "203.0.113.80"), Browser(rust_base, "203.0.113.80")]
+    for path in ["/session/new", "/", "/first_run", "/webmanifest.json", "/account/logo"]:
+        compare(f"first run GET {path}", *both(browsers, lambda b: b.get(path)))
+    tokens = both(browsers, lambda b: b.get("/first_run").form_token("/first_run"))
+    fields = [("user[name]", "Owner"), ("user[email_address]", "owner@example.com"), ("user[password]", PASSWORD)]
+    compare("POST /first_run", *[b.multipart("post", "/first_run", t, fields, [("user[avatar]", "me.png", "image/png", PNG)]) for b, t in zip(browsers, tokens)])
+    for path in ["/", "/first_run", "/users/me/profile", "/account/edit"]:
+        compare(f"after first run GET {path}", *both(browsers, lambda b: b.get(path)))
+    compare("POST /first_run again", *[b.form("post", "/first_run", t, fields) for b, t in zip(browsers, tokens)], body=False)
+
+
+def default(rails_base, rust_base, cross):
     david, kevin = LABELS["emails.david"], LABELS["emails.kevin"]
     ids = {k: LABELS[k] for k in LABELS}
     anon = [Browser(rails_base), Browser(rust_base)]
@@ -176,6 +245,14 @@ def run(rails_base, rust_base, cross):
     compare("POST /session with a wrong password", *[b.form("post", "/session", t, [("email_address", david), ("password", "nope")]) for b, t in zip(anon, tokens)])
     compare("POST /session with no password", *[b.form("post", "/session", t, [("email_address", david)]) for b, t in zip(anon, tokens)])
     compare("POST /session with a bad token", *both(anon, lambda b: b.form("post", "/session", "bogus", [("email_address", david), ("password", PASSWORD)])), body=False)
+
+    # rate_limit to: 10, within: 3.minutes: the 11th sign-in attempt from one IP is 429
+    limited = [Browser(rails_base, "203.0.113.98"), Browser(rust_base, "203.0.113.98")]
+    tokens = both(limited, lambda b: b.get("/session/new").form_token("/session"))
+    for _ in range(10):
+        for b, t in zip(limited, tokens):
+            b.form("post", "/session", t, [("email_address", david), ("password", "nope")])
+    compare("POST /session, 11th attempt (rate limited)", *[b.form("post", "/session", t, [("email_address", david), ("password", PASSWORD)]) for b, t in zip(limited, tokens)])
 
     # --- Sign in ---
     admins = [Browser(rails_base, "203.0.113.51"), Browser(rust_base, "203.0.113.51")]
@@ -198,6 +275,9 @@ def run(rails_base, rust_base, cross):
     compare("admin GET /users/me/sidebar in a Turbo frame", *both(admins, lambda b: b.get("/users/me/sidebar", {"Turbo-Frame": "user_sidebar"})))
     compare("admin GET /account/users as a turbo stream", *both(admins, lambda b: b.get("/account/users?page=2", {"Accept": "text/vnd.turbo-stream.html"})))
     compare("admin GET /users/me/profile with a referrer", *both(admins, lambda b: b.get("/users/me/profile", {"Referer": f"http://{HOST}/rooms/1"})))
+    for path in ["/qr_code/aHR0cDovL2NhbXBmaXJlLnRlc3Q", "/webmanifest", "/service-worker", "/autocompletable/users", "/users/me/profile", "/account/logo"]:
+        compare(f"admin GET {path} with Accept: */*", *both(admins, lambda b: b.get(path, {"Accept": "*/*"})))
+    compare("admin GET /autocompletable/users with Accept: application/json", *both(admins, lambda b: b.get("/autocompletable/users", {"Accept": "application/json"})))
     compare("admin GET avatar with */*", *both(admins, lambda b: b.get(f"/users/{david_token}/avatar", {"Accept": "*/*"})))
     compare("admin GET avatar with image accepts", *both(admins, lambda b: b.get(f"/users/{david_token}/avatar", {"Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"})))
 
@@ -234,6 +314,19 @@ def run(rails_base, rust_base, cross):
     body = json.dumps({"push_subscription": {"endpoint": "http://example.com/push", "p256dh_key": "a", "auth_key": "b"}})
     compare("POST /users/me/push_subscriptions (invalid endpoint)", *[b.request("POST", "/users/me/push_subscriptions", body, {"Content-Type": "application/json", "X-CSRF-Token": t}) for b, t in zip(admins, both(admins, lambda b: b.get("/users/me/push_subscriptions").meta_token()))])
 
+    # A permitted push endpoint (resolves through DNS on both), again (touched), and signing out
+    # with it removes it.
+    pushers = [Browser(rails_base, "203.0.113.57"), Browser(rust_base, "203.0.113.57")]
+    both(pushers, lambda b: b.sign_in(LABELS["emails.jason"]))
+    endpoint = "https://fcm.googleapis.com/fcm/send/replay-abc"
+    body = json.dumps({"push_subscription": {"endpoint": endpoint, "p256dh_key": "BK", "auth_key": "au"}})
+    for attempt in ["create", "existing"]:
+        compare(f"POST /users/me/push_subscriptions ({attempt})", *[b.request("POST", "/users/me/push_subscriptions", body, {"Content-Type": "application/json", "X-CSRF-Token": t}) for b, t in zip(pushers, both(pushers, lambda b: b.get("/users/me/push_subscriptions").meta_token()))])
+    compare("  then GET /users/me/push_subscriptions", *both(pushers, lambda b: b.get("/users/me/push_subscriptions")))
+    compare("DELETE /session with push_subscription_endpoint", *[b.form("delete", "/session", t, [("push_subscription_endpoint", endpoint)]) for b, t in zip(pushers, both(pushers, lambda b: b.get("/users/me/profile").form_token("/session")))])
+    both(pushers, lambda b: b.sign_in(LABELS["emails.jason"]))
+    compare("  then GET /users/me/push_subscriptions", *both(pushers, lambda b: b.get("/users/me/push_subscriptions")))
+
     # Joining
     joiners = [Browser(rails_base, "203.0.113.53"), Browser(rust_base, "203.0.113.53")]
     join = f"/join/{ids['join_codes.signal']}"
@@ -256,11 +349,24 @@ def run(rails_base, rust_base, cross):
     compare("DELETE /session", *with_token("/users/me/profile", "/session", "delete", []))
     compare("  then GET /users/me/profile", *both(admins, lambda b: b.get("/users/me/profile")))
 
+    # Uploads
+    both(admins, lambda b: b.sign_in(david))
+    compare("PATCH /users/me/profile with an avatar", *[b.multipart("patch", "/users/me/profile", t, [("user[name]", "Kevin")], [("user[avatar]", "me.png", "image/png", PNG)]) for b, t in zip(members, both(members, lambda b: b.get("/users/me/profile").form_token("/users/me/profile")))])
+    compare("  then GET /users/me/profile", *both(members, lambda b: b.get("/users/me/profile")))
+    avatar = both(members, lambda b: re.search(r'src="(/users/[^"]+/avatar\?v=\d+)"', b.get("/users/me/profile").text()).group(1))
+    compare("  then GET the avatar", *[b.get(a) for b, a in zip(members, avatar)], body=False)
+    compare("DELETE /users/<token>/avatar", *[b.form("delete", a.split("?")[0], b.get("/users/me/profile").meta_token()) for b, a in zip(members, avatar)])
+    compare("PATCH /account.<id> with a logo", *[b.multipart("patch", account_action, t, [], [("account[logo]", "logo.png", "image/png", PNG)]) for b, t in zip(admins, both(admins, lambda b: b.get("/account/edit").form_token(account_action)))])
+    compare("  then GET /account/edit", *both(admins, lambda b: b.get("/account/edit")))
+    compare("  then GET /account/logo", *both(admins, lambda b: b.get("/account/logo?size=small")), body=False)
+    compare("DELETE /account/logo", *[b.form("delete", "/account/logo", t) for b, t in zip(admins, both(admins, lambda b: b.get("/account/edit").button_token("/account/logo?", "delete")))])
+    compare("POST /account/bots with an avatar", *[b.multipart("post", "/account/bots", t, [("user[name]", "Pixel"), ("user[webhook_url]", "")], [("user[avatar]", "bot.png", "image/png", PNG)]) for b, t in zip(admins, both(admins, lambda b: b.get("/account/bots/new").form_token("/account/bots")))])
+    compare("  then GET /account/bots", *both(admins, lambda b: b.get("/account/bots")))
+    compare("DELETE /account/users/<id>", *[b.form("delete", f"/account/users/{ids['users.loner']}", t) for b, t in zip(admins, both(admins, lambda b: b.get("/account/edit").button_token(f"/account/users/{ids['users.loner']}", "delete")))])
+    compare("  then GET /account/edit", *both(admins, lambda b: b.get("/account/edit")))
+
     if cross:
         cross_server(rails_base, rust_base, cross)
-
-    print(f"\n{len(PASSES)} matched, {len(FAILURES)} differed")
-    return 1 if FAILURES else 0
 
 
 def copy_session(token, from_db, to_db):
@@ -315,4 +421,5 @@ if __name__ == "__main__":
     if "--cross" in sys.argv:
         at = sys.argv.index("--cross")
         cross = (sys.argv[at + 1], sys.argv[at + 2])
-    sys.exit(run(sys.argv[1], sys.argv[2], cross))
+    seed = sys.argv[sys.argv.index("--seed") + 1] if "--seed" in sys.argv else "default"
+    sys.exit(run(sys.argv[1], sys.argv[2], cross, seed))

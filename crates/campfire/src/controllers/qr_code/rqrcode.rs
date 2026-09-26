@@ -9,12 +9,8 @@
 //! points" as the gem scores them (including its floating-point dark-ratio term).
 //! Golden vectors: `reference-tools/campfire/rqrcode.rb`.
 
-/// `RQRCode::QRCode.new(data).as_svg(viewbox: true, fill: :white, color: :black)`.
-pub fn svg(data: &str) -> String {
-    svg_bytes(data.as_bytes())
-}
-
-/// [`svg`] for binary data (what `Base64.urlsafe_decode64` returns).
+/// `RQRCode::QRCode.new(data).as_svg(viewbox: true, fill: :white, color: :black)`, for the binary
+/// string `Base64.urlsafe_decode64` returns.
 pub fn svg_bytes(data: &[u8]) -> String {
     let modules = QrCode::new(data).modules;
     let module_size = 11;

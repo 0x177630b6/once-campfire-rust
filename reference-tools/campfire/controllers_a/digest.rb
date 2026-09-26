@@ -1,11 +1,8 @@
-c = ApplicationController.new
-lc = c.lookup_context
-puts ActionView::Digestor.digest(name: "users/avatars/show", format: nil, finder: lc)
-lc.formats = [:html]
-t = lc.find_all("show", ["users/avatars"]).first
-p t&.virtual_path
-lc2 = ApplicationController.new.lookup_context
-lc2.formats = [:svg]
-p lc2.find_all("show", ["users/avatars", "application"]).first&.virtual_path
-p ActiveSupport::Digest.hexdigest(File.read("app/views/users/avatars/show.svg.erb") + "-")
-p ActiveSupport::Digest.hexdigest(File.read("app/views/users/avatars/show.svg.erb"))
+# The template digest EtagWithTemplateDigest adds to `Users::AvatarsController#show`'s ETag
+# (TEMPLATE_DIGEST in crates/campfire/src/controllers/users/avatars.rs): the SHA256 (truncated)
+# of show.svg.erb's source plus "-", since it renders no other templates.
+#
+#   parity/bin/reference runner reference-tools/campfire/controllers_a/digest.rb
+lookup_context = ApplicationController.new.lookup_context
+puts ActionView::Digestor.digest(name: "users/avatars/show", format: nil, finder: lookup_context)
+puts ActiveSupport::Digest.hexdigest(File.read("app/views/users/avatars/show.svg.erb") + "-")

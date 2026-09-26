@@ -11,8 +11,8 @@ use super::{
     ensure_can_administer, find_paged_messages, present, set_message, update_message,
 };
 use crate::app::AppCtx;
-use crate::concerns::{Before, before_actions, cast_integer, require_current_user};
-use crate::controllers::presenters::page::{self, db_error};
+use crate::concerns::{self, Before, before_actions, cast_integer, require_current_user};
+use crate::controllers::presenters::page::db_error;
 
 fn before() -> Before {
     Before::default().allow_bot_access()
@@ -83,7 +83,7 @@ async fn set_room(c: &mut Ctx) -> Result<Room> {
     };
     match room {
         Some(room) => Ok(room),
-        None => halt(page::before_action_head(StatusCode::NOT_FOUND)),
+        None => halt(concerns::head(StatusCode::NOT_FOUND)),
     }
 }
 
@@ -91,7 +91,7 @@ async fn set_room(c: &mut Ctx) -> Result<Room> {
 fn ensure_body_or_attachment_present(c: &mut Ctx) -> Result<()> {
     let attachment_blank = c.params.get("attachment").is_none_or(Param::is_blank);
     if attachment_blank && is_blank(&raw_request_body(c)) {
-        return halt(page::before_action_head(StatusCode::UNPROCESSABLE_ENTITY));
+        return halt(concerns::head(StatusCode::UNPROCESSABLE_ENTITY));
     }
     Ok(())
 }

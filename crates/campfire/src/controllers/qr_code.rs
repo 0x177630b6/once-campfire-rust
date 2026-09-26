@@ -17,7 +17,8 @@ pub async fn show(c: &mut Ctx) -> Result {
 
     // `expires_in 1.year, public: true`
     c.expires_in(31_556_952, ExpiresIn { public: true, ..ExpiresIn::default() });
-    Ok(Response::with_body(StatusCode::OK, "image/svg+xml; charset=utf-8", qr_code))
+    let response = Response::with_body(StatusCode::OK, "image/svg+xml; charset=utf-8", qr_code);
+    Ok(super::presenters_a::view_context::vary_by_accept(c, response))
 }
 
 /// Ruby's `Base64.urlsafe_decode64`: pad unpadded input, map `-_` to `+/`, then

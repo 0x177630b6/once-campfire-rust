@@ -7,10 +7,10 @@ use campfire_views::messages::json;
 
 use super::{broadcast_create, create_boost, destroy_boost, set_boost};
 use crate::app::AppCtx;
-use crate::concerns::{Before, before_actions, cast_integer, require_current_user};
+use crate::concerns::{self, Before, before_actions, cast_integer, require_current_user};
 use crate::controllers::messages::by_bots::{is_blank, raw_request_body};
 use crate::controllers::messages::present;
-use crate::controllers::presenters::page::{self, db_error};
+use crate::controllers::presenters::page::db_error;
 
 fn before() -> Before {
     Before::default().allow_bot_access()
@@ -22,7 +22,7 @@ pub async fn create(c: &mut Ctx) -> Result {
     // ensure_content_present
     let content = raw_request_body(c);
     if is_blank(&content) {
-        return halt(page::before_action_head(StatusCode::UNPROCESSABLE_ENTITY));
+        return halt(concerns::head(StatusCode::UNPROCESSABLE_ENTITY));
     }
     let boost = create_boost(c, &message, Some(content)).await?;
     broadcast_create(c, &message, &boost).await?;
@@ -40,7 +40,7 @@ pub async fn destroy(c: &mut Ctx) -> Result {
     // set_boost, with `rescue ActiveRecord::RecordNotFound` → head :not_found
     let boost = match set_boost(c, &message).await {
         Ok(boost) => boost,
-        Err(Error::NotFound) => return Ok(page::before_action_head(StatusCode::NOT_FOUND)),
+        Err(Error::NotFound) => return Ok(concerns::head(StatusCode::NOT_FOUND)),
         Err(error) => return Err(error),
     };
     destroy_boost(c, &message, boost).await?;
@@ -68,6 +68,6 @@ async fn set_message(c: &mut Ctx) -> Result<Message> {
         .map_err(db_error)?;
     match message {
         Some(message) => Ok(message),
-        None => halt(page::before_action_head(StatusCode::NOT_FOUND)),
+        None => halt(concerns::head(StatusCode::NOT_FOUND)),
     }
 }

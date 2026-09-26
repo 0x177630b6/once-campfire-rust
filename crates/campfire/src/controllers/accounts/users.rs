@@ -9,7 +9,8 @@ use campfire_views::accounts;
 use crate::app::AppCtx;
 use crate::concerns::{self, Before, cast_integer};
 use crate::controllers::presenters_a::pagination::Page;
-use crate::controllers::presenters_a::{self, view_context::Layout};
+use crate::controllers::presenters_a::view_context::{self, Layout};
+use crate::controllers::presenters_a;
 
 /// `set_page_and_extract_portion_from User.active.ordered.without_bots, per_page: 500`,
 /// rendered as `index.turbo_stream.erb` (the only template, so other formats are 406).
@@ -25,7 +26,8 @@ pub async fn index(c: &mut Ctx) -> Result {
     let layout = Layout::load(c).await?;
     let html = layout.render(c, |ctx| accounts::UsersIndexTurboStream { ctx, users, next_page }.render())?;
     page.apply_headers(c);
-    Ok(c.turbo_stream(html))
+    let response = c.turbo_stream(html);
+    Ok(view_context::vary_by_accept(c, response))
 }
 
 /// `@user.update(role: params.require(:user)[:role].presence_in(%w[ member administrator ]) || "member")`

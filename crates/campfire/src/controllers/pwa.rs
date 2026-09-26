@@ -19,7 +19,8 @@ fn before() -> Before {
 pub async fn service_worker(c: &mut Ctx) -> Result {
     concerns::before_actions(c, before()).await?;
     c.respond_to(&[&format::JS])?;
-    Ok(Response::with_body(StatusCode::OK, "text/javascript; charset=utf-8", pwa::SERVICE_WORKER_JS))
+    let response = Response::with_body(StatusCode::OK, "text/javascript; charset=utf-8", pwa::SERVICE_WORKER_JS);
+    Ok(presenters_a::view_context::vary_by_accept(c, response))
 }
 
 /// `pwa/manifest.json.erb`
@@ -36,5 +37,6 @@ pub async fn manifest(c: &mut Ctx) -> Result {
         asset_path: &asset_path,
     };
     let body = manifest.render().map_err(Error::internal)?;
-    Ok(Response::with_body(StatusCode::OK, "application/json; charset=utf-8", body))
+    let response = Response::with_body(StatusCode::OK, "application/json; charset=utf-8", body);
+    Ok(presenters_a::view_context::vary_by_accept(c, response))
 }

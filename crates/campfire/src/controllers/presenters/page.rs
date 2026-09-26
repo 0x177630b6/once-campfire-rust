@@ -124,14 +124,6 @@ impl Partials for Rendered {
     }
 }
 
-/// `head status` from a before-action. `ActionController::Rendering#process_action` sets the
-/// controller's formats only after the callbacks ran, so `head` there falls back to `text/html`
-/// whatever the request format (the bot API's JSON routes included).
-pub fn before_action_head(status: StatusCode) -> campfire_kit::Response {
-    let response = campfire_kit::Response::new(status);
-    if matches!(status.as_u16(), 100..=199 | 204 | 205 | 304) { response } else { response.content_type("text/html") }
-}
-
 pub fn db_error(error: campfire_db::Error) -> Error {
     match error {
         campfire_db::Error::RecordNotFound(_) => Error::NotFound,

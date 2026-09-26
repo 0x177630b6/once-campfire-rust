@@ -114,7 +114,7 @@ pub async fn set_room(c: &mut Ctx, scope: Scope) -> Result<Room> {
 pub fn ensure_can_administer(c: &mut Ctx, room: &Room) -> Result<()> {
     let allowed = require_current_user(c)?.can_administer(Some(room.creator_id), false);
     if !allowed {
-        return halt(page::before_action_head(StatusCode::FORBIDDEN));
+        return halt(concerns::head(StatusCode::FORBIDDEN));
     }
     Ok(())
 }
@@ -125,7 +125,7 @@ pub async fn ensure_permission_to_create_rooms(c: &mut Ctx) -> Result<()> {
     let account = c.app().db.read(Account::first).await.map_err(db_error)?;
     let restricted = account.is_some_and(|account| account.settings().restrict_room_creation_to_administrators());
     if restricted && !administrator {
-        return halt(page::before_action_head(StatusCode::FORBIDDEN));
+        return halt(concerns::head(StatusCode::FORBIDDEN));
     }
     Ok(())
 }

@@ -4,6 +4,11 @@ Add requests under the owning crate's heading. The owner removes an entry once i
 
 ## rails_compat
 ## kit
+- (from controllers A) Rails runs `_set_vary_header` on every `render` (`Vary: Accept` when
+  `!params[:format] && valid_accept_header`, i.e. a non-browser Accept like `*/*` or
+  `application/json`). `Ctx::render`/`json`/`turbo_stream`/`render_html` don't; controllers A add it
+  with `presenters_a::view_context::vary_by_accept(c, response)` (skips responses that already have
+  a Vary, so moving it into kit is safe). Not for `head`, redirects or `send_file`.
 - (from controllers B) Rails' `PublicExceptions` pages answer `Content-Type: text/html;
   charset=UTF-8` (upper case); kit's error responses say `utf-8`. Seen in parity on every
   404/406/422/500. Headers only need the same shape, so low priority.
@@ -62,6 +67,13 @@ Add requests under the owning crate's heading. The owner removes an entry once i
   controllers B's replay, `GET /searches?q=parity`). A faithful port needs a message/boost
   fragment cache keyed by `cache_key_with_version` + template version, consulted wherever
   `_message`/`_boost` render (views + controllers + broadcasts).
+- (from controllers A) turbo-rails renders *every* page in `layouts/turbo_rails/frame` when the
+  request has a `Turbo-Frame` header (e.g. a frame that loses its session gets `/session/new`
+  framed). Only `users::Show` and `users::SidebarShow` expose `blocks = ["head", "content"]`; please
+  add it to the other page templates (sessions::New/TransferShow/IncompatibleBrowser,
+  first_runs::Show, welcome::Show, users::New/ProfileShow/PushSubscriptionsIndex, accounts::Edit/
+  BotsIndex/BotsNew/BotsEdit/CustomStylesEdit) so controllers can use
+  `view_context::page_or_frame`. Until then those pages render the full layout in a frame request.
 ### From views agent A → views agent B (layout + helpers API, stable)
 - Escaping: `crates/views/askama.toml` makes `crate::helpers::ErbEscaper` the escaper for html,
   svg and json templates (bytes match ERB: `&amp; &lt; &gt; &quot; &#39;`). Helpers return
@@ -253,39 +265,16 @@ Add requests under the owning crate's heading. The owner removes an entry once i
   accept_encoding, range, if_modified_since })` and return its status/headers/body when it is
   `Some`; otherwise continue to the app. It covers /assets/* and reference/public (404.html,
   robots.txt, `/404` -> 404.html, ...). HEAD responses already have an empty body.
-- (from controllers A → app core) Please declare in `controllers/mod.rs`: `pub mod presenters_a;
-  pub mod sessions; pub mod first_runs; pub mod welcome; pub mod users; pub mod accounts;
-  pub mod autocompletable; pub mod qr_code; pub mod pwa;` (files exist). Route → function
-  replacements (rows in table order; keep the patterns):
-  `welcome#show` → `welcome::show`; `first_runs#show` → `first_runs::show`; `first_runs#create` →
-  `first_runs::create`; `first_runs#new/edit/update/destroy` → `action_not_found`;
-  `sessions/transfers#show` → `sessions::transfers::show`; `sessions/transfers#update` (PATCH, PUT) →
-  `sessions::transfers::update`; `sessions#new` → `sessions::new`; `sessions#create` →
-  `sessions::create`; `sessions#destroy` → `sessions::destroy`; `sessions#edit/show/update` →
-  `action_not_found`; `accounts/users#index` → `accounts::users::index`; `accounts/users#update`
-  (PATCH, PUT) → `accounts::users::update`; `accounts/users#destroy` → `accounts::users::destroy`;
-  `accounts/users#create/new/edit/show` → `action_not_found`; `accounts/bots/keys#update` (PATCH,
-  PUT) → `accounts::bots::keys::update`; `accounts/bots#index/create/new/edit/update(PATCH,
-  PUT)/destroy` → `accounts::bots::{index,create,new,edit,update,destroy}`; `accounts/bots#show` →
-  `action_not_found`; `accounts/join_codes#create` → `accounts::join_codes::create`;
-  `accounts/logos#show` → `accounts::logos::show`; `accounts/logos#destroy` →
-  `accounts::logos::destroy`; `accounts/custom_styles#edit` → `accounts::custom_styles::edit`;
-  `accounts/custom_styles#update` (PATCH, PUT) → `accounts::custom_styles::update`; `accounts#edit`
-  → `accounts::edit`; `accounts#update` (PATCH, PUT) → `accounts::update`;
-  `accounts#new/show/destroy/create` → `action_not_found`; `users#new` → `users::new`;
-  `users#create` → `users::create`; `qr_code#show` → `qr_code::show`; `users/avatars#show` →
-  `users::avatars::show`; `users/avatars#destroy` → `users::avatars::destroy`;
-  `users/bans#create/destroy` → `users::bans::{create,destroy}`; `users/sidebars#show` →
-  `users::sidebars::show`; `users/profiles#show` → `users::profiles::show`; `users/profiles#update`
-  (PATCH, PUT) → `users::profiles::update`; `users/profiles#new/edit/destroy/create` →
-  `action_not_found`; `users/push_subscriptions/test_notifications#create` →
-  `users::push_subscriptions::test_notifications::create`; `users/push_subscriptions#index/create/destroy`
-  → `users::push_subscriptions::{index,create,destroy}`; `users/push_subscriptions#new/edit/show/update`
-  → `action_not_found`; `users#show` → `users::show`; `autocompletable/users#index` →
-  `autocompletable::users::index`; `pwa#manifest` → `pwa::manifest`; `pwa#service_worker` →
-  `pwa::service_worker`.
-  The `form_with model: @account` quirk (`PATCH /account.<id>`) already routes: `/account(.:format)`
-  matches with `format` = the id, and nothing in `accounts::update` reads the format.
+- (from controllers A, done) The session/account/user controllers are wired into
+  `controllers/mod.rs` (every row for sessions, sessions/transfers, first_runs, welcome, users,
+  users/*, accounts, accounts/*, autocompletable/users, qr_code, pwa; undefined actions →
+  `action_not_found`). The `form_with model: @account` quirk (`PATCH /account.<id>`) routes through
+  `/account(.:format)` with `format` = the id; `accounts::update` doesn't read it.
+- (from controllers A → app core) Via Thruster, every reference response that already has
+  `Vary: Accept` arrives as `Vary: Accept,Accept-Encoding` (Puma's side adds `Accept-Encoding`; a
+  Rails in-process call doesn't), while ours stays `Accept`. Responses without a Vary match (Thruster
+  adds `Accept-Encoding` to both). If this should match exactly, append `Accept-Encoding` to a
+  `Vary` header the app sets (server layer, not per controller).
 - (from controllers A → everyone rendering pages) The ViewContext builder is
   `crate::controllers::presenters_a::view_context`: `Layout::load(c).await?` then
   `layout.render(c, |ctx| Page { ctx, .. }.render())?` and `layout.page(c, status, html)` (adds the
@@ -332,3 +321,7 @@ Add requests under the owning crate's heading. The owner removes an entry once i
   of diffing silently. Proposed reference-side fix for parity runs:
   `config.action_cable.worker_pool_size = 1` (in-order command processing per server); the Rust
   cable server should process a connection's commands in order.
+- (from parity/capture, for parity/screens.yml) States whose steps POST the sign-in form
+  (`auth/sign_in/error`, `auth/sign_in/banned_ip`, ...) spend the 10-per-3-minutes sign-in budget
+  once per matrix cell (12+ cells), which then rate-limits the harness's own fixture sign-ins on
+  that server. Mark them `mutates: true` (fresh instance per cell) or narrow their matrix.

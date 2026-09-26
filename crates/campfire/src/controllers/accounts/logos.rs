@@ -9,7 +9,7 @@ use crate::app::AppCtx;
 use crate::concerns::{self, Before};
 use crate::controllers::presenters_a::attachments::{self, Record};
 use crate::controllers::presenters_a::cache_key_with_version;
-use crate::controllers::users::avatars::asset_bytes;
+use crate::controllers::users::avatars::asset_file;
 
 /// `expires_in 5.minutes, public: true, stale_while_revalidate: 1.week`
 const MAX_AGE: u64 = 5 * 60;
@@ -47,8 +47,8 @@ pub async fn show(c: &mut Ctx) -> Result {
         // send_stock_icon
         None => {
             let filename = if small { "app-icon-192.png" } else { "app-icon.png" };
-            let data = asset_bytes(&format!("logos/{filename}"))?;
-            Ok(c.send_data(data, SendOptions { filename: Some(filename.into()), ..SendOptions::inline("image/png") }))
+            let path = asset_file(&format!("logos/{filename}"))?;
+            c.send_file(path, SendOptions::inline("image/png"))
         }
     }
 }

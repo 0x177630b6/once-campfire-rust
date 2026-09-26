@@ -151,7 +151,7 @@ pub(crate) async fn set_message(c: &mut Ctx, room: &Room) -> Result<Message> {
 /// `head :forbidden unless Current.user.can_administer?(@message)`
 pub(crate) fn ensure_can_administer(c: &mut Ctx, message: &Message) -> Result<()> {
     if !require_current_user(c)?.can_administer(Some(message.creator_id), false) {
-        return halt(page::before_action_head(StatusCode::FORBIDDEN));
+        return halt(concerns::head(StatusCode::FORBIDDEN));
     }
     Ok(())
 }
@@ -248,7 +248,7 @@ pub(crate) async fn create_message(c: &Ctx, room: &Room, attributes: MessagePara
 
 /// Assigning a String to a rich text attribute stores the canonicalized content
 /// (`ActionText::Content.new(body, canonicalize: true).to_html`).
-fn canonical_body(conn: &campfire_db::Connection, app: &App, body: &str, request_host: Option<String>) -> String {
+pub(crate) fn canonical_body(conn: &campfire_db::Connection, app: &App, body: &str, request_host: Option<String>) -> String {
     let resolver = DbResolver { conn, secrets: &app.secrets, now: app.clock.now() };
     let ctx = resolver.render_context(request_host);
     Content::load(body, &ctx).map(|content| content.to_html()).unwrap_or_else(|_| body.to_string())
@@ -256,7 +256,7 @@ fn canonical_body(conn: &campfire_db::Connection, app: &App, body: &str, request
 
 /// `Message#process_attachment`: analyze the blob now (its `after_update` touches the message),
 /// then generate the video preview or the `:thumb` representation.
-async fn process_attachment(app: &App, blob: campfire_storage::Blob) -> Result<()> {
+pub(crate) async fn process_attachment(app: &App, blob: campfire_storage::Blob) -> Result<()> {
     let storage = app.storage.clone();
     let blob = app
         .db
