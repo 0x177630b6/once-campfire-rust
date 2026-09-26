@@ -468,3 +468,15 @@ findings that changed this plan:
   parts are custom work either way.
 - **Phasing.** I replaced the layered phases with vertical slices, starting with an end-to-end risk
   slice that includes rollback, and dropped live shadowing in favor of replay against snapshots.
+
+## After parity: benchmark, then optimize
+
+Once the parity suite is green with an empty allowlist:
+
+1. **Benchmark both apps** on the same seed and hardware. Measure request latency (p50, p99) and
+   throughput per route family, Action Cable fan-out (messages per second to N connected
+   clients, end-to-end delivery latency), memory at idle and under load, cold start, upload and
+   variant processing, and search. Reuse `reference/test/performance/chatter.js` for the load
+   shape.
+2. **Performance round** on the Rust app, guided by profiles (flamegraphs, allocation counts).
+   Every optimization has to keep the full parity suite green.
