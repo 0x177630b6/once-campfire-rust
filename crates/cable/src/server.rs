@@ -35,10 +35,12 @@ pub struct Config {
     /// `config.assume_ssl` (on unless `DISABLE_SSL`): `ActionDispatch::AssumeSSL` makes every
     /// request look like HTTPS, so the same-origin check compares against `https://<host>`.
     pub assume_ssl: bool,
-    /// Messages buffered per broadcasting before a slow subscriber counts as lagging.
+    /// Messages buffered per broadcasting (shared by its subscribers) before a slow subscriber
+    /// counts as lagging and is disconnected with `reconnect: true`.
     pub stream_capacity: usize,
-    /// Frames buffered per connection between the streams and the socket.
-    pub outbound_capacity: usize,
+    /// Frames coalesced into one socket write at most, which also bounds what a connection
+    /// buffers beyond the socket.
+    pub max_write_batch: usize,
     /// How long to wait for the client's close frame after we close.
     pub close_timeout: Duration,
 }
@@ -51,7 +53,7 @@ impl Default for Config {
             allow_same_origin_as_host: true,
             assume_ssl: true,
             stream_capacity: 256,
-            outbound_capacity: 256,
+            max_write_batch: 64,
             close_timeout: Duration::from_secs(5),
         }
     }

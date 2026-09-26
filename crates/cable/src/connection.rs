@@ -1,8 +1,9 @@
 //! `ActionCable::Connection::Base` and `Connection::Subscriptions`: one task per socket.
 //!
-//! Commands are handled one at a time in arrival order. Stream deliveries arrive from per-stream
-//! forwarder tasks through a bounded queue, so a client that stops reading eventually makes its
-//! streams lag, which closes the connection with `reconnect: true`.
+//! Commands are handled one at a time in arrival order. The connection reads its streams straight
+//! from the hub's per-broadcasting ring buffers, so there's no per-connection queue: a client
+//! that stops reading falls behind by the ring's capacity, which closes the connection with
+//! `reconnect: true`. Frames that are ready together go out in one socket write.
 //!
 //! The socket's read half lives in a task of its own that hands incoming messages over in order,
 //! so it's only polled when the socket is readable, not every time a delivery wakes the
@@ -10,24 +11,17 @@
 use std::sync::Arc;
 
 use axum::extract::ws::{CloseFrame, Message, WebSocket};
-use futures_util::stream::{SplitSink, SplitStream};
-use futures_util::{SinkExt, StreamExt};
+use futures_util::stream::{AbortRegistration, Abortable, SelectAll, SplitSink, SplitStream};
+use futures_util::{FutureExt, SinkExt, StreamExt};
 use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use crate::channel::{Channel, Params, Subscription};
 use crate::protocol::{self, DisconnectReason};
-use crate::pubsub::{Frame, RecvError};
+use crate::pubsub::{Deliveries, Frame, Subscriber};
 use crate::server::{ConnectRequest, Identified, internal_channel};
 use crate::{Server, json};
-
-pub(crate) enum Control {
-    /// A stream subscriber fell behind.
-    Lagged,
-    /// A message on this connection's internal channel (`action_cable/<identifier>`).
-    Internal(Frame),
-}
 
 struct Entry<U: Send + Sync + 'static> {
     channel: Box<dyn Channel<U>>,
@@ -40,23 +34,26 @@ struct Close {
     reconnect: Value,
 }
 
+impl Close {
+    /// A stream fell behind (`reason: nil`, as `Connection::Base#close` without one).
+    fn lagged() -> Self {
+        Close { reason: None, reconnect: Value::Bool(true) }
+    }
+}
+
 struct Connection<U: Send + Sync + 'static> {
     server: Server<U>,
     user: Arc<U>,
     /// Keyed by the raw identifier string, in subscription order (a Ruby hash).
     subscriptions: Vec<(String, Entry<U>)>,
     pending: Vec<Frame>,
-    outbound: mpsc::Sender<Frame>,
-    control: mpsc::Sender<Control>,
+    /// Streams the last command's callbacks started, to read from once its frames are queued.
+    started: Vec<(Subscriber, AbortRegistration)>,
 }
 
 /// Incoming messages buffered between the reader task and the connection. A client that sends
 /// commands faster than they're handled is held back by TCP once this fills.
 const INCOMING_CAPACITY: usize = 16;
-
-/// Frames coalesced into one socket write at most. Queued frames are written together (one
-/// `write` for several frames) rather than one syscall each.
-const MAX_WRITE_BATCH: usize = 64;
 
 type Sink = SplitSink<WebSocket, Message>;
 
@@ -76,17 +73,20 @@ pub(crate) async fn run<U: Identified + Send + Sync + 'static>(server: Server<U>
         return;
     };
 
-    let (outbound, mut outbound_rx) = mpsc::channel::<Frame>(config.outbound_capacity);
-    let (control, mut control_rx) = mpsc::channel::<Control>(16);
+    // The internal channel carries raw payloads; every subscription stream carries frames.
+    let mut internal = SelectAll::new();
     let identifier = user.connection_identifier();
-    let internal = (!identifier.is_empty()).then(|| spawn_internal_subscriber(&server, &identifier, control.clone()));
+    if !identifier.is_empty() {
+        internal.push(server.hub().subscribe(&internal_channel(&identifier), None).deliveries());
+    }
+    let mut deliveries = SelectAll::<Deliveries>::new();
 
     let mut heartbeat = server.heartbeat();
     heartbeat.mark_unchanged();
     let mut restarts = server.restarts();
 
     let mut connection =
-        Connection { server, user: Arc::new(user), subscriptions: Vec::new(), pending: Vec::new(), outbound, control };
+        Connection { server, user: Arc::new(user), subscriptions: Vec::new(), pending: Vec::new(), started: Vec::new() };
 
     let mut close: Option<Close> = None;
     if sink.send(Message::Text(protocol::welcome().into())).await.is_err() {
@@ -103,24 +103,29 @@ pub(crate) async fn run<U: Identified + Send + Sync + 'static>(server: Server<U>
                 Some(Message::Ping(_) | Message::Pong(_)) => {}
                 Some(Message::Close(_)) | None => break,
             },
-            Some(frame) = outbound_rx.recv() => {
-                // Whatever else is already queued goes out in the same write.
-                connection.pending.push(frame);
-                while connection.pending.len() < MAX_WRITE_BATCH
-                    && let Ok(frame) = outbound_rx.try_recv()
-                {
-                    connection.pending.push(frame);
+            Some(delivery) = deliveries.next() => {
+                // Whatever else is ready already goes out in the same write.
+                let mut delivery = Some(delivery);
+                while let Some(result) = delivery.take() {
+                    match result {
+                        Ok(frame) => connection.pending.push(frame),
+                        Err(_) => {
+                            close = Some(Close::lagged());
+                            break;
+                        }
+                    }
+                    if connection.pending.len() < config.max_write_batch {
+                        delivery = deliveries.next().now_or_never().flatten();
+                    }
                 }
             }
-            Some(control) = control_rx.recv() => {
-                close = Some(match control {
-                    Control::Lagged => Close { reason: None, reconnect: Value::Bool(true) },
-                    Control::Internal(message) => match process_internal_message(&message) {
-                        Some(close) => close,
-                        None => continue,
-                    },
-                });
-            }
+            Some(message) = internal.next() => match message {
+                Ok(message) => match process_internal_message(&message) {
+                    Some(remote) => close = Some(remote),
+                    None => continue,
+                },
+                Err(_) => continue,
+            },
             Ok(()) = heartbeat.changed() => {
                 let now = *heartbeat.borrow_and_update();
                 connection.pending.push(protocol::ping(now).into());
@@ -130,6 +135,7 @@ pub(crate) async fn run<U: Identified + Send + Sync + 'static>(server: Server<U>
             }
         }
 
+        deliveries.extend(connection.started.drain(..).map(|(subscriber, registration)| Abortable::new(subscriber.deliveries(), registration)));
         if !connection.flush(&mut sink).await {
             break;
         }
@@ -141,9 +147,6 @@ pub(crate) async fn run<U: Identified + Send + Sync + 'static>(server: Server<U>
     }
 
     reader.abort();
-    if let Some(internal) = internal {
-        internal.abort();
-    }
     connection.handle_close().await;
 }
 
@@ -153,27 +156,6 @@ fn process_internal_message(message: &str) -> Option<Close> {
     (message.get("type")? == "disconnect").then(|| Close {
         reason: Some(DisconnectReason::Remote),
         reconnect: message.get("reconnect").cloned().unwrap_or(Value::Bool(true)),
-    })
-}
-
-fn spawn_internal_subscriber<U: Send + Sync + 'static>(
-    server: &Server<U>,
-    identifier: &str,
-    control: mpsc::Sender<Control>,
-) -> tokio::task::JoinHandle<()> {
-    let mut subscriber = server.hub().subscribe(&internal_channel(identifier), None);
-    tokio::spawn(async move {
-        loop {
-            match subscriber.recv().await {
-                Ok(message) => {
-                    if control.send(Control::Internal(message)).await.is_err() {
-                        break;
-                    }
-                }
-                Err(RecvError::Lagged) => continue,
-                Err(RecvError::Closed) => break,
-            }
-        }
     })
 }
 
@@ -265,8 +247,7 @@ impl<U: Send + Sync + 'static> Connection<U> {
             rejected: false,
             unsubscribed: false,
             transmissions: Vec::new(),
-            outbound: self.outbound.clone(),
-            control: self.control.clone(),
+            started: Vec::new(),
         };
         self.subscriptions.push((identifier.to_string(), Entry { channel, sub }));
         self.subscribe_to_channel(identifier).await;
@@ -278,6 +259,7 @@ impl<U: Send + Sync + 'static> Connection<U> {
         let Entry { channel, sub } = &mut self.subscriptions[index].1;
         let result = channel.subscribed(sub).await;
         self.pending.extend(sub.transmissions.drain(..).map(Frame::from));
+        self.started.append(&mut sub.started);
 
         if let Err(error) = result {
             return tracing::error!(identifier, error = error.0, "Could not execute command");
@@ -307,6 +289,7 @@ impl<U: Send + Sync + 'static> Connection<U> {
         }
         sub.stop_all_streams();
         self.pending.extend(sub.transmissions.drain(..).map(Frame::from));
+        self.started.append(&mut sub.started);
     }
 
     /// `Subscriptions#perform_action` → `Channel::Base#perform_action`.
@@ -328,6 +311,7 @@ impl<U: Send + Sync + 'static> Connection<U> {
         let Entry { channel, sub } = &mut self.subscriptions[index].1;
         let result = channel.perform(&action, &payload, sub).await;
         self.pending.extend(sub.transmissions.drain(..).map(Frame::from));
+        self.started.append(&mut sub.started);
         match result {
             Ok(true) => {}
             Ok(false) => tracing::error!(action, "Unable to process"),

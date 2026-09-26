@@ -3,11 +3,9 @@ use std::sync::Arc;
 
 use serde::Serialize;
 use serde_json::{Map, Value};
-use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
+use futures_util::stream::{AbortHandle, AbortRegistration};
 
-use crate::connection::Control;
-use crate::pubsub::{Frame, RecvError};
+use crate::pubsub::Subscriber;
 use crate::{json, naming, protocol, Server};
 
 pub type Params = Map<String, Value>;
@@ -70,12 +68,13 @@ pub struct Subscription<U: Send + Sync + 'static> {
     pub(crate) encoded_identifier: Arc<str>,
     pub(crate) params: Params,
     pub(crate) current_user: Arc<U>,
-    pub(crate) streams: Vec<(String, JoinHandle<()>)>,
+    pub(crate) streams: Vec<(String, AbortHandle)>,
+    /// Streams started by the last callback, for the connection to start reading once that
+    /// callback's own frames (transmissions, the confirmation) are queued ahead of them.
+    pub(crate) started: Vec<(Subscriber, AbortRegistration)>,
     pub(crate) rejected: bool,
     pub(crate) unsubscribed: bool,
     pub(crate) transmissions: Vec<String>,
-    pub(crate) outbound: mpsc::Sender<Frame>,
-    pub(crate) control: mpsc::Sender<Control>,
 }
 
 impl<U: Send + Sync + 'static> Subscription<U> {
@@ -122,26 +121,10 @@ impl<U: Send + Sync + 'static> Subscription<U> {
         }
         let broadcasting = broadcasting.into();
         // The hub wraps each broadcast for this identifier once, for every subscriber sharing it.
-        let mut subscriber = self.server.hub().subscribe(&broadcasting, Some(self.encoded_identifier.clone()));
-        let outbound = self.outbound.clone();
-        let control = self.control.clone();
-        let forwarder = tokio::spawn(async move {
-            loop {
-                match subscriber.recv().await {
-                    Ok(frame) => {
-                        if outbound.send(frame).await.is_err() {
-                            break;
-                        }
-                    }
-                    Err(RecvError::Lagged) => {
-                        let _ = control.send(Control::Lagged).await;
-                        break;
-                    }
-                    Err(RecvError::Closed) => break,
-                }
-            }
-        });
-        self.streams.push((broadcasting, forwarder));
+        let subscriber = self.server.hub().subscribe(&broadcasting, Some(self.encoded_identifier.clone()));
+        let (handle, registration) = AbortHandle::new_pair();
+        self.started.push((subscriber, registration));
+        self.streams.push((broadcasting, handle));
     }
 
     pub fn stream_for(&mut self, broadcastables: &[&str]) {
@@ -150,19 +133,20 @@ impl<U: Send + Sync + 'static> Subscription<U> {
     }
 
     pub fn stop_stream_from(&mut self, broadcasting: &str) {
-        self.streams.retain(|(name, forwarder)| {
+        self.streams.retain(|(name, handle)| {
             let keep = name != broadcasting;
             if !keep {
-                forwarder.abort();
+                handle.abort();
             }
             keep
         });
     }
 
     pub fn stop_all_streams(&mut self) {
-        for (_, forwarder) in self.streams.drain(..) {
-            forwarder.abort();
+        for (_, handle) in self.streams.drain(..) {
+            handle.abort();
         }
+        self.started.clear();
     }
 
     /// `stream_or_reject_for`.

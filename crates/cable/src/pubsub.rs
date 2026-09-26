@@ -10,12 +10,17 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use axum::extract::ws::Utf8Bytes;
+use futures_util::stream::{Abortable, BoxStream, StreamExt};
 use tokio::sync::broadcast;
 
 use crate::protocol;
 
 /// A frame ready for the socket, shared by every subscriber that receives it.
 pub type Frame = Utf8Bytes;
+
+/// One subscription's stream of frames, as a connection reads it: it ends when the stream is
+/// stopped.
+pub(crate) type Deliveries = Abortable<BoxStream<'static, Result<Frame, RecvError>>>;
 
 pub struct Hub {
     capacity: usize,
@@ -121,6 +126,18 @@ impl Subscriber {
             Err(broadcast::error::RecvError::Lagged(_)) => Err(RecvError::Lagged),
             Err(broadcast::error::RecvError::Closed) => Err(RecvError::Closed),
         }
+    }
+
+    /// The frames as a stream, which ends if the hub goes away. It holds the subscription until
+    /// it's dropped.
+    pub fn deliveries(self) -> BoxStream<'static, Result<Frame, RecvError>> {
+        futures_util::stream::unfold(self, |mut subscriber| async move {
+            match subscriber.recv().await {
+                Err(RecvError::Closed) => None,
+                result => Some((result, subscriber)),
+            }
+        })
+        .boxed()
     }
 }
 

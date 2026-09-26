@@ -250,7 +250,7 @@ async fn restart_closes_with_server_restart() {
 
 #[tokio::test]
 async fn lagging_subscribers_are_disconnected_with_reconnect() {
-    let app = start(Config { stream_capacity: 1, outbound_capacity: 1, ..test_config() }).await;
+    let app = start(Config { stream_capacity: 1, max_write_batch: 1, ..test_config() }).await;
     let mut client = app.connect(1).await;
     client.next_text().await;
     let room = room(1);
