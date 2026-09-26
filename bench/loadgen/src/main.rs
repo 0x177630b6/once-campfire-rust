@@ -8,6 +8,12 @@
 //!   loadgen cable  --base URL --cookie C --room ID --csrf T --clients N [--streams a,b,c]
 //!                  [--latency-msgs 30 --interval-ms 200 --tput-secs 15 --posters 4]
 //!   loadgen upload --base URL --cookie C --room ID --csrf T --file PATH [--reps 5]
+//!   loadgen fetch  --base URL --cookie C --path P --out FILE     -> saves an uncompressed body
+//!   loadgen gzip   --file F [--iters 200]                         -> CPU per compression, by backend/level
+//!
+//! `http` also takes `--gzip 0` (no Accept-Encoding), `--requests N` (stop after N requests,
+//! for allocation counting) and `--trace FILE` (each request's start, latency and status). `cable` prints `PHASE <name> <unix ms>` lines on stderr so memory
+//! samples can be attributed to its phases.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -241,6 +247,11 @@ async fn http_load(a: &Args) -> Res<Value> {
     let duration = Duration::from_secs_f64(a.num("duration", 10.0));
     let post_room = a.opt("post-room");
     let csrf = a.opt("csrf").unwrap_or_default();
+    let gzip = a.num("gzip", 1u8) != 0;
+    let limit: u64 = a.num("requests", u64::MAX);
+    let trace_path = a.opt("trace");
+    let trace = Arc::new(Mutex::new(Vec::<(u128, u64, u16)>::new()));
+    let issued = Arc::new(AtomicU64::new(0));
 
     let hist_all = Arc::new(Mutex::new(hist()));
     let statuses = Arc::new(Mutex::new(HashMap::<u16, u64>::new()));
@@ -251,13 +262,16 @@ async fn http_load(a: &Args) -> Res<Value> {
     let mut tasks = Vec::new();
     for _ in 0..conc {
         let (addr, cookie, path, post_room, csrf) = (addr.clone(), cookie.clone(), path.clone(), post_room.clone(), csrf.clone());
-        let (hist_all, statuses, errors, bytes_total) = (hist_all.clone(), statuses.clone(), errors.clone(), bytes_total.clone());
+        let (hist_all, statuses, errors, bytes_total, issued, trace) =
+            (hist_all.clone(), statuses.clone(), errors.clone(), bytes_total.clone(), issued.clone(), trace.clone());
+        let tracing = trace_path.is_some();
         tasks.push(tokio::spawn(async move {
             let mut h = hist();
             let mut local = HashMap::<u16, u64>::new();
             let mut conn: Option<SendRequest<Full<Bytes>>> = None;
             let mut i = 0u64;
-            while Instant::now() < deadline {
+            let mut local_trace = Vec::new();
+            while Instant::now() < deadline && issued.fetch_add(1, Ordering::Relaxed) < limit {
                 if conn.is_none() {
                     match connect(&addr).await {
                         Ok(c) => conn = Some(c),
@@ -272,15 +286,27 @@ async fn http_load(a: &Args) -> Res<Value> {
                     Some(room) => {
                         i += 1;
                         let (mut h, b) = message_request(&cookie, &csrf, &format!("bench write {i}"));
-                        h.push(("accept-encoding", "gzip".into()));
+                        if gzip {
+                            h.push(("accept-encoding", "gzip".into()));
+                        }
                         ("POST", format!("/rooms/{room}/messages"), h, b)
                     }
-                    None => ("GET", path.clone(), vec![("cookie", cookie.clone()), ("accept-encoding", "gzip".into())], Bytes::new()),
+                    None => {
+                        let mut h = vec![("cookie", cookie.clone())];
+                        if gzip {
+                            h.push(("accept-encoding", "gzip".into()));
+                        }
+                        ("GET", path.clone(), h, Bytes::new())
+                    }
                 };
                 let t0 = Instant::now();
+                let wall0 = if tracing { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros() } else { 0 };
                 match send(conn.as_mut().unwrap(), &addr, method, &p, &headers, body).await {
                     Ok(r) => {
                         h.record(t0.elapsed().as_micros() as u64).ok();
+                        if tracing {
+                            local_trace.push((wall0, t0.elapsed().as_micros() as u64, r.status));
+                        }
                         *local.entry(r.status).or_default() += 1;
                         bytes_total.fetch_add(r.body.len() as u64, Ordering::Relaxed);
                         if r.headers.get("connection").map(|v| v == "close").unwrap_or(false) {
@@ -294,6 +320,7 @@ async fn http_load(a: &Args) -> Res<Value> {
                 }
             }
             hist_all.lock().unwrap().add(&h).unwrap();
+            trace.lock().unwrap().extend(local_trace);
             let mut s = statuses.lock().unwrap();
             for (k, v) in local {
                 *s.entry(k).or_default() += v;
@@ -304,12 +331,20 @@ async fn http_load(a: &Args) -> Res<Value> {
         t.await?;
     }
     let elapsed = start.elapsed().as_secs_f64();
+    if let Some(path) = &trace_path {
+        // One line per request: start (unix µs), latency (µs), status.
+        let mut t = trace.lock().unwrap();
+        t.sort();
+        let lines: String = t.iter().map(|(s, l, st)| format!("{s} {l} {st}\n")).collect();
+        std::fs::write(path, lines)?;
+    }
     let h = hist_all.lock().unwrap();
     let st = statuses.lock().unwrap();
     let ok: u64 = st.iter().filter(|(k, _)| **k < 400).map(|(_, v)| v).sum();
     Ok(json!({
         "path": if let Some(r) = &post_room { format!("POST /rooms/{r}/messages") } else { path },
         "conc": conc,
+        "gzip": gzip,
         "secs": (elapsed * 100.0).round() / 100.0,
         "rps": ((h.len() as f64 / elapsed) * 10.0).round() / 10.0,
         "ok": ok,
@@ -445,6 +480,11 @@ async fn wait_drain(delivery: &Delivery, seqs: &[u64], clients: usize, timeout: 
     }
 }
 
+fn phase(name: &str) {
+    let ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis();
+    eprintln!("PHASE {name} {ms}");
+}
+
 fn fanout_stats(delivery: &Delivery, seqs: &[u64], clients: usize) -> (Histogram<u64>, usize, Option<Instant>) {
     let sent = delivery.sent.lock().unwrap();
     let got = delivery.got.lock().unwrap();
@@ -498,6 +538,7 @@ async fn cable(a: &Args) -> Res<Value> {
     let failed = Arc::new(AtomicUsize::new(0));
 
     // Connect with bounded parallelism (50 handshakes in flight).
+    phase("connect");
     let connect_start = Instant::now();
     let gate = Arc::new(tokio::sync::Semaphore::new(50));
     let mut handles = Vec::new();
@@ -526,7 +567,9 @@ async fn cable(a: &Args) -> Res<Value> {
     }
     let connect_secs = connect_start.elapsed().as_secs_f64();
     let ready = confirmed.load(Ordering::Relaxed);
+    phase("connected");
     tokio::time::sleep(Duration::from_secs(1)).await;
+    phase("paced");
 
     // Phase 1: paced messages, one at a time (open loop at `interval`), for delivery latency.
     let mut poster = None;
@@ -546,6 +589,7 @@ async fn cable(a: &Args) -> Res<Value> {
         }
     }
     wait_drain(&delivery, &seqs, ready, Duration::from_secs(20)).await;
+    phase("paced_drained");
     let (all_h, complete, _) = fanout_stats(&delivery, &seqs, ready);
     let client_h = std::mem::replace(&mut *delivery.per_client.lock().unwrap(), hist());
     let latency = json!({
@@ -559,6 +603,7 @@ async fn cable(a: &Args) -> Res<Value> {
     // Phase 2: closed-loop posters for tput_secs, then drain; delivered messages/sec.
     let receipts_before = delivery.receipts.load(Ordering::Relaxed);
     let next = Arc::new(AtomicU64::new(seq + 1));
+    phase("saturated");
     let tput_start = Instant::now();
     let tput_deadline = tput_start + Duration::from_secs_f64(tput_secs);
     let mut ptasks = Vec::new();
@@ -586,7 +631,9 @@ async fn cable(a: &Args) -> Res<Value> {
         tpost_h.add(&h).ok();
     }
     let posting_secs = tput_start.elapsed().as_secs_f64();
+    phase("saturated_posted");
     wait_drain(&delivery, &tseqs, ready, Duration::from_secs(60)).await;
+    phase("saturated_drained");
     let (tall_h, tcomplete, last) = fanout_stats(&delivery, &tseqs, ready);
     let span = last.map(|l| l.duration_since(tput_start).as_secs_f64()).unwrap_or(posting_secs).max(posting_secs);
     let tclient_h = delivery.per_client.lock().unwrap().clone();
@@ -604,6 +651,11 @@ async fn cable(a: &Args) -> Res<Value> {
         "all_clients": summary(&tall_h),
     });
 
+    let hold: f64 = a.num("hold-secs", 0.0);
+    if hold > 0.0 {
+        tokio::time::sleep(Duration::from_secs_f64(hold)).await;
+    }
+    phase("done");
     stop.store(true, Ordering::Relaxed);
     for h in handles {
         h.abort();
@@ -697,6 +749,56 @@ async fn upload(a: &Args) -> Res<Value> {
     }))
 }
 
+// ---------------------------------------------------------------------------------------------
+// Compression cost
+
+async fn fetch(a: &Args) -> Res<Value> {
+    let addr = host_port(&a.get("base"));
+    let path = a.get("path");
+    let r = one_shot(&addr, "GET", &path, &[("cookie", a.opt("cookie").unwrap_or_default())], Bytes::new()).await?;
+    std::fs::write(a.get("out"), &r.body)?;
+    Ok(json!({"status": r.status, "bytes": r.body.len(), "content_encoding": r.headers.get("content-encoding").map(|v| v.to_str().unwrap_or("").to_string())}))
+}
+
+/// CPU per compression of one body. `miniz_oxide` is the app's backend (flate2's default
+/// `rust_backend`); the app's `Rack::Deflater` port writes the body as one chunk with a sync flush
+/// and then finishes, at `Compression::default()` (6). zlib-rs is flate2's optional backend.
+fn gzip_cost(a: &Args) -> Res<Value> {
+    use std::io::Write;
+    let data = std::fs::read(a.get("file"))?;
+    let iters: u32 = a.num("iters", 200);
+    let time = |f: &dyn Fn() -> usize| {
+        let mut out = 0;
+        for _ in 0..3 {
+            out = f();
+        }
+        let mut samples: Vec<f64> = (0..iters)
+            .map(|_| {
+                let t0 = Instant::now();
+                out = f();
+                t0.elapsed().as_secs_f64() * 1e6
+            })
+            .collect();
+        samples.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        json!({"median_us": samples[samples.len() / 2].round(), "min_us": samples[0].round(), "out_bytes": out})
+    };
+    let mut results = serde_json::Map::new();
+    for level in [1u8, 4, 6, 9] {
+        results.insert(format!("miniz_oxide_l{level}"), time(&|| miniz_oxide::deflate::compress_to_vec(&data, level).len()));
+        results.insert(
+            format!("zlib_rs_l{level}"),
+            time(&|| {
+                // The app's exact call sequence: one write, sync flush, finish.
+                let mut e = flate2::GzBuilder::new().mtime(0).operating_system(3).write(Vec::new(), flate2::Compression::new(level as u32));
+                e.write_all(&data).unwrap();
+                e.flush().unwrap();
+                e.finish().unwrap().len()
+            }),
+        );
+    }
+    Ok(json!({"file": a.get("file"), "bytes": data.len(), "iters": iters, "results": results}))
+}
+
 #[tokio::main]
 async fn main() {
     let raw: Vec<String> = std::env::args().collect();
@@ -708,7 +810,9 @@ async fn main() {
         "http" => http_load(&a).await,
         "cable" => cable(&a).await,
         "upload" => upload(&a).await,
-        _ => Err("usage: loadgen login|scrape|http|cable|upload --base URL ...".into()),
+        "fetch" => fetch(&a).await,
+        "gzip" => gzip_cost(&a),
+        _ => Err("usage: loadgen login|scrape|http|cable|upload|fetch|gzip --base URL ...".into()),
     };
     match out {
         Ok(v) => println!("{v}"),

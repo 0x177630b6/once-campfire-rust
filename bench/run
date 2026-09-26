@@ -35,10 +35,10 @@ CABLE_TPUT_SECS=${CABLE_TPUT_SECS:-15}
 CABLE_POSTERS=${CABLE_POSTERS:-4}
 UPLOAD_REPS=${UPLOAD_REPS:-5}
 PORT=${PORT:-4390}
-# The Rust app deadlocks when concurrent message writes exhaust its reader pool (sized by
-# RAILS_MAX_THREADS; the writer thread takes a reader for rich text inside its transaction), so it
-# gets a pool larger than any concurrency here. Set RUST_EXTRA_ENV="" to measure it as configured.
-RUST_EXTRA_ENV=${RUST_EXTRA_ENV-RAILS_MAX_THREADS=128}
+# Extra environment for the Rust container only (space-separated K=V). The preliminary run
+# (results/prelim-20260926) used RAILS_MAX_THREADS=128 to dodge a writer/reader-pool deadlock that
+# 1c22a94 fixed; the app now runs as configured.
+RUST_EXTRA_ENV=${RUST_EXTRA_ENV-}
 BASE=http://127.0.0.1:$PORT
 LOADGEN=$ROOT/target/bench/release/loadgen
 

@@ -326,11 +326,13 @@ name = "loadgen"
 version = "0.0.0"
 dependencies = [
  "bytes",
+ "flate2",
  "futures-util",
  "hdrhistogram",
  "http-body-util",
  "hyper",
  "hyper-util",
+ "miniz_oxide",
  "regex",
  "serde_json",
  "tokio",
