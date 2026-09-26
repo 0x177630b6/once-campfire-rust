@@ -1,15 +1,15 @@
 //! `Users::ProfilesController` (reference/app/controllers/users/profiles_controller.rb): the
 //! signed-in user's own profile.
 
-use askama::Template;
 use campfire_db::UserChanges;
 use campfire_kit::{Ctx, Error, Redirect, Result, StatusCode, format, permit_keys};
 use campfire_views::users;
 
 use crate::app::AppCtx;
+use crate::controllers::presenters::page::framed_page;
 use crate::concerns::{self, Before};
 use crate::controllers::presenters_a::attachments::{self, Assignment, Record};
-use crate::controllers::presenters_a::{self, string_attribute, view_context};
+use crate::controllers::presenters_a::{self, string_attribute};
 
 /// `set_user` (`Current.user`); memberships partitioned into direct and shared rooms.
 pub async fn show(c: &mut Ctx) -> Result {
@@ -30,8 +30,13 @@ pub async fn show(c: &mut Ctx) -> Result {
             .map_err(Error::internal)?
     };
     let user = presenters_a::user_summary(&secrets, &user);
-    view_context::page(c, StatusCode::OK, |ctx| {
-        users::ProfileShow { ctx, user, avatar_attached, transfer_id, shared_memberships, direct_memberships }.render()
+    framed_page!(c, StatusCode::OK, |ctx| users::ProfileShow {
+        ctx,
+        user: user.clone(),
+        avatar_attached,
+        transfer_id: transfer_id.clone(),
+        shared_memberships: shared_memberships.clone(),
+        direct_memberships: direct_memberships.clone(),
     })
     .await
 }

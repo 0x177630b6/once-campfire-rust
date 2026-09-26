@@ -166,6 +166,36 @@ pub struct SidebarDirect {
     pub updated_at_epoch: String,
     /// `room.users.without(membership.user).presence || [ membership.user ]`, in that order.
     pub members: Vec<UserSummary>,
+    /// The membership's id and `updated_at`: the partial is `cache membership`.
+    pub membership_id: i64,
+    pub membership_updated_at: jiff::Timestamp,
+}
+
+/// `users/sidebars/rooms/_direct` for `membership`, whose body is `cache membership` (and which
+/// `users/sidebars/show` renders with `cached: true`): the first rendering of a membership
+/// version is what later renders reuse.
+pub fn direct_room(ctx: &ViewContext, membership: &SidebarDirect) -> String {
+    crate::fragment_cache::fetch(
+        || {
+            format!(
+                "views/users/sidebars/rooms/_direct:{}/{}",
+                direct_room_digest(),
+                crate::fragment_cache::cache_key_with_version("memberships", membership.membership_id, membership.membership_updated_at)
+            )
+        },
+        || SidebarDirectPartial { ctx, membership: membership.clone() }.render().expect("users/sidebars/rooms/_direct renders"),
+    )
+}
+
+/// [`direct_room`] where a template renders the partial.
+pub fn cached_direct_room(ctx: &ViewContext, membership: &SidebarDirect) -> h::Html {
+    h::raw(direct_room(ctx, membership))
+}
+
+fn direct_room_digest() -> &'static str {
+    static DIGEST: std::sync::LazyLock<String> =
+        std::sync::LazyLock::new(|| crate::fragment_cache::digest(&[include_str!("../../templates/users/sidebars/rooms/_direct.html")]));
+    &DIGEST
 }
 
 impl SidebarDirect {

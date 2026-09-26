@@ -175,7 +175,7 @@ impl<'a> Segment<'a> {
             Mode::AlphaNumeric => (2, 11, 6),
             Mode::Byte => (1, 8, 0),
         };
-        (length / chunk) * bits + if length % chunk == 0 { 0 } else { extra }
+        (length / chunk) * bits + if length.is_multiple_of(chunk) { 0 } else { extra }
     }
 
     fn write(&self, buffer: &mut BitBuffer) {
@@ -257,7 +257,7 @@ impl BitBuffer {
     }
 
     fn pad_until(&mut self, preferred_size: usize) {
-        while self.length % 8 != 0 {
+        while !self.length.is_multiple_of(8) {
             self.put_bit(false);
         }
         while self.length < preferred_size {
@@ -432,14 +432,14 @@ fn bch_version(data: u32) -> u32 {
 /// `QRMASKCOMPUTATIONS`
 fn mask(pattern: u32, i: usize, j: usize) -> bool {
     match pattern {
-        0 => (i + j) % 2 == 0,
-        1 => i % 2 == 0,
-        2 => j % 3 == 0,
-        3 => (i + j) % 3 == 0,
-        4 => (i / 2 + j / 3) % 2 == 0,
-        5 => (i * j) % 2 + (i * j) % 3 == 0,
-        6 => ((i * j) % 2 + (i * j) % 3) % 2 == 0,
-        7 => ((i * j) % 3 + (i + j) % 2) % 2 == 0,
+        0 => (i + j).is_multiple_of(2),
+        1 => i.is_multiple_of(2),
+        2 => j.is_multiple_of(3),
+        3 => (i + j).is_multiple_of(3),
+        4 => (i / 2 + j / 3).is_multiple_of(2),
+        5 => ((i * j) % 2 + (i * j) % 3) == 0,
+        6 => ((i * j) % 2 + (i * j) % 3).is_multiple_of(2),
+        7 => ((i * j) % 3 + (i + j) % 2).is_multiple_of(2),
         _ => unreachable!(),
     }
 }
@@ -533,9 +533,11 @@ fn place_position_adjust_pattern(grid: &mut Grid, version: usize) {
 
 fn place_timing_pattern(grid: &mut Grid) {
     let count = grid.len();
-    for i in 8..count - 8 {
-        grid[i][6] = Some(i % 2 == 0);
-        grid[6][i] = Some(i % 2 == 0);
+    for (i, row) in grid.iter_mut().enumerate().take(count - 8).skip(8) {
+        row[6] = Some(i.is_multiple_of(2));
+    }
+    for (i, cell) in grid[6].iter_mut().enumerate().take(count - 8).skip(8) {
+        *cell = Some(i.is_multiple_of(2));
     }
 }
 
@@ -658,8 +660,8 @@ fn lost_points(modules: &[Vec<bool>]) -> f64 {
         cell(0) && !cell(1) && cell(2) && cell(3) && cell(4) && !cell(5) && cell(6)
     };
     for start in 0..count.saturating_sub(6) {
-        for line in 0..count {
-            if finder(&|k| modules[line][start + k]) {
+        for (line, row) in modules.iter().enumerate().take(count) {
+            if finder(&|k| row[start + k]) {
                 points += 40;
             }
             if finder(&|k| modules[start + k][line]) {

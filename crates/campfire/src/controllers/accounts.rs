@@ -6,7 +6,6 @@ pub mod join_codes;
 pub mod logos;
 pub mod users;
 
-use askama::Template;
 use campfire_db::Account;
 use campfire_kit::{Ctx, Error, Param, Redirect, Result, StatusCode, format};
 use campfire_kit::params::Permit;
@@ -14,8 +13,9 @@ use campfire_views::accounts;
 
 use super::presenters_a::attachments::{self, Assignment, Record};
 use super::presenters_a::pagination::Page;
-use super::presenters_a::{self, view_context};
+use super::presenters_a::{self};
 use crate::app::AppCtx;
+use crate::controllers::presenters::page::framed_page;
 use crate::concerns::{self, Before, current_user};
 
 /// `set_page_and_extract_portion_from users, per_page: 500`
@@ -35,17 +35,14 @@ pub async fn edit(c: &mut Ctx) -> Result {
         users.iter().map(|user| presenters_a::user_summary(&secrets, user)).partition(|user| user.administrator());
     let next_page = (!page.is_last()).then(|| page.next_param().to_string());
     let restrict_room_creation_to_administrators = account.settings().restrict_room_creation_to_administrators();
-    view_context::page(c, StatusCode::OK, |ctx| {
-        accounts::Edit {
-            ctx,
-            account_id: account.id,
-            join_code: account.join_code.clone(),
-            restrict_room_creation_to_administrators,
-            administrators,
-            members,
-            next_page,
-        }
-        .render()
+    framed_page!(c, StatusCode::OK, |ctx| accounts::Edit {
+        ctx,
+        account_id: account.id,
+        join_code: account.join_code.clone(),
+        restrict_room_creation_to_administrators,
+        administrators: administrators.clone(),
+        members: members.clone(),
+        next_page: next_page.clone(),
     })
     .await
 }

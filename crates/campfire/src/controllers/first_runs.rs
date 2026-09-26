@@ -1,14 +1,14 @@
 //! `FirstRunsController` (reference/app/controllers/first_runs_controller.rb): set up the account
 //! and its first administrator.
 
-use askama::Template;
 use campfire_db::{Account, FirstRun};
 use campfire_kit::{Ctx, Error, Result, StatusCode, format, halt};
 use campfire_views::first_runs;
 
 use super::presenters_a::attachments::{self, Assignment, Record};
-use super::presenters_a::{self, view_context};
+use super::presenters_a::{self};
 use crate::app::AppCtx;
+use crate::controllers::presenters::page::framed_page;
 use crate::concerns::{self, Before};
 
 /// `allow_unauthenticated_access`, `before_action :prevent_repeats`
@@ -16,7 +16,7 @@ pub async fn show(c: &mut Ctx) -> Result {
     concerns::before_actions(c, Before::default().allow_unauthenticated_access()).await?;
     prevent_repeats(c).await?;
     c.respond_to(&[&format::HTML])?;
-    view_context::page(c, StatusCode::OK, |ctx| first_runs::Show { ctx }.render()).await
+    framed_page!(c, StatusCode::OK, |ctx| first_runs::Show { ctx }).await
 }
 
 pub async fn create(c: &mut Ctx) -> Result {

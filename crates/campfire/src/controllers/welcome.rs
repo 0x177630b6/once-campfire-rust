@@ -1,12 +1,11 @@
 //! `WelcomeController` (reference/app/controllers/welcome_controller.rb): the root URL.
 
-use askama::Template;
 use campfire_db::Room;
 use campfire_kit::{Ctx, Error, Result, StatusCode, format};
 use campfire_views::welcome;
 
-use super::presenters_a::view_context;
 use crate::app::AppCtx;
+use crate::controllers::presenters::page::framed_page;
 use crate::concerns::{self, Before};
 
 /// To the last room visited, or a page saying there are no rooms yet.
@@ -22,5 +21,5 @@ pub async fn show(c: &mut Ctx) -> Result {
         return c.redirect_to(&location);
     }
     c.respond_to(&[&format::HTML])?;
-    view_context::page(c, StatusCode::OK, |ctx| welcome::Show { ctx, current_user_name: user.name.clone() }.render()).await
+    framed_page!(c, StatusCode::OK, |ctx| welcome::Show { ctx, current_user_name: user.name.clone() }).await
 }

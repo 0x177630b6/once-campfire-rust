@@ -391,6 +391,8 @@ impl<'a> Presenter<'a> {
             unread: membership.unread(),
             updated_at_epoch: epoch_string(room.updated_at.jiff()),
             members: members.iter().map(|user| self.user_summary(user)).collect(),
+            membership_id: membership.id,
+            membership_updated_at: membership.updated_at.jiff(),
         })
     }
 

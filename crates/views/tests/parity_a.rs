@@ -338,6 +338,8 @@ fn sidebar<'a>(name: &str, ctx: &'a campfire_views::ViewContext<'a>) -> users::S
                 unread: d["unread"].as_bool().unwrap(),
                 updated_at_epoch: d["updated_at_epoch"].as_str().unwrap().into(),
                 members: d["member_names"].as_array().unwrap().iter().map(|n| named(name, n.as_str().unwrap())).collect(),
+                membership_id: d["room_id"].as_i64().unwrap(),
+                membership_updated_at: jiff::Timestamp::UNIX_EPOCH,
             })
             .collect(),
         direct_placeholder_users: sidebar["placeholders"].as_array().unwrap().iter().map(|n| named(name, n.as_str().unwrap())).collect(),

@@ -15,6 +15,7 @@ use campfire_views::users;
 use super::presenters_a::attachments::{self, Assignment, Record};
 use super::presenters_a::{self, view_context};
 use crate::app::AppCtx;
+use crate::controllers::presenters::page::framed_page;
 use crate::concerns::{self, Before, cast_integer};
 
 /// `require_unauthenticated_access only: %i[ new create ]`, `before_action :verify_join_code`
@@ -24,7 +25,7 @@ pub async fn new(c: &mut Ctx) -> Result {
     c.respond_to(&[&format::HTML])?;
     let help_contact = c.app().db.read(presenters_a::help_contact).await.map_err(Error::internal)?;
     let join_code = account.join_code;
-    view_context::page(c, StatusCode::OK, |ctx| users::New { ctx, join_code, help_contact }.render()).await
+    framed_page!(c, StatusCode::OK, |ctx| users::New { ctx, join_code: join_code.clone(), help_contact: help_contact.clone() }).await
 }
 
 pub async fn create(c: &mut Ctx) -> Result {

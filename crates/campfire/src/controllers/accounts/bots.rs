@@ -2,34 +2,34 @@
 
 pub mod keys;
 
-use askama::Template;
 use campfire_db::{User, UserChanges};
 use campfire_kit::{Ctx, Error, Param, ParamMap, Result, StatusCode, format, permit_keys};
 use campfire_views::accounts;
 
 use crate::app::AppCtx;
+use crate::controllers::presenters::page::framed_page;
 use crate::concerns::{self, Before, cast_integer};
 use crate::controllers::presenters_a::attachments::{self, Assignment, Record};
-use crate::controllers::presenters_a::{self, view_context};
+use crate::controllers::presenters_a::{self};
 
 /// `@bots = User.active_bots.ordered`
 pub async fn index(c: &mut Ctx) -> Result {
     before(c).await?;
     c.respond_to(&[&format::HTML])?;
     let secrets = c.app().secrets.clone();
-    let bots = c
+    let bots: Vec<_> = c
         .app()
         .db
         .read(move |conn| User::active_bots_ordered(conn)?.iter().map(|bot| presenters_a::bot(conn, &secrets, bot)).collect())
         .await
         .map_err(Error::internal)?;
-    view_context::page(c, StatusCode::OK, |ctx| accounts::BotsIndex { ctx, bots }.render()).await
+    framed_page!(c, StatusCode::OK, |ctx| accounts::BotsIndex { ctx, bots: bots.clone() }).await
 }
 
 pub async fn new(c: &mut Ctx) -> Result {
     before(c).await?;
     c.respond_to(&[&format::HTML])?;
-    view_context::page(c, StatusCode::OK, |ctx| accounts::BotsNew { ctx, bot: accounts::BotForm::default() }.render()).await
+    framed_page!(c, StatusCode::OK, |ctx| accounts::BotsNew { ctx, bot: accounts::BotForm::default() }).await
 }
 
 /// `User.create_bot! bot_params`
@@ -60,7 +60,7 @@ pub async fn edit(c: &mut Ctx) -> Result {
     c.respond_to(&[&format::HTML])?;
     let (storage, base_url, bot_id) = (c.app().storage.clone(), c.url_for(""), bot.id);
     let form = c.app().db.read(move |conn| presenters_a::bot_form(conn, &storage, &base_url, &bot)).await.map_err(Error::internal)?;
-    view_context::page(c, StatusCode::OK, |ctx| accounts::BotsEdit { ctx, bot_id, bot: form }.render()).await
+    framed_page!(c, StatusCode::OK, |ctx| accounts::BotsEdit { ctx, bot_id, bot: form.clone() }).await
 }
 
 /// `@bot.update_bot! bot_params`: the webhook first, then the bot, in one transaction.

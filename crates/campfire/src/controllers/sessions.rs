@@ -5,14 +5,14 @@ pub mod transfers;
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
 
-use askama::Template;
 use campfire_db::{PushSubscription, User};
 use campfire_kit::{Ctx, Error, Result, StatusCode, format, halt};
 use campfire_views::sessions;
 use jiff::{SignedDuration, Timestamp};
 
-use super::presenters_a::{self, view_context};
+use super::presenters_a::{self};
 use crate::app::AppCtx;
+use crate::controllers::presenters::page::framed_page;
 use crate::concerns::{self, Before, current_user};
 
 /// `rate_limit to: 10, within: 3.minutes, only: :create`
@@ -83,7 +83,7 @@ async fn render_new(c: &mut Ctx, status: StatusCode) -> Result {
     c.respond_to(&[&format::HTML])?;
     let email_address = c.param_str("email_address").map(str::to_string);
     let help_contact = c.app().db.read(presenters_a::help_contact).await.map_err(Error::internal)?;
-    view_context::page(c, status, |ctx| sessions::New { ctx, email_address, help_contact }.render()).await
+    framed_page!(c, status, |ctx| sessions::New { ctx, email_address: email_address.clone(), help_contact: help_contact.clone() }).await
 }
 
 /// `Push::Subscription.destroy_by(endpoint: params[:push_subscription_endpoint], user_id: Current.user.id)`
@@ -119,11 +119,6 @@ fn increment(key: &str, now: Timestamp) -> u64 {
     let entry = limits.entry(key.to_string()).or_insert((0, now + RATE_LIMIT_WITHIN));
     entry.0 += 1;
     entry.0
-}
-
-#[cfg(test)]
-pub(crate) fn reset_rate_limits() {
-    RATE_LIMITS.lock().unwrap().clear();
 }
 
 #[cfg(test)]

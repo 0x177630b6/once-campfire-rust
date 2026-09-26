@@ -21,7 +21,7 @@
           </span>
 {% endfilter %}
         <div id="direct_rooms" contents data-controller="sorted-list" data-action="rooms-list:unread@window->sorted-list#updateItem">
-          {% for membership in direct_memberships %}{% include "users/sidebars/rooms/_direct.html" %}{% endfor %}        </div>
+          {% for membership in direct_memberships %}{{ crate::users::cached_direct_room(ctx, membership) }}{% endfor %}        </div>
 
         <div contents>
           {% for user in direct_placeholder_users %}{% include "users/sidebars/rooms/_direct_placeholder.html" %}{% endfor %}        </div>

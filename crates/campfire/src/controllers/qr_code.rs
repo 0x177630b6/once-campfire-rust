@@ -3,7 +3,7 @@
 
 mod rqrcode;
 
-use campfire_kit::{Ctx, Error, ExpiresIn, Response, Result, StatusCode};
+use campfire_kit::{Ctx, Error, ExpiresIn, Result, StatusCode};
 
 use crate::concerns::{self, Before};
 
@@ -17,8 +17,7 @@ pub async fn show(c: &mut Ctx) -> Result {
 
     // `expires_in 1.year, public: true`
     c.expires_in(31_556_952, ExpiresIn { public: true, ..ExpiresIn::default() });
-    let response = Response::with_body(StatusCode::OK, "image/svg+xml; charset=utf-8", qr_code);
-    Ok(super::presenters_a::view_context::vary_by_accept(c, response))
+    Ok(c.render_as(StatusCode::OK, "image/svg+xml; charset=utf-8", qr_code))
 }
 
 /// Ruby's `Base64.urlsafe_decode64`: pad unpadded input, map `-_` to `+/`, then
@@ -26,14 +25,14 @@ pub async fn show(c: &mut Ctx) -> Result {
 /// leftover bits (`None` where Ruby raises ArgumentError).
 fn urlsafe_decode64(input: &str) -> Option<Vec<u8>> {
     let mut string = input.to_string();
-    if !string.ends_with('=') && string.len() % 4 != 0 {
-        while string.len() % 4 != 0 {
+    if !string.ends_with('=') && !string.len().is_multiple_of(4) {
+        while !string.len().is_multiple_of(4) {
             string.push('=');
         }
     }
     let string = string.replace('-', "+").replace('_', "/");
     let bytes = string.as_bytes();
-    if bytes.len() % 4 != 0 {
+    if !bytes.len().is_multiple_of(4) {
         return None;
     }
     let value = |byte: u8| -> Option<u32> {

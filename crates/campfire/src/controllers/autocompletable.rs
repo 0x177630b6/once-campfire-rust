@@ -11,7 +11,7 @@ pub mod users {
     use crate::app::AppCtx;
     use crate::concerns::{self, Before, cast_integer};
     use crate::controllers::presenters_a::pagination::Page;
-    use crate::controllers::presenters_a::view_context::{self, Layout};
+    use crate::controllers::presenters_a::view_context::Layout;
     use crate::controllers::presenters_a;
 
     /// `set_page_and_extract_portion_from find_autocompletable_users.with_attached_avatar.ordered, per_page: 20`
@@ -44,14 +44,12 @@ pub mod users {
         page.apply_headers(c);
         if *format == format::JSON {
             let body = autocompletable::users_index_json(&users, &c.url_for(""));
-            let response = campfire_kit::Response::with_body(StatusCode::OK, "application/json; charset=utf-8", body);
-            Ok(view_context::vary_by_accept(c, response))
+            Ok(c.render_as(StatusCode::OK, "application/json; charset=utf-8", body))
         } else {
             // `render layout: false`: <lexxy-prompt-item> elements for the mentions prompt
             let layout = Layout::load(c).await?;
             let html = layout.render(c, |ctx| autocompletable::UsersIndex { ctx, users }.render())?;
-            let response = c.render(StatusCode::OK, html);
-            Ok(view_context::vary_by_accept(c, response))
+            Ok(c.render(StatusCode::OK, html))
         }
     }
 

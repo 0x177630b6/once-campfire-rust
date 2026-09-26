@@ -109,14 +109,12 @@ impl Layout {
         let links = stylesheet_tags().preload_links;
         let existing = c.headers.get("link").and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
         c.set_header("link", &campfire_assets::append_preload_links(&existing, &links));
-        let response = c.render(status, html);
-        vary_by_accept(c, response)
+        c.render(status, html)
     }
 
     /// A page rendered in turbo-rails' frame layout (no stylesheets, so no `Link` header).
     pub fn frame(&self, c: &mut Ctx, status: StatusCode, html: String) -> Response {
-        let response = c.render(status, html);
-        vary_by_accept(c, response)
+        c.render(status, html)
     }
 }
 
@@ -173,22 +171,4 @@ pub async fn page_or_frame(
         let html = layout.render(c, full)?;
         Ok(layout.page(c, status, html))
     }
-}
-
-/// `_set_vary_header`, which every `render` runs: `Vary: Accept` when the format came from a
-/// (non-browser) `Accept` header rather than a format param (`should_apply_vary_header?`).
-/// A no-op when the response already has a `Vary` header.
-pub fn vary_by_accept(c: &Ctx, response: Response) -> Response {
-    if response.headers.contains_key("vary") || c.params.contains_key("format") {
-        return response;
-    }
-    let accept = c.request.header("accept").unwrap_or("");
-    let browser_like = {
-        let compact: String = accept.split(char::is_whitespace).collect();
-        compact.contains(",*/*") || compact.contains("*/*,")
-    };
-    let present = !accept.trim().is_empty();
-    let content_type = c.request.content_type().is_some_and(|ct| !ct.is_empty());
-    let valid_accept_header = (c.request.is_xhr() && (present || content_type)) || (present && !browser_like);
-    if valid_accept_header { response.header("vary", "Accept") } else { response }
 }

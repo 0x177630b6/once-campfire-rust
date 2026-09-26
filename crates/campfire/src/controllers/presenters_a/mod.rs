@@ -180,6 +180,8 @@ pub fn sidebar_direct(conn: &Connection, secrets: &Secrets, membership: &Members
         unread: membership.unread(),
         updated_at_epoch: epoch_string(room.updated_at.jiff()),
         members: members.into_iter().map(|user| user_summary(secrets, user)).collect(),
+        membership_id: membership.id,
+        membership_updated_at: membership.updated_at.jiff(),
     })
 }
 

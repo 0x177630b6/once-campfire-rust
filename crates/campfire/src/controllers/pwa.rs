@@ -3,7 +3,7 @@
 
 use askama::Template;
 use campfire_db::Account;
-use campfire_kit::{Ctx, Error, Response, Result, StatusCode, format};
+use campfire_kit::{Ctx, Error, Result, StatusCode, format};
 use campfire_views::pwa;
 
 use crate::app::AppCtx;
@@ -19,8 +19,7 @@ fn before() -> Before {
 pub async fn service_worker(c: &mut Ctx) -> Result {
     concerns::before_actions(c, before()).await?;
     c.respond_to(&[&format::JS])?;
-    let response = Response::with_body(StatusCode::OK, "text/javascript; charset=utf-8", pwa::SERVICE_WORKER_JS);
-    Ok(presenters_a::view_context::vary_by_accept(c, response))
+    Ok(c.render_as(StatusCode::OK, "text/javascript; charset=utf-8", pwa::SERVICE_WORKER_JS))
 }
 
 /// `pwa/manifest.json.erb`
@@ -37,6 +36,5 @@ pub async fn manifest(c: &mut Ctx) -> Result {
         asset_path: &asset_path,
     };
     let body = manifest.render().map_err(Error::internal)?;
-    let response = Response::with_body(StatusCode::OK, "application/json; charset=utf-8", body);
-    Ok(presenters_a::view_context::vary_by_accept(c, response))
+    Ok(c.render_as(StatusCode::OK, "application/json; charset=utf-8", body))
 }

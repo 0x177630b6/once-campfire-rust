@@ -6,15 +6,15 @@ pub mod test_notifications;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use askama::Template;
 use campfire_db::{Connection, PushSubscription};
 use campfire_kit::{Ctx, Error, ParamMap, Result, StatusCode, format, permit_keys};
 use campfire_views::users;
 use rusqlite::types::Value;
 
 use crate::app::AppCtx;
+use crate::controllers::presenters::page::framed_page;
 use crate::concerns::{self, Before, cast_integer};
-use crate::controllers::presenters_a::{self, view_context};
+use crate::controllers::presenters_a::{self};
 use crate::integrations::net::{Network, guard};
 
 pub async fn index(c: &mut Ctx) -> Result {
@@ -22,8 +22,8 @@ pub async fn index(c: &mut Ctx) -> Result {
     c.respond_to(&[&format::HTML])?;
     let user_id = concerns::require_current_user(c)?.id;
     let subscriptions = c.app().db.read(move |conn| PushSubscription::for_user(conn, user_id)).await.map_err(Error::internal)?;
-    let push_subscriptions = subscriptions.iter().map(presenters_a::push_subscription).collect();
-    view_context::page(c, StatusCode::OK, |ctx| users::PushSubscriptionsIndex { ctx, push_subscriptions }.render()).await
+    let push_subscriptions: Vec<_> = subscriptions.iter().map(presenters_a::push_subscription).collect();
+    framed_page!(c, StatusCode::OK, |ctx| users::PushSubscriptionsIndex { ctx, push_subscriptions: push_subscriptions.clone() }).await
 }
 
 pub async fn create(c: &mut Ctx) -> Result {
