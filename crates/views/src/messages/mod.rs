@@ -180,6 +180,17 @@ impl MessageItem {
             MessageItem::View(message) => message.room_id,
         }
     }
+
+    /// The cached fragments among `items`, in order: they go into the page as they are.
+    pub fn cached_fragments(items: &[MessageItem]) -> Vec<fragment_cache::Fragment> {
+        items
+            .iter()
+            .filter_map(|item| match item {
+                MessageItem::Fragment { html, .. } => Some(html.clone()),
+                MessageItem::View(_) => None,
+            })
+            .collect()
+    }
 }
 
 impl From<MessageView> for MessageItem {

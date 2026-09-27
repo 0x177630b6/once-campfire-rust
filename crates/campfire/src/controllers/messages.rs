@@ -43,7 +43,9 @@ pub async fn index(c: &mut Ctx) -> Result {
     }
     c.respond_to(&[&format::HTML])?;
     let views = present(c, move |presenter| presenter.messages(&messages)).await?;
-    page::bare(c, StatusCode::OK, &format::HTML, |ctx| views::Index { ctx, messages: &views }.render()).await
+    let fragments = campfire_views::messages::MessageItem::cached_fragments(&views);
+    let response = page::bare(c, StatusCode::OK, &format::HTML, |ctx| views::Index { ctx, messages: &views }.render()).await?;
+    Ok(response.with_cached_fragments(fragments))
 }
 
 /// Stands in for the digest `ETagWithTemplateDigest` adds for `messages/index` (only the ETag's

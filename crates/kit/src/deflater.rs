@@ -14,6 +14,9 @@ use bytes::Bytes;
 use flate2::write::GzEncoder;
 use flate2::{Compression, GzBuilder};
 use futures_util::StreamExt;
+use http_body_util::BodyExt;
+
+pub mod splice;
 
 /// A response `ActionDispatch::Static` served (a public file or an asset). Marks responses the
 /// middleware below `Static` in the reference (`Rack::Runtime`, `ActionDispatch::RequestId`)
@@ -64,8 +67,11 @@ pub async fn deflater(request: Request, next: Next) -> Response {
             let headers = response.headers_mut();
             headers.insert(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"));
             headers.remove(header::CONTENT_LENGTH);
-            let (parts, body) = response.into_parts();
-            Response::from_parts(parts, gzip_stream(body, mtime))
+            let (mut parts, body) = response.into_parts();
+            match parts.extensions.remove::<splice::CachedFragments>() {
+                Some(fragments) => Response::from_parts(parts, gzip_with_fragments(body, &fragments, mtime).await),
+                None => Response::from_parts(parts, gzip_stream(body, mtime)),
+            }
         }
         Some(_) => response,
         None => {
@@ -204,6 +210,20 @@ fn gzip_stream(body: Body, mtime: u32) -> Body {
         }
     });
     Body::from_stream(stream)
+}
+
+/// A body with cached fragments in it (always a single buffer), with their stored pieces
+/// spliced in where it can ([`splice`]); the same decoded bytes as [`gzip_stream`].
+async fn gzip_with_fragments(body: Body, fragments: &splice::CachedFragments, mtime: u32) -> Body {
+    let bytes = match body.collect().await {
+        Ok(collected) => collected.to_bytes(),
+        Err(error) => return Body::from_stream(futures_util::stream::once(async move { Err::<Bytes, _>(std::io::Error::other(error)) })),
+    };
+    match splice::gzip(&bytes, &fragments.0, mtime) {
+        // Streamed like `gzip_stream`'s output, so no `Content-Length` goes with it.
+        Some(gzipped) => Body::from_stream(futures_util::stream::once(async move { Ok::<_, std::io::Error>(Bytes::from(gzipped)) })),
+        None => gzip_stream(Body::from(bytes), mtime),
+    }
 }
 
 fn compress(encoder: &mut GzEncoder<Vec<u8>>, chunk: &[u8]) -> std::io::Result<Bytes> {

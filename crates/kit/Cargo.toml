@@ -27,6 +27,8 @@ uuid.workspace = true
 hyper = { workspace = true, features = ["server", "http1", "http2"] }
 hyper-util = { workspace = true, features = ["server", "server-auto", "service", "http1", "http2", "tokio"] }
 flate2.workspace = true
+crc32fast.workspace = true
+memchr.workspace = true
 bytes.workspace = true
 regex.workspace = true
 rustls.workspace = true

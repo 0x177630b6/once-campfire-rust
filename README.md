@@ -67,6 +67,10 @@ the same 4 pinned hardware threads, host networking, a quiet machine, and 5 inte
 app. The medians are below; the full tables with spreads are in
 [`bench/results/final-20260927/report.md`](bench/results/final-20260927/report.md).
 
+These tables predate spliced gzip (see [below](#spliced-gzip)), which since made the room page
+2.2×, the messages page 4.5× and search 2.6× faster again. The comparison with Rails hasn't been
+rerun since then, so the page rows below understate the Rust app.
+
 ### Throughput (16 concurrent clients)
 
 | Route | Rails | Rust | Rust advantage |
@@ -131,13 +135,38 @@ test suite and the parity gate green.
 | Share cached fragments instead of copying them; build stylesheet tags once per process | 6–20% less CPU per page |
 | Cable: 4 KiB read buffers instead of zero-filling 128 KiB per read; encode each broadcast once and share it across subscribers; batch socket writes | 4.7× less CPU per delivery; half the latency and memory under fan-out |
 | Fat LTO, one codegen unit, jemalloc | A further 5–14% per route |
+| Splice precompressed messages into gzipped pages ([below](#spliced-gzip)) | Room page 2,527 → 5,461 req/s; messages page 3,709 → 16,523 req/s; search 2,123 → 5,526 req/s |
 
 Measured the same way as the preliminary run, the room page went from 4.4× to 10.9× Rails, and cable
 fan-out at 1,000 clients from 4.8× to 19.5×.
 
-**What's left is mostly compression.** Serving without gzip, the room page does 8,973 req/s and
-the messages page 16,500 req/s, so gzip is 60–76% of the CPU on large pages. Parity with Rails'
-`Rack::Deflater` requires it: level 6, on every response.
+### Spliced gzip
+
+After those passes, compression was 60–76% of the CPU on large pages. Parity with Rails'
+`Rack::Deflater` requires gzip at level 6 on every response, and a page can't be cached whole
+because each one carries a fresh CSRF token. But most of a room page is cached messages, and those
+bytes are the same on every request.
+
+Each cached message is now compressed once and kept. Pages splice those stored pieces into the
+gzip stream and compress only the layout around them live. Compressing each message on its own
+would make a room page 4.4× larger, because consecutive messages share most of their markup.
+Instead, each piece is compressed against the message before it as a preset dictionary. It's reused
+only when that same message, with the same text between them, precedes it again, which is the
+steady state for a room page. The decoded body is byte-identical; only the compressed bytes
+differ, as they already did from Ruby's zlib.
+
+Measured natively against the previous commit (16 clients, median of 3 alternating runs; details
+in [`bench/results/splice-20260927/report.md`](bench/results/splice-20260927/report.md)):
+
+| Route | Before | After | Change | Compressed size |
+|---|---|---|---|---|
+| Room page | 2,527 req/s | 5,461 req/s | **2.16×** | +0.3% |
+| Messages page (`?before=`) | 3,709 req/s | 16,523 req/s | **4.45×** | +0.8% |
+| Search | 2,123 req/s | 5,526 req/s | **2.60×** | +0.9% |
+
+gzip of a 466 KB room page went from 1,032 µs to 271 µs. What remains is the live compression of
+the ~55 KB of layout around the messages. The messages page now serves about as fast as it did with
+compression turned off.
 
 ## Running it
 
