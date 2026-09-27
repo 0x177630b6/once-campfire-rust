@@ -194,3 +194,98 @@ The running log follows.
   Room show and POSTs, 3 interleaved reps, didn't change beyond noise: room show c=16 at
   2,212 → 2,216 req/s, and POST c=16 at 4,532 → 4,479 req/s. The workspace tests pass, and the
   header sweep shows 0 differences.
+
+## Final full-matrix parity
+
+Rust vs Rails with `--matrix full`: 3 engines × 4 viewports × 2 schemes, plus the breakpoint sweep
+on every engine. Candidates were built from a clean `git archive` of each commit plus the pinned
+`reference` submodule. The cargo target cache mount was removed and the build stage was run with
+`--no-cache-filter build`, so every build compiled for real (2–3 minutes, `campfire` included).
+Captures ran at 8 workers or fewer. Every container was pinned with `docker update --cpuset-cpus
+0-7,16-23`, away from the benchmark cores 8–15 and their SMT siblings 24–31. Nothing was masked or
+allowlisted. Output is in `parity/out/rust-full-final/` and `parity/out/rust-lean-fixed/`.
+
+**The run didn't finish.** The whole matrix is 5,018 cells. **3,133 were compared (62%)**, and the
+default seed's desktop and phone cells were compared first. Not covered:
+
+- default at laptop: 831 of 1,106 cells;
+- default at tablet: all 1,082 cells.
+
+Results by run. P = pass, F = fail, Fl = flaky (passed on a pixel-only retry), E = error:
+
+| Run | Build | Cells | P | F | Fl | E | chromium | firefox | webkit |
+|---|---|---|---|---|---|---|---|---|---|
+| default, desktop + phone | beb4114 | 2,222 | 2,212 | 10 | 0 | 0 | 750/750 | 734/736 | 728/736 |
+| default, breakpoint sweep | f2a1a8f | 154 | 154 | 0 | 0 | 0 | 66/66 | 44/44 | 44/44 |
+| default, laptop (stopped at 275 of 1,106) | f2a1a8f | 275 | 275 | 0 | 1 | 0 | ~94 | ~91 | ~91 |
+| default, tablet | — | 0 of 1,082 | | | | | | | |
+| first_run | beb4114 | 96 | 96 | 0 | 0 | 0 | 32/32 | 32/32 | 32/32 |
+| restricted | beb4114 | 48 | 48 | 0 | 0 | 0 | 16/16 | 16/16 | 16/16 |
+| crowd | beb4114 | 145 | 145 | 0 | 0 | 0 | 49/49 | 48/48 | 48/48 |
+| custom_styles | beb4114 | 193 | 193 | 0 | 0 | 0 | 65/65 | 64/64 | 64/64 |
+| rerun: both `auth/incompatible_browser` states, full matrix | f2a1a8f | 48 | 48 | 0 | 0 | 0 | 16/16 | 16/16 | 16/16 |
+
+- The flaky laptop cell is `search/submitted @ webkit-laptop-light`: pixels only, and it matched on
+  a retry.
+- The laptop run was stopped mid-run, so it wrote no report. Its counts come from its log, which
+  prints every failing and flaky cell, and its per-engine split from the capture files.
+
+**Genuine Rust-side differences: 2, both fixed.** Both only show on engines the lean matrix doesn't
+run for these states.
+
+1. **The blocked-browser page answered 406 for non-HTML formats** (c2b253c). States:
+   `auth/incompatible_browser` (webkit, 4 cells) and `auth/incompatible_browser/apple_messages`
+   (webkit, 4 cells). Failing layer: network.
+   - WebKit fetches `/webmanifest.json` with the blocked user agent.
+   - `allow_browser`'s block is an explicit `render template:`, so Rails answers 200 `text/html`
+     with that page for any format: `.json`, `.js`, `.xml`, `Accept: application/json`.
+   - The port ran the implicit render's template lookup and answered `406 application/json`.
+2. **A Live controller's rendered page got an ETag** (f2a1a8f). State:
+   `auth/incompatible_browser/apple_messages @ firefox-phone-{light,dark}`. Failing layer: network.
+   - Firefox on phones fetches `/account/logo` with the blocked user agent.
+   - `Accounts::LogosController` includes `ActiveStorage::Streaming`, so its body is a
+     `Live::Buffer`. `Rack::ETag` can't digest that, and Rails sends `Cache-Control: no-cache` with
+     no ETag.
+   - The port digested the body.
+   - The fix is in `campfire_kit` (`rack_etag` skips Live responses). Every other 200 from a Live
+     controller already carried `stale?` validators, so nothing else changes.
+
+Both fixes have tests that fail without them, and the campfire and kit test suites pass. Checked by
+hand, the fixed build answers every probed case with the same status and headers as Rails. The
+full-matrix rerun of both states passes 48 of 48.
+
+**Lean gate on the fixed build** (candidate `head-f2a1a8f`, which also includes the fragment-store
+bound 1d6ac20):
+
+| Seed | Cells | P | F | Fl |
+|---|---|---|---|---|
+| default | 888 | 887 | 1 | 0 |
+| first_run | 16 | 16 | 0 | 0 |
+| custom_styles | 33 | 33 | 0 | 0 |
+| crowd | 25 | 25 | 0 | 0 |
+| restricted | 8 | 8 | 0 | 0 |
+| **all** | **970** | **969** | **1** | **0** |
+
+**The one lean failure is the known sidebar-toggle arc pixel flake, left failing under the flake
+policy.** The cell is `auth/join/completed @ chromium-phone-light`:
+
+- All five text layers are identical. The pixels differ only in an 83×18 box at the top of the
+  phone sidebar toggle's arc.
+- Rerunning the state's 4 lean cells passed phone-light, then failed phone-dark in the same way
+  (80×16 box, same place).
+
+It is harness nondeterminism, not a Rust difference:
+
+- Each scheme has exactly two raster variants of this screen, and each app has produced both.
+- In the Ruby-vs-Ruby gate (`lean-final-self`), both reference instances rendered phone-dark as
+  `3c6f3d15`, the variant the reference shows here. In the earlier Rust gate (`rust-lean-final`),
+  both sides rendered `35b40c31`, the variant Rust shows here.
+
+The retries can't rescue it: within one run, each side kept the same variant across all 3
+attempts, even though every attempt used fresh servers. So a retry isn't an independent sample.
+It looks like per-run state in Chromium's rasterization, not anything either server sent.
+
+Recommended harness follow-up: find where the variant sticks (worker or browser process). The cell
+isn't masked.
+
+All instances are torn down, and no parity containers are left running.
