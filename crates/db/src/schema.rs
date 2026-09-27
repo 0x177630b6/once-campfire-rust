@@ -38,6 +38,15 @@ pub const MIGRATION_VERSIONS: &[&str] = &[
 /// SHA1 of `reference/db/schema.rb`, which `db:schema:load` records in `ar_internal_metadata`.
 pub const SCHEMA_SHA1: &str = "f75da8dad38bfb179ffd757bd7a7c2b3f818bc29";
 
+/// Indexes this app adds to the Rails schema, created on boot when missing (new and existing
+/// databases alike). Additive only, so the database still works with the Rails image.
+pub const ADDITIONS: &[&str] = &[
+    // A room's messages are paged by `created_at` (`last_page`, `page_before`, `page_after`), and
+    // with only `index_messages_on_room_id` every room page sorted the room's whole history:
+    // 60 ms at 236k messages, against 0.02 ms with this index.
+    r#"CREATE INDEX IF NOT EXISTS "index_messages_on_room_id_and_created_at" ON "messages" ("room_id", "created_at")"#,
+];
+
 /// `timeout: 5000` in `config/database.yml`.
 pub const BUSY_TIMEOUT_MS: u64 = 5000;
 
@@ -63,22 +72,25 @@ pub enum Prepared {
 
 /// `bin/rails db:prepare`: loads the schema into an empty database, or verifies an
 /// existing one is fully migrated. We don't port migrations, so a database with pending
-/// migrations is an error (boot the Rails image once to migrate it).
+/// migrations is an error (boot the Rails image once to migrate it). Then adds [`ADDITIONS`].
 pub fn prepare(conn: &mut Connection, environment: &str, clock: &dyn Clock) -> Result<Prepared> {
-    if table_exists(conn, "schema_migrations")? {
+    let prepared = if table_exists(conn, "schema_migrations")? {
         let pending = pending_migrations(conn)?;
-        if pending.is_empty() {
-            Ok(Prepared::UpToDate)
-        } else {
-            Err(Error::Other(format!(
+        if !pending.is_empty() {
+            return Err(Error::Other(format!(
                 "pending migrations: {}",
                 pending.join(", ")
-            )))
+            )));
         }
+        Prepared::UpToDate
     } else {
         load_schema(conn, environment, clock)?;
-        Ok(Prepared::Loaded)
+        Prepared::Loaded
+    };
+    for addition in ADDITIONS {
+        conn.execute_batch(addition)?;
     }
+    Ok(prepared)
 }
 
 pub fn pending_migrations(conn: &Connection) -> Result<Vec<&'static str>> {
@@ -219,6 +231,27 @@ mod tests {
             )
             .unwrap();
         assert_eq!(hit, 1, "porter tokenizer");
+    }
+
+    fn query_plan(conn: &Connection, sql: &str) -> String {
+        let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+        let rows = stmt.query_map([], |r| r.get::<_, String>(3)).unwrap();
+        rows.map(|r| r.unwrap()).collect::<Vec<_>>().join("; ")
+    }
+
+    #[test]
+    fn prepare_adds_the_room_paging_index_to_new_and_existing_databases() {
+        let last_page = r#"SELECT * FROM "messages" WHERE "room_id" = 1 ORDER BY "created_at" DESC LIMIT 40"#;
+        let mut conn = Connection::open_in_memory().unwrap();
+        prepare(&mut conn, "production", &SystemClock).unwrap();
+        let plan = query_plan(&conn, last_page);
+        assert!(plan.contains("index_messages_on_room_id_and_created_at") && !plan.contains("TEMP B-TREE"), "{plan}");
+
+        // A database the Rails app created doesn't have it until the app boots on it.
+        conn.execute_batch(r#"DROP INDEX "index_messages_on_room_id_and_created_at""#).unwrap();
+        assert!(query_plan(&conn, last_page).contains("TEMP B-TREE"));
+        assert_eq!(prepare(&mut conn, "production", &SystemClock).unwrap(), Prepared::UpToDate);
+        assert!(!query_plan(&conn, last_page).contains("TEMP B-TREE"));
     }
 
     #[test]

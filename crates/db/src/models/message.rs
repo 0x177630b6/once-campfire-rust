@@ -247,9 +247,14 @@ impl Message {
         )
     }
 
-    /// `room.messages.paged?`
+    /// `room.messages.paged?`: more than a page (`count > PAGE_SIZE`). Asks whether a row exists
+    /// past the first page rather than counting the whole room, which grows without bound.
     pub fn paged(conn: &Connection, room_id: i64) -> Result<bool> {
-        Ok(Self::count_in_room(conn, room_id)? > PAGE_SIZE)
+        sql::exists(
+            conn,
+            &format!(r#"SELECT 1 FROM "messages" WHERE "messages"."room_id" = ? LIMIT 1 OFFSET {PAGE_SIZE}"#),
+            [room_id],
+        )
     }
 
     // Message::Searchable

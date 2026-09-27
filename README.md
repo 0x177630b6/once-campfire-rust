@@ -149,6 +149,7 @@ test suite and the parity gate green.
 | Fat LTO, one codegen unit, jemalloc | A further 5–14% per route |
 | Splice precompressed messages into gzipped pages ([below](#spliced-gzip)) | Room page 2,527 → 5,461 req/s; messages page 3,709 → 16,523 req/s; search 2,123 → 5,526 req/s |
 | Forgery protection by `Sec-Fetch-Site` instead of CSRF tokens ([Known differences](#known-differences)) | Room page +9%, messages page +6%, search +10%; pages render the same until their content changes, so revalidation gets a 304 |
+| Index messages by `(room_id, created_at)`; check "more than a page" without counting the room | In a room with 236k messages: room page 95 → 6,051 req/s (64×), messages page 87 → 17,972 req/s (208×). Before, a room page sorted the room's whole history, so rooms slowed as they grew; now a long room serves as fast as a new one |
 
 Measured the same way as the preliminary run, the room page went from 4.4× to 10.9× Rails, and cable
 fan-out at 1,000 clients from 4.8× to 19.5×.
@@ -243,6 +244,11 @@ Deliberate:
 - **Not ported:** the duplicate `session_token` cookie Rails' Active Storage streaming sends; responses
   to requests for multiple byte ranges; and legacy AES-CBC encrypted cookies, since Campfire started
   on GCM.
+
+- **One more index.** On boot the app adds `index_messages_on_room_id_and_created_at` to the Rails
+  schema if it's missing (a one-time 49 ms for 236k messages). Rails' schema pages a room's messages
+  through `index_messages_on_room_id` alone, which sorts the room's whole history for every page.
+  The index is additive, so the database still works with the Rails image.
 
 Not fully covered:
 
