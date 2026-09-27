@@ -122,10 +122,11 @@ the HTML report, which keeps each failed attempt's screenshots and diff
 (`<cell>.attempt-N.png`). A cell whose server output differs is never retried, and one whose pixels
 still differ after 3 attempts fails. The summary line counts flaky cells.
 
-Known pixel flakes (Chromium, both reference-vs-reference and Ruby-vs-Rust): the sidebar toggle's
-circular border on phone after the sign-up redirects (`auth/join/completed`,
-`auth/first_run/completed`) sometimes rasterizes a few anti-aliased pixels one gray level apart
-(40–60 px along the top arc; four times in the recorded runs). It isn't root-caused: the server
-output and the final styles are identical, and the toggle is the one element that transitions
-(position, border and background, 300ms) right after the redirect, so the likeliest cause is Chromium re-rasterizing the arc after different intermediate
-frames. It is left to this policy.
+The sidebar toggle's arc on phone after the sign-up redirects (`auth/join/completed`,
+`auth/first_run/completed`) used to come out one gray level apart along its top arc. It was stale
+raster, not the server: the room's sidebar frame loads once or twice depending on whether
+UnreadRoomsChannel's confirmation (which reloads it) lands before or after the first load, and with
+one load Chromium kept the toggle's tiles from an earlier raster. The winner followed each server's
+speed, so a retry wasn't an independent sample. Before the screenshot, Chromium captures now
+promote the root to its own layer and back, giving each change 150ms to be drawn (`rasterAfresh`
+in `capture.ts`). That throws every tile away, so the pixels are a fresh raster of the final page.

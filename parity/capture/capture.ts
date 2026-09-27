@@ -186,6 +186,7 @@ async function capturePage(
     const el = document.activeElement
     return `${document.hasFocus() ? "window focused" : "window blurred"}; active ${el ? el.tagName.toLowerCase() + (el.id ? "#" + el.id : "") + (el.className && typeof el.className === "string" ? "." + el.className.trim().split(/\s+/).join(".") : "") : "none"}`
   })
+  await rasterAfresh(capturePage)
   const shot = await stableScreenshot(capturePage, env.timeoutMs, await pixelMasks(capturePage, state.masks, meta))
   fs.writeFileSync(base + ".png", shot.png)
   if (!shot.stable) meta.console.push("screenshot never stabilized (two consecutive frames always differed)")
@@ -340,6 +341,39 @@ const CLOCK_EPOCH_SCRIPT = `(() => {
   const pause = log.find((entry) => entry.type === "pauseAt")
   if (install && pause) pause.time = install.time
 })()`
+
+// Chromium keeps a layer's rastered tiles until something invalidates them, so an unchanged region
+// shows whatever it looked like when it was last rastered, and that isn't always what rastering the
+// final page gives. After auth/join/completed's redirect, the room's sidebar frame loads once or
+// twice (rooms_list_controller.js reloads it when UnreadRoomsChannel confirms, which can land
+// before or after the first load: a race between the server's two answers). The DOM ends up the
+// same, but with one load the phone sidebar toggle's circle kept tiles rastered earlier, a gray
+// level off along its top arc from a fresh raster; with two it was rastered again. Which one won
+// followed each server's speed, so it looked sticky within a run. Promoting the root to a layer of
+// its own and back throws every layer's tiles away, so the screenshot is a fresh raster of the
+// final page. Each change gets real time to reach a drawn frame: without the waits, the revert
+// sometimes landed in the same frame, and errors/500's illustration came out either way. Without
+// this, the arc followed the number of loads in 20 of 20 captures; with it, 42 of 42 captures
+// (light and dark, one load or two) were identical, and errors/500 was 20 of 20.
+const RASTER_SETTLE_MS = 150
+
+async function rasterAfresh(page: Page) {
+  if (page.context().browser()?.browserType().name() !== "chromium") return
+  const style = await page.evaluate(() => {
+    const root = document.documentElement
+    const style = root.getAttribute("style")
+    root.style.setProperty("will-change", "transform")
+    return style
+  })
+  await page.waitForTimeout(RASTER_SETTLE_MS)
+  await page.screenshot({ animations: "allow", caret: "hide" })
+  await page.evaluate((style) => {
+    const root = document.documentElement
+    if (style === null) root.removeAttribute("style")
+    else root.setAttribute("style", style)
+  }, style)
+  await page.waitForTimeout(RASTER_SETTLE_MS)
+}
 
 // What the Web Animations API can't pause (UA shadow DOM like Chromium's media-controls loading
 // spinner, Chromium re-rasterizing a large downscaled image a few hundred ms after it appears in
