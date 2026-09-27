@@ -21,7 +21,7 @@
       <span class="for-screen-reader">Share join link</span>
       {{ h::image_tag(ctx, "share.svg", h::attrs().aria_hidden().size(20).class("colorize--black")) }}
 {% endfilter %}
-{% if ctx.can_administer() %}      {% filter button_to(ctx, h::routes::account_join_code(), h::attrs().class("btn btn--regenerate")) %}
+{% if ctx.can_administer() %}      {% filter button_to(h::routes::account_join_code(), h::attrs().class("btn btn--regenerate")) %}
         {{ h::image_tag(ctx, "refresh.svg", h::attrs().aria_hidden().size(20).class("colorize--black")) }}
         <span class="for-screen-reader">Regenerate join link</span>
 {% endfilter %}{% endif %}  </div>

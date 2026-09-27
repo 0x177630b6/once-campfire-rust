@@ -3,8 +3,7 @@
 //! (`reference/app/views/layouts/application.html.erb` and `app/helpers`).
 //!
 //! Gather the per-request data with [`Layout::load`] (it reads the database), then render inside
-//! [`Layout::render`], which lends the templates a `ViewContext` whose `form_authenticity_token`
-//! mints per-form CSRF tokens through the request's `Ctx`:
+//! [`Layout::render`], which lends the templates a `ViewContext` for this request:
 //!
 //! ```ignore
 //! let layout = Layout::load(c).await?;
@@ -12,7 +11,6 @@
 //! Ok(layout.page(c, StatusCode::OK, html))
 //! ```
 
-use std::cell::RefCell;
 use std::sync::LazyLock;
 
 use campfire_db::{Account, User};
@@ -72,20 +70,15 @@ impl Layout {
     pub fn render(&self, c: &mut Ctx, render: impl FnOnce(&ViewContext) -> askama::Result<String>) -> Result<String> {
         let flash_notice = c.flash().notice().map(str::to_string);
         let flash_alert = c.flash().alert().map(str::to_string);
-        let csrf_token = c.csrf_token();
         let base_url = c.url_for("");
         let request_url = c.request.url();
         let referrer = c.request.referer().map(str::to_string);
         let stylesheets = stylesheet_tags();
 
-        let request = RefCell::new(&mut *c);
-        let form_authenticity_token = |action: &str, method: &str| request.borrow_mut().csrf_token_for_form(action, method);
         let asset_path = |path: &str| campfire_assets::asset_path(path);
         let ctx = ViewContext {
             current_user: self.current_user.clone(),
             account: self.account.clone(),
-            csrf_token,
-            form_authenticity_token: &form_authenticity_token,
             flash_notice,
             flash_alert,
             platform: self.platform.clone(),

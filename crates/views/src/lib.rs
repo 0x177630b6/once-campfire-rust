@@ -27,15 +27,6 @@ pub mod searches;
 pub struct ViewContext<'a> {
     pub current_user: Option<CurrentUser>,
     pub account: AccountSummary,
-    /// A freshly masked global CSRF token for `csrf_meta_tags`. Empty when rendering outside a
-    /// request (broadcasts), where Rails has no forgery protection and renders no CSRF tags.
-    pub csrf_token: String,
-    /// `form_authenticity_token(form_options: { action:, method: })`: Rails 8 defaults to
-    /// per-form tokens, so every `form_with`/`button_to` asks for a masked token bound to its
-    /// action path (already normalized: no scheme/host/query, trailing "/" chomped) and its
-    /// lowercase method ("post", "patch", "put", "delete"). Return "" outside a request
-    /// (broadcasts): Rails' renderer emits no token fields there.
-    pub form_authenticity_token: &'a dyn Fn(&str, &str) -> String,
     pub flash_notice: Option<String>,
     pub flash_alert: Option<String>,
     /// `ApplicationPlatform` facts derived from the user agent.

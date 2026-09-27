@@ -4,10 +4,11 @@ jar = http.cookiejar.CookieJar()
 op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
 def get(p):
     r = op.open(base + p); return r.geturl(), r.read().decode()
-def csrf(html): return re.search(r'name="csrf-token" content="([^"]+)"', html).group(1)
+# Rails pages carry a CSRF token; the Rust app checks Sec-Fetch-Site instead and renders none.
+def csrf(html): m = re.search(r'name="csrf-token" content="([^"]+)"', html); return m.group(1) if m else ""
 def post(p, data, token):
     d = urllib.parse.urlencode({**data, "authenticity_token": token}).encode()
-    r = op.open(urllib.request.Request(base + p, d, {"Accept": "text/vnd.turbo-stream.html, text/html"})); return r.geturl(), r.read().decode()
+    r = op.open(urllib.request.Request(base + p, d, {"Accept": "text/vnd.turbo-stream.html, text/html", "Sec-Fetch-Site": "same-origin"})); return r.geturl(), r.read().decode()
 op.open(base + "/session/new")
 url, html = get("/first_run")
 url, html = get("/session/new")

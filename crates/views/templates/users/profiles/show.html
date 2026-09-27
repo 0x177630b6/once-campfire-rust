@@ -6,7 +6,7 @@
   </div>
 
   <div class="flex-item-justify-end">
-{% let form = h::form_with(ctx, h::routes::session()).method("delete").data("controller", "sessions") %}    {% filter form_with(form) %}
+{% let form = h::form_with(h::routes::session()).method("delete").data("controller", "sessions") %}    {% filter form_with(form) %}
       {{ h::hidden_field_tag("push_subscription_endpoint", None, h::attrs().data("sessions_target", "pushSubscriptionEndpoint")) }}
 
       <button class="btn" data-action="sessions#logout:prevent">
@@ -33,7 +33,7 @@
         <span class="for-screen-reader">Avatar</span>
       </label>
 {% endfilter %}
-{% if avatar_attached %}      {% filter button_to(ctx, h::routes::user_avatar(user.id), h::attrs().method("delete").class("btn btn--negative txt-small avatar__delete-btn")) %}
+{% if avatar_attached %}      {% filter button_to(h::routes::user_avatar(user.id), h::attrs().method("delete").class("btn btn--negative txt-small avatar__delete-btn")) %}
         {{ h::image_tag(ctx, "minus.svg", h::attrs().aria_hidden().size(20)) }}
         <span class="for-screen-reader">Delete avatar</span>
 {% endfilter %}{% endif %}  </div>

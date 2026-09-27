@@ -84,9 +84,6 @@ pub fn with_context<R>(name: &str, request: Request, f: impl FnOnce(&ViewContext
     let assets: HashMap<String, String> =
         facts["assets"].as_object().unwrap().iter().map(|(k, v)| (k.clone(), v.as_str().unwrap().to_string())).collect();
     let asset_path = move |logical: &str| assets.get(logical).cloned().unwrap_or_else(|| panic!("unknown asset {logical}"));
-    // Partials rendered with ApplicationController.renderer (broadcasts) have no CSRF tokens.
-    let token = if case["path"] == "/" && case["status"] == 200 && request.partial { String::new() } else { "TOKEN".to_string() };
-    let form_token = |_action: &str, _method: &str| token.clone();
 
     let current = str_of(&case["as"]).map(|email| user_by_email(name, &email));
     let current_user = current.map(|user| CurrentUser {
@@ -105,8 +102,6 @@ pub fn with_context<R>(name: &str, request: Request, f: impl FnOnce(&ViewContext
             logo_url: str_of(&account["logo_path"]).unwrap_or_else(|| "/account/logo".into()),
             has_logo: account["has_logo"].as_bool().unwrap_or(false),
         },
-        csrf_token: token.clone(),
-        form_authenticity_token: &form_token,
         flash_notice: request.flash_notice,
         flash_alert: request.flash_alert,
         platform: platform(case["ua"].as_str().unwrap()),

@@ -17,26 +17,26 @@
 {% endif %}{% endblock %}
 {% block content %}<section class="panel txt-align-center flex flex-column gap" style="view-transition-name: account-settings">
 {% if ctx.can_administer() %}    <div class="align-center center avatar__form gap" data-controller="upload-preview">
-{% let form = h::form_with(ctx, self.account_action()).model("account").method("patch").class("txt--medium").data("controller", "form") %}      {% filter form_with(form) %}
+{% let form = h::form_with(self.account_action()).model("account").method("patch").class("txt--medium").data("controller", "form") %}      {% filter form_with(form) %}
         <label class="btn input--file">
           {{ h::image_tag(ctx, "camera.svg", h::attrs().aria_hidden().size(20)) }}
           {{ form.file_field("logo", h::attrs().class("input").accept("image/*").data("action", "upload-preview#previewImage change->form#submit")) }}
           <span class="for-screen-reader">Upload logo</span>
         </label>
 {% endfilter %}
-{% let form = h::form_with(ctx, self.account_action()).model("account").method("patch").data("controller", "form") %}      {% filter form_with(form) %}
+{% let form = h::form_with(self.account_action()).model("account").method("patch").data("controller", "form") %}      {% filter form_with(form) %}
         <label class="btn avatar input--file account-logo txt-xx-large">
           {{ h::image_tag(ctx, ctx.account.logo_url.as_str(), h::attrs().role("presentation").size(48).data("upload_preview_target", "image")) }}
           {{ form.file_field("logo", h::attrs().class("input").accept("image/*").data("action", "upload-preview#previewImage change->form#submit")) }}
           <span class="for-screen-reader">Upload logo</span>
         </label>
 {% endfilter %}
-{% if ctx.account.has_logo %}        {% filter button_to(ctx, ctx.account.logo_url.as_str(), h::attrs().method("delete").class("btn btn--negative txt-small avatar__delete-btn")) %}
+{% if ctx.account.has_logo %}        {% filter button_to(ctx.account.logo_url.as_str(), h::attrs().method("delete").class("btn btn--negative txt-small avatar__delete-btn")) %}
           {{ h::image_tag(ctx, "minus.svg", h::attrs().aria_hidden().size(20)) }}
           <span class="for-screen-reader">Delete logo</span>
 {% endfilter %}{% endif %}    </div>
 
-{% let form = h::form_with(ctx, self.account_action()).model("account").method("patch").data("controller", "form").class("flex flex-column gap") %}    {% filter form_with(form) %}
+{% let form = h::form_with(self.account_action()).model("account").method("patch").data("controller", "form").class("flex flex-column gap") %}    {% filter form_with(form) %}
       <div class="flex align-center gap">
         {{ h::translation_button(ctx, "account_name") }}
 
@@ -50,7 +50,7 @@
 {% endfilter %}      </div>
 {% endfilter %}
     <div class="margin-block-start pad-block pad-inline-double fill-shade border-radius">
-{% let form = h::form_with(ctx, self.account_action()).model("account").method("put").data("controller", "form").class("flex align-center gap center") %}      {% filter form_with(form) %}
+{% let form = h::form_with(self.account_action()).model("account").method("put").data("controller", "form").class("flex align-center gap center") %}      {% filter form_with(form) %}
         <div class="flex-item-grow flex align-center gap txt-align-start">
           {{ h::image_tag(ctx, "crown.svg", h::attrs().class("colorize--black").aria_hidden().size(18)) }} Must be admin to create new rooms
         </div>

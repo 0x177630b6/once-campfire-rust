@@ -251,7 +251,7 @@ pub fn builder_tag(name: &str, attrs: impl Borrow<Attrs>) -> Html {
     }
 }
 
-/// Legacy `tag(:name, options)`, used by `image_tag`, form fields and `csrf_meta_tags`:
+/// Legacy `tag(:name, options)`, used by `image_tag` and form fields:
 /// always self-closing with `" />"`.
 pub fn legacy_tag(name: &str, attrs: impl Borrow<Attrs>) -> Html {
     Safe(format!("<{name}{} />", attrs.borrow().render()))

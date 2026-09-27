@@ -90,14 +90,11 @@ pub fn renderer_base_url(c: &Ctx) -> String {
 /// [`render_detached`] during a request: URLs get the request's host through
 /// `default_url_options` (`SetCurrentRequest`), see [`renderer_base_url`].
 pub fn render_detached_at<T>(app: &App, account: Option<&Account>, base_url: &str, render: impl FnOnce(&ViewContext) -> T) -> T {
-    let no_token = |_: &str, _: &str| String::new();
     let asset_path = |path: &str| campfire_assets::asset_path(path);
     let stylesheets = crate::controllers::presenters_a::view_context::stylesheet_tags();
     let ctx = ViewContext {
         current_user: None,
         account: account_summary(account, false),
-        csrf_token: String::new(),
-        form_authenticity_token: &no_token,
         flash_notice: None,
         flash_alert: None,
         platform: Platform::default(),

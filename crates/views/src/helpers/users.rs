@@ -85,7 +85,6 @@ pub fn avatar_tag(ctx: &ViewContext, user: impl std::borrow::Borrow<AvatarUser>,
 pub fn button_to_direct_room_with(ctx: &ViewContext, user_id: impl std::borrow::Borrow<i64>) -> Html {
     let user_id = *user_id.borrow();
     button_to(
-        ctx,
         &rooms_directs_with_users(&[user_id]),
         attrs().class("btn btn--primary full-width txt--large"),
         &image_tag(ctx, "messages.svg", attrs()).0,

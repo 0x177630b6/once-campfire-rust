@@ -196,9 +196,9 @@ async fn rooms_are_destroyed_by_administrators() {
 }
 
 #[tokio::test]
-async fn writes_need_a_csrf_token() {
+async fn cross_site_writes_are_refused() {
     let Some(app) = TestApp::boot().await else { return };
     let mut david = app.david();
-    let reply = david.send(Req::new(Method::POST, "/rooms/opens").form(&[("room[name]", "x")])).await;
-    assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY);
+    let request = Req::new(Method::POST, "/rooms/opens").form(&[("room[name]", "x")]).header("sec-fetch-site", "cross-site");
+    assert_eq!(david.send(request).await.status, StatusCode::UNPROCESSABLE_ENTITY);
 }

@@ -50,20 +50,6 @@ pub fn rooms_directs_with_user(user_id: impl std::borrow::Borrow<i64>) -> String
     rooms_directs_with_users(&[*user_id.borrow()])
 }
 
-/// The path part of an action URL, as `RequestForgeryProtection#normalize_action_path` sees it:
-/// `URI.parse(action).path.chomp("/")`.
-pub fn normalize_action_path(action: &str) -> String {
-    let without_scheme = match action.find("://") {
-        Some(index) => {
-            let rest = &action[index + 3..];
-            rest.find('/').map(|slash| &rest[slash..]).unwrap_or("")
-        }
-        None => action,
-    };
-    let path = without_scheme.split(['?', '#']).next().unwrap_or("");
-    path.strip_suffix('/').unwrap_or(path).to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -75,12 +61,5 @@ mod tests {
             with_query("/x", vec![("z", Param::One("a b".into())), ("a", Param::One("1".into()))]),
             "/x?a=1&z=a+b"
         );
-    }
-
-    #[test]
-    fn normalizes_action_paths() {
-        assert_eq!(normalize_action_path("http://campfire.test/session"), "/session");
-        assert_eq!(normalize_action_path("/rooms/directs?user_ids%5B%5D=5"), "/rooms/directs");
-        assert_eq!(normalize_action_path("/account/"), "/account");
     }
 }

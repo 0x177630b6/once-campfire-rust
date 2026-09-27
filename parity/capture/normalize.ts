@@ -52,6 +52,7 @@ function walk(node: any, depth: number, out: string[], options: NormalizeOptions
     }
   }
   const tag = node.tagName as string
+  if (isForgeryToken(tag, node.attrs)) return
   const attrs = [...node.attrs]
     .sort((a: any, b: any) => a.name.localeCompare(b.name))
     .map((a: any) => formatAttr(tag, a.name, maskAttr(tag, a.name, a.value, node.attrs, options)))
@@ -90,10 +91,15 @@ function normalizeJson(text: string): string {
 
 // --- Masking -----------------------------------------------------------------------------------
 
+// The CSRF meta tags and token fields Rails renders. The Rust app checks Sec-Fetch-Site instead and
+// renders none (README, Known differences), so they're left out of both sides.
+function isForgeryToken(tag: string, attrs: any[]): boolean {
+  const name = attrs.find((a: any) => a.name === "name")?.value
+  return (tag === "input" && name === "authenticity_token") || (tag === "meta" && (name === "csrf-token" || name === "csrf-param"))
+}
+
 function maskAttr(tag: string, name: string, value: string, attrs: any[], options: NormalizeOptions): string {
   const attr = (n: string) => attrs.find((a: any) => a.name === n)?.value
-  if (tag === "meta" && attr("name") === "csrf-token" && name === "content") return "«csrf»"
-  if (tag === "input" && attr("name") === "authenticity_token" && name === "value") return "«csrf»"
   if (name === "nonce" || (tag === "meta" && attr("name") === "csp-nonce" && name === "content")) return "«nonce»"
   const epochMs = relativeEpoch(name, value, options)
   if (epochMs) return epochMs

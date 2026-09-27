@@ -1,4 +1,4 @@
-{% filter button_to(ctx, h::rooms_directs_with_user(user.id), h::attrs().class("direct borderless fill-transparent unpad")) %}
+{% filter button_to(h::rooms_directs_with_user(user.id), h::attrs().class("direct borderless fill-transparent unpad")) %}
   <span class="avatar">
     {{ h::image_tag(ctx, user.avatar_path.as_str(), h::attrs().aria_hidden()) }}
   </span>

@@ -1,5 +1,6 @@
 //! Golden tests against what the reference app produced (tests/reference/*, written by
-//! script/revendor from `assets:precompile` and the real Rails helpers).
+//! script/revendor from `assets:precompile` and the real Rails helpers). Files in `overrides/`
+//! deliberately differ from the reference, so only their digests and bytes are allowed to.
 
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -22,6 +23,41 @@ fn sha256(bytes: &[u8]) -> String {
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect()
+}
+
+/// Each overridden logical path, with the reference's digested path and ours.
+fn overridden() -> BTreeMap<String, (String, String)> {
+    let reference = json_fixture("manifest.json");
+    let ours: BTreeMap<&str, &str> = campfire_assets::manifest().iter().map(|(l, d)| (*l, *d)).collect();
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("overrides");
+    let mut files = Vec::new();
+    collect_files(&dir, &mut files);
+    files
+        .into_iter()
+        .map(|file| {
+            let logical = file.strip_prefix(&dir).unwrap().to_string_lossy().into_owned();
+            let theirs = reference[&logical]["digested_path"].as_str().unwrap_or_else(|| panic!("{logical} isn't a reference asset"));
+            let ours = ours[logical.as_str()];
+            assert_ne!(theirs, ours, "{logical} is overridden but digests the same");
+            (logical, (theirs.to_string(), ours.to_string()))
+        })
+        .collect()
+}
+
+fn collect_files(dir: &std::path::Path, files: &mut Vec<std::path::PathBuf>) {
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            collect_files(&path, files);
+        } else {
+            files.push(path);
+        }
+    }
+}
+
+/// `text` with our digested paths for overridden files replaced by the reference's.
+fn as_reference(text: &str) -> String {
+    overridden().values().fold(text.to_string(), |text, (theirs, ours)| text.replace(ours.as_str(), theirs))
 }
 
 fn get(path: &str) -> campfire_assets::StaticResponse {
@@ -48,7 +84,7 @@ fn manifest_matches_the_reference_precompile() {
         .collect();
     let ours: BTreeMap<String, String> = campfire_assets::manifest()
         .iter()
-        .map(|(l, d)| (l.to_string(), d.to_string()))
+        .map(|(l, d)| (l.to_string(), as_reference(d)))
         .collect();
 
     let missing: Vec<_> = reference
@@ -64,20 +100,26 @@ fn manifest_matches_the_reference_precompile() {
         "differs from reference: {missing:?}, extra: {extra:?}"
     );
 
-    let served: Value = serde_json::from_str(campfire_assets::manifest_json()).unwrap();
-    let served_as_map: BTreeMap<_, _> = served.as_object().unwrap().iter().collect();
-    let reference_json = json_fixture("manifest.json");
-    assert_eq!(
-        served_as_map,
-        reference_json.as_object().unwrap().iter().collect()
-    );
+    let served: Value = serde_json::from_str(&as_reference(campfire_assets::manifest_json())).unwrap();
+    let mut served = served.as_object().unwrap().clone();
+    let mut reference_json = json_fixture("manifest.json").as_object().unwrap().clone();
+    // An overridden file's integrity hash covers its own bytes.
+    for logical in overridden().keys() {
+        served[logical].as_object_mut().unwrap().remove("integrity");
+        reference_json[logical].as_object_mut().unwrap().remove("integrity");
+    }
+    assert_eq!(served, reference_json);
 }
 
 #[test]
 fn compiled_files_are_byte_identical_to_the_reference_precompile() {
     let reference = json_fixture("compiled_sha256.json");
+    let overridden: Vec<String> = overridden().into_values().map(|(theirs, _)| theirs).collect();
     let mut mismatched = Vec::new();
     for (digested_path, expected) in reference.as_object().unwrap() {
+        if overridden.contains(digested_path) {
+            continue;
+        }
         let response = get(&format!("/assets/{digested_path}"));
         if sha256(&response.body) != expected.as_str().unwrap() {
             mismatched.push(digested_path.clone());
@@ -106,18 +148,22 @@ fn stylesheet_link_tag_all_matches_the_reference() {
 #[test]
 fn javascript_importmap_tags_match_the_reference() {
     assert_eq!(
-        campfire_assets::javascript_importmap_tags(),
+        as_reference(campfire_assets::javascript_importmap_tags()),
         fixture("javascript_importmap_tags.html")
     );
 }
 
 #[test]
 fn public_files_are_served_like_action_dispatch_static() {
+    let overridden = overridden();
     for case in json_fixture("static_responses.json").as_array().unwrap() {
         let env = &case["env"];
+        let path = case["path"].as_str().unwrap();
+        let override_of = overridden.values().find(|(theirs, _)| path == format!("/assets/{theirs}"));
+        let our_path = override_of.map(|(_, ours)| format!("/assets/{ours}"));
         let request = campfire_assets::StaticRequest {
             method: case["method"].as_str().unwrap(),
-            path: case["path"].as_str().unwrap(),
+            path: our_path.as_deref().unwrap_or(path),
             range: env["HTTP_RANGE"].as_str(),
             accept_encoding: env["HTTP_ACCEPT_ENCODING"].as_str(),
             if_modified_since: None,
@@ -151,8 +197,9 @@ fn public_files_are_served_like_action_dispatch_static() {
             .collect();
 
         // Our manifest lists the same entries in load-path order rather than the build
-        // machine's readdir order, so its length and bytes can't match.
-        if request.path == "/assets/.manifest.json" {
+        // machine's readdir order, so its length and bytes can't match; an overridden file's
+        // length, ETag and bytes are its own.
+        if request.path == "/assets/.manifest.json" || override_of.is_some() {
             assert_eq!(
                 ours.get("content-type"),
                 theirs.get("content-type"),

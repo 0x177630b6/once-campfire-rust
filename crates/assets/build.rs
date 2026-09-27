@@ -41,6 +41,10 @@ fn main() {
         "cargo:rerun-if-changed={}",
         crate_dir.join("vendor").display()
     );
+    println!(
+        "cargo:rerun-if-changed={}",
+        crate_dir.join("overrides").display()
+    );
     println!("cargo:rerun-if-changed=build");
     println!("cargo:rerun-if-env-changed=SOURCE_DATE_EPOCH");
 
@@ -166,18 +170,22 @@ fn main() {
     fs::write(out_dir.join("embedded.rs"), code).unwrap();
 }
 
-/// vendor/LOAD_PATH, written by script/revendor from `Rails.application.assets.load_path.paths`.
+/// `overrides/` first, so the app's own changes to the frontend shadow the reference's files of
+/// the same logical path, then vendor/LOAD_PATH (written by script/revendor from
+/// `Rails.application.assets.load_path.paths`).
 fn load_path_dirs(crate_dir: &Path, rails_root: &Path) -> Vec<PathBuf> {
-    fs::read_to_string(crate_dir.join("vendor/LOAD_PATH"))
-        .expect("vendor/LOAD_PATH is missing; run crates/assets/script/revendor")
+    let overrides = crate_dir.join("overrides");
+    let load_path = fs::read_to_string(crate_dir.join("vendor/LOAD_PATH"))
+        .expect("vendor/LOAD_PATH is missing; run crates/assets/script/revendor");
+    let exported = load_path
         .lines()
         .filter(|line| !line.trim().is_empty())
         .map(|line| match line.split_once(':') {
             Some(("reference", dir)) => rails_root.join(dir),
             Some(("vendor", dir)) => crate_dir.join("vendor").join(dir),
             _ => panic!("vendor/LOAD_PATH: bad line {line:?}"),
-        })
-        .collect()
+        });
+    std::iter::once(overrides).chain(exported).collect()
 }
 
 /// config/initializers/assets.rb sets `Rails.application.config.assets.version`.

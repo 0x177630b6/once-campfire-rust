@@ -261,7 +261,7 @@ def session(app, labels):
     room = labels["rooms.watercooler"]
     s = lg("scrape", "--base", app.base, "--cookie", cookie, "--room", room)[0]
     return {
-        "cookie": cookie, "csrf": s["csrf"], "streams": ",".join(s["streams"]), "room": room,
+        "cookie": cookie, "csrf": s["csrf"] or "", "streams": ",".join(s["streams"]), "room": room,
         "write_room": labels["rooms.hq"], "before": labels["messages.busy_060"], "css": s["css"],
     }
 

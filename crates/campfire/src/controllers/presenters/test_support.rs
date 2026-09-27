@@ -90,13 +90,13 @@ impl TestApp {
 
     /// A browser signed in as David.
     pub fn david(&self) -> Browser<'_> {
-        let mut browser = Browser { app: self, cookies: BTreeMap::new(), csrf: None };
+        let mut browser = Browser { app: self, cookies: BTreeMap::new() };
         browser.absorb_cookie_header(&david_cookie());
         browser
     }
 
     pub fn anonymous(&self) -> Browser<'_> {
-        Browser { app: self, cookies: BTreeMap::new(), csrf: None }
+        Browser { app: self, cookies: BTreeMap::new() }
     }
 }
 
@@ -141,11 +141,10 @@ impl Reply {
     }
 }
 
-/// A client that keeps cookies between requests and sends the page's CSRF token on writes.
+/// A client that keeps cookies between requests.
 pub struct Browser<'a> {
     app: &'a TestApp,
     cookies: BTreeMap<String, String>,
-    csrf: Option<String>,
 }
 
 pub struct Req {
@@ -244,30 +243,15 @@ impl Browser<'_> {
         let headers = response.headers().clone();
         let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap().to_vec();
         self.absorb_set_cookies(&headers);
-        let reply = Reply { status, headers, body };
-        if let Some(token) = csrf_meta(&reply.text()) {
-            self.csrf = Some(token);
-        }
-        reply
+        Reply { status, headers, body }
     }
 
     pub async fn get(&mut self, path: &str) -> Reply {
         self.send(Req::new(Method::GET, path)).await
     }
 
-    /// A write with the CSRF token of a page loaded first (loads `/searches` when there's none).
+    /// A write as the app's own pages make it: same-origin, by `Sec-Fetch-Site`.
     pub async fn write(&mut self, req: Req) -> Reply {
-        if self.csrf.is_none() {
-            let page = self.get("/searches").await;
-            assert!(self.csrf.is_some(), "no csrf token: {} {}", page.status, page.text());
-        }
-        let token = self.csrf.clone().unwrap();
-        self.send(req.header("x-csrf-token", &token)).await
+        self.send(req.header("sec-fetch-site", "same-origin")).await
     }
-}
-
-fn csrf_meta(html: &str) -> Option<String> {
-    let start = html.find(r#"<meta name="csrf-token" content=""#)? + r#"<meta name="csrf-token" content=""#.len();
-    let end = html[start..].find('"')?;
-    Some(html[start..start + end].to_string())
 }

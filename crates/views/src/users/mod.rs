@@ -117,8 +117,8 @@ pub struct ProfileShow<'a> {
 
 impl<'a> ProfileShow<'a> {
     /// `profile_form_with(@user, **params)`.
-    fn profile_form(&self) -> h::FormWith<'a> {
-        h::form_with(self.ctx, h::routes::user_profile()).model("user").method("patch").data("controller", "form")
+    fn profile_form(&self) -> h::FormWith {
+        h::form_with(h::routes::user_profile()).model("user").method("patch").data("controller", "form")
     }
 }
 
