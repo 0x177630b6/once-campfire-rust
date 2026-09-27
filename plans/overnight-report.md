@@ -83,3 +83,19 @@ Running log; the final summary gets written at the end.
   - The composer focus race was root-caused and fixed: Playwright's per-document clock offset
     decided whether Lexxy's rAF mount ran before the composer's zero-delay focus.
   - `reference`/`candidate` `down --all` now only stop instances the caller owns.
+- **HTTP optimization pass** (399e035, b9d269e, 2741830, 12197b5, 4dd3ff3, e89cc43, b93306d,
+  786a74d). Each commit passed the full test suite and the header-shape sweep; the later commits
+  also passed the HTTP-heavy lean parity subset.
+
+  | Change | Effect |
+  |---|---|
+  | gzip on zlib-rs | room show 662 → 955 req/s |
+  | Look up the fragment before building the view | room show 989 → 1,664; messages page 1,116 → 2,234 |
+  | WAL checkpoints on their own thread | POST p99 at c=1: 12.5 → 1.7 ms |
+  | Prepared statements cached everywhere | POST 4,257 → 4,693 |
+  | Fragments shared, not copied; sidebar LIMIT inlined | messages page 2,233 → 2,666 |
+  | Stylesheet tags built once per process | 6–10% less CPU per request |
+  | Fat LTO + codegen-units=1 + jemalloc | 5–14% faster per route; idle RSS 11 → 45 MB; builds about 2× slower |
+
+  Measured natively on 4 pinned cores; see the commits for conditions. What's left on hot pages is
+  gzip level 6 (55–70% of CPU) and Rack's SHA-256 ETag, both required for parity with Rails.
