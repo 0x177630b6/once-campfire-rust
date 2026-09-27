@@ -49,3 +49,15 @@ Running log; the final summary gets written at the end.
   - Mask the random join code, since seeding Ruby's RNG can't make Rust match.
   - A pixel-only difference whose server output is identical gets up to 2 re-captures; if one
     matches, the cell passes but is flagged flaky. Server-output differences are never retried.
+- **Cable optimization pass** (4e77f67, 95f2d93, 95e0a3e, a6616a2, a119dab). Measured at 1,000
+  clients, protocol output byte-identical:
+
+  | | Before | After |
+  |---|---|---|
+  | Server CPU per delivery | 62.6 µs | 13.4 µs (4.7×) |
+  | Sustained messages per second | 57 | 198 (3.5×, now bound by the load generator) |
+  | Delivery latency p50 / p99 | 22.8 / 46.0 ms | 11.0 / 17.3 ms |
+  | Memory under saturation | 208 MB | 112 MB |
+
+  How: a 4 KiB read buffer read in its own task, each frame encoded once and shared across
+  subscribers, batched writes, and connections reading straight from the hub's ring buffers.
