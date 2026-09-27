@@ -264,29 +264,38 @@ pub async fn start_new_session_for(c: &mut Ctx, user: User) -> Result<Session> {
         .write(move |tx| Session::start(tx, user_id, user_agent.as_deref(), Some(&ip)))
         .await
         .map_err(Error::internal)?;
-    authenticated_as(c, session.clone(), Some(user)).await?;
+    authenticated_as(c, session.clone(), Some(user), true).await?;
     Ok(session)
 }
 
 /// `resume_session(session)`: refresh its activity (at most hourly), then authenticate as it.
+///
+/// Only a session due for its refresh goes to the database writer, so other requests don't queue
+/// behind every write for nothing. The `session_token` cookie is re-signed on the same schedule
+/// rather than on every request as Rails does, which keeps its 20-year expiry rolling without a
+/// cookie on every response.
 pub async fn resume_session(c: &mut Ctx, session: Session) -> Result<()> {
-    let (user_agent, ip) = (c.request.user_agent().map(str::to_string), c.request.remote_ip()?.to_string());
-    let session = c
-        .app()
-        .db
-        .write(move |tx| {
-            let mut session = session;
-            session.resume(tx, user_agent.as_deref(), Some(&ip))?;
-            Ok(session)
-        })
-        .await
-        .map_err(Error::internal)?;
-    authenticated_as(c, session, None).await
+    let refresh = session.needs_resume(campfire_db::Timestamp::from_jiff(c.now()));
+    let session = if refresh {
+        let (user_agent, ip) = (c.request.user_agent().map(str::to_string), c.request.remote_ip()?.to_string());
+        c.app()
+            .db
+            .write(move |tx| {
+                let mut session = session;
+                session.resume(tx, user_agent.as_deref(), Some(&ip))?;
+                Ok(session)
+            })
+            .await
+            .map_err(Error::internal)?
+    } else {
+        session
+    };
+    authenticated_as(c, session, None, refresh).await
 }
 
 /// `authenticated_as(session)`: `Current.session = session` (which sets `Current.user` to
-/// `session.user`), `authenticated_by` session, and a fresh `session_token` cookie.
-async fn authenticated_as(c: &mut Ctx, session: Session, user: Option<User>) -> Result<()> {
+/// `session.user`), `authenticated_by` session, and, with `set_cookie`, a fresh `session_token` cookie.
+async fn authenticated_as(c: &mut Ctx, session: Session, user: Option<User>, set_cookie: bool) -> Result<()> {
     let user = match user {
         Some(user) => Some(user),
         None => {
@@ -294,7 +303,9 @@ async fn authenticated_as(c: &mut Ctx, session: Session, user: Option<User>) -> 
             c.app().db.read(move |conn| User::find_by_id(conn, user_id)).await.map_err(Error::internal)?
         }
     };
-    set_authentication_cookie(c, &session)?;
+    if set_cookie {
+        set_authentication_cookie(c, &session)?;
+    }
     c.set_current(CurrentSession(session));
     if let Some(user) = user {
         c.set_current(CurrentUser(user));
@@ -406,8 +417,13 @@ pub fn platform(c: &Ctx) -> platform::ApplicationPlatform {
 // --- TrackedRoomVisit ----------------------------------------------------------------------------
 
 /// `remember_last_room_visited`: `cookies.permanent[:last_room] = @room.id`.
+///
+/// Only when it changes: Rails sets it on every room page.
 pub fn remember_last_room_visited(c: &mut Ctx, room_id: i64) {
-    c.cookies.set("last_room", Cookie::new(room_id.to_string()).permanent());
+    let room_id = room_id.to_string();
+    if c.cookies.get("last_room") != Some(room_id.as_str()) {
+        c.cookies.set("last_room", Cookie::new(room_id).permanent());
+    }
 }
 
 /// `last_room_visited`: the `last_room` cookie's room if the user is in it, else

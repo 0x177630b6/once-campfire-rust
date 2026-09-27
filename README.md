@@ -149,6 +149,7 @@ test suite and the parity gate green.
 | Fat LTO, one codegen unit, jemalloc | A further 5–14% per route |
 | Splice precompressed messages into gzipped pages ([below](#spliced-gzip)) | Room page 2,527 → 5,461 req/s; messages page 3,709 → 16,523 req/s; search 2,123 → 5,526 req/s |
 | Forgery protection by `Sec-Fetch-Site` instead of CSRF tokens ([Known differences](#known-differences)) | Room page +9%, messages page +6%, search +10%; pages render the same until their content changes, so revalidation gets a 304 |
+| Cache every part of a page, not just its messages, and take the ETag from the parts ([above](#cached-page-parts)) | Room page 2.9×, search 2.8×, messages page 1.3× |
 | Index messages by `(room_id, created_at)`; check "more than a page" without counting the room | In a room with 236k messages: room page 95 → 6,051 req/s (64×), messages page 87 → 17,972 req/s (208×). Before, a room page sorted the room's whole history, so rooms slowed as they grew; now a long room serves as fast as a new one |
 
 Measured the same way as the preliminary run, the room page went from 4.4× to 10.9× Rails, and cable
@@ -181,6 +182,27 @@ in [`bench/results/splice-20260927/report.md`](bench/results/splice-20260927/rep
 gzip of a 466 KB room page went from 1,032 µs to 271 µs. What remains is the live compression of
 the ~55 KB of layout around the messages. The messages page now serves about as fast as it did with
 compression turned off.
+
+### Cached page parts
+
+Without CSRF tokens (see [Known differences](#known-differences)), a page renders byte for byte the
+same until what it shows changes, so the layout around the messages can be stored too. A page is now
+split into parts that cover it end to end: its cached messages, and the text between them. Each part
+is compressed once, against the part before it, and kept under the part's identity (the cached
+fragment, or the SHA-256 of the text) and its predecessor's. The ETag comes from the same parts'
+digests instead of a SHA-256 over the whole body. For a 466 KB room page, the ETag and gzip went from
+~460 µs to 42 µs; the first request after the page changes pays ~2 ms to compress its new parts.
+
+Measured against the previous commit (details in
+[`bench/results/page-parts-20260927`](bench/results/page-parts-20260927/report.md); the host was
+busy, so these are lower than on a quiet machine):
+
+| Route | Before | After | Change |
+|---|---|---|---|
+| Room page | 5,762 req/s | 16,881 req/s | **2.9×** |
+| Messages page (`?before=`) | 17,087 req/s | 22,580 req/s | **1.3×** |
+| Search | 5,692 req/s | 16,097 req/s | **2.8×** |
+| Sidebar | 15,586 req/s | 17,207 req/s | **1.1×** |
 
 ## Running it
 
@@ -245,6 +267,15 @@ Deliberate:
   to requests for multiple byte ranges; and legacy AES-CBC encrypted cookies, since Campfire started
   on GCM.
 
+- **Cookies are only sent when they change.** Rails rewrites the session cookie, re-signs the
+  `session_token` cookie and re-sets `last_room` on nearly every response. The session cookie is now
+  written only when the session changed, and deleted once it's empty (it only holds the flash and a
+  return-to URL); `session_token` is re-signed when the session's hourly activity refresh runs, which
+  keeps its 20-year expiry rolling; `last_room` is set when it changes. An authenticated request whose
+  session doesn't need that refresh also no longer passes through the database writer.
+- **ETags aren't a digest of the body** on pages made of cached messages (room, messages and search
+  pages): they're a SHA-256 over the page's parts. Identical pages still get identical ETags, and
+  any change gets a new one.
 - **One more index.** On boot the app adds `index_messages_on_room_id_and_created_at` to the Rails
   schema if it's missing (a one-time 49 ms for 236k messages). Rails' schema pages a room's messages
   through `index_messages_on_room_id` alone, which sorts the room's whole history for every page.

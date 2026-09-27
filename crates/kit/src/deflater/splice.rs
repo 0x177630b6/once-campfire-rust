@@ -1,98 +1,235 @@
-//! gzip for pages made mostly of cached fragments (a room's messages), without recompressing
-//! the fragments on every request.
+//! gzip and ETags for pages made mostly of cached fragments (a room's messages), without
+//! recompressing or rehashing the whole page on every request.
 //!
-//! The decoded body is exactly what [`super::gzip_stream`] would produce; only the compressed
-//! bytes differ, as they already do from Ruby's zlib. A fragment is compressed once, against the
-//! fragment before it as a preset dictionary, and the result is kept for as long as the fragment
-//! is: deflate back-references can reach anything in the last 32 KB of output, so the piece is
-//! valid wherever the same predecessor (and the same bytes between them) comes right before it,
-//! which is how a room page repeats from one request to the next. Compressing each fragment on
-//! its own would lose what consecutive messages share and make a room page ~4× larger; chained
-//! this way it's ~15% larger. Everything else (the layout, the first fragment of each run) is
-//! compressed live, at the same level, with the output before it as its dictionary.
+//! A page is split into parts that cover it end to end: its cached fragments (each with the few
+//! bytes of text before it, when that follows another fragment) and the text in between (the
+//! layout). Each part is compressed once, against the part before it as a preset dictionary, and
+//! kept: deflate back-references can reach anything in the last 32 KB of output, so a piece is
+//! valid wherever the same predecessor comes right before it. Pages render the same until what
+//! they show changes (there are no per-request CSRF tokens), so from one request to the next a page
+//! is a run of stored pieces: gzip costs a CRC and some copying, and the ETag a hash of the parts'
+//! digests instead of the whole body. Compressing each part on its own would lose what consecutive
+//! messages share and make a room page ~4× larger; chained like this it's within 1% of compressing
+//! the page whole.
+//!
+//! Fragments are known by identity (the `Arc` the fragment cache hands out), text by its SHA-256.
+//! A stored piece that depends on a fragment holds a `Weak` to it, so while the piece exists that
+//! address can't come back as a different fragment.
 
 use std::collections::HashMap;
-use std::sync::{Arc, LazyLock, Mutex, Weak};
+use std::ops::Range;
+use std::sync::{Arc, LazyLock, Mutex, MutexGuard, Weak};
 
 use bytes::Bytes;
 use flate2::{Compress, Compression, FlushCompress};
+use sha2::{Digest, Sha256};
 
-/// Cached fragments in a response body, in the order they appear in it: set by the controller,
-/// used by the deflater when it gzips the body.
-#[derive(Debug, Clone, Default)]
-pub struct CachedFragments(pub Vec<Arc<String>>);
-
-/// Smaller fragments aren't worth a separately stored piece.
+/// Smaller fragments aren't worth a part of their own; they stay in the text around them.
 const MIN_FRAGMENT: usize = 1024;
-/// At most this much text between two fragments for the second to chain onto the first.
+/// At most this much text between two fragments travels with the second; more is a text part.
 const MAX_GLUE: usize = 256;
 /// Deflate's window.
 const WINDOW: usize = 32 * 1024;
-/// A bound on stored pieces (a 32 MB fragment cache holds a few thousand messages; a chained
-/// piece is a few hundred bytes).
-const MAX_PIECES: usize = 8 * 1024;
+/// A bound on remembered fragments (a 32 MB fragment cache holds a few thousand messages).
+const MAX_FRAGMENTS: usize = 8 * 1024;
+/// A bound on the bytes of stored text pieces (a room page's layout is ~10 KB compressed).
+const MAX_TEXT_PIECE_BYTES: usize = 16 << 20;
 
-/// The whole gzip member for `body`, or `None` when no fragment is found in it (the caller then
-/// streams as usual). `mtime` and the Unix OS code go in the header, as `Zlib::GzipWriter`
-/// writes them.
-pub fn gzip(body: &[u8], fragments: &[Arc<String>], mtime: u32) -> Option<Vec<u8>> {
-    let segments = locate(body, fragments);
-    if !segments.iter().any(|s| s.chained.is_some()) {
-        return None;
-    }
+type Sha = [u8; 32];
 
-    let mut out = Vec::with_capacity(body.len() / 8);
-    out.extend_from_slice(&[0x1f, 0x8b, 8, 0]);
-    out.extend_from_slice(&mtime.to_le_bytes());
-    out.extend_from_slice(&[0, 3]);
-
-    let pieces = pieces(body, &segments);
-    let mut live = Compress::new(Compression::default(), false);
-    let mut fresh = true;
-    let mut offset = 0;
-    for (segment, piece) in segments.iter().zip(&pieces) {
-        let Some(piece) = piece else { continue };
-        // The live text before this piece, then the piece itself.
-        deflate_live(&mut live, &mut fresh, body, offset, segment.glue_start, &mut out);
-        out.extend_from_slice(&piece.deflated);
-        offset = segment.end;
-    }
-    deflate_live(&mut live, &mut fresh, body, offset, body.len(), &mut out);
-    // An empty final block (fixed Huffman), after the sync flushes that ended every part.
-    out.extend_from_slice(&[0x03, 0x00]);
-    // One pass over the whole body is cheaper than combining a CRC per piece.
-    out.extend_from_slice(&crc32fast::hash(body).to_le_bytes());
-    out.extend_from_slice(&(body.len() as u32).to_le_bytes());
-    Some(out)
+/// A page's body split at its cached fragments, with each part's identity.
+#[derive(Debug)]
+pub struct PageParts {
+    len: usize,
+    parts: Vec<Part>,
 }
 
-/// A fragment found in the body, and the fragment it chains onto, if any.
-struct Segment<'a> {
-    fragment: &'a Arc<String>,
-    /// Where the text between the previous fragment and this one starts (`start` when unchained).
-    glue_start: usize,
-    end: usize,
-    chained: Option<&'a Arc<String>>,
+#[derive(Debug)]
+enum Part {
+    Text { range: Range<usize>, sha: Sha },
+    /// `range` starts with the glue (the text since the previous fragment) and ends with the fragment.
+    Fragment { fragment: Arc<String>, sha: Sha, glue: usize, range: Range<usize> },
 }
 
-/// Finds each fragment after the previous one. A fragment rendered but not in the body as is
-/// (escaped into a turbo stream, say) is skipped.
-fn locate<'a>(body: &[u8], fragments: &'a [Arc<String>]) -> Vec<Segment<'a>> {
-    let mut segments: Vec<Segment<'a>> = Vec::new();
+/// What comes right before a part, which its piece may refer back into.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum Before {
+    Nothing,
+    Fragment(usize),
+    Text(Sha),
+}
+
+impl Part {
+    fn range(&self) -> &Range<usize> {
+        match self {
+            Part::Text { range, .. } | Part::Fragment { range, .. } => range,
+        }
+    }
+
+    /// The identity of the part as the part after it sees it, and the bytes its piece may use as
+    /// a dictionary: a fragment's own bytes (never its glue), or the text.
+    fn as_before<'a>(&self, body: &'a [u8]) -> (Before, &'a [u8]) {
+        match self {
+            Part::Text { range, sha } => (Before::Text(*sha), &body[range.clone()]),
+            Part::Fragment { fragment, range, .. } => {
+                (Before::Fragment(fragment_key(fragment)), &body[range.end - fragment.len()..range.end])
+            }
+        }
+    }
+}
+
+impl PageParts {
+    /// Splits `body` at `fragments` (cached HTML, in body order), or `None` when none of them is
+    /// in it as is (a fragment escaped into a turbo stream, say, isn't).
+    pub fn new(body: &[u8], fragments: &[Arc<String>]) -> Option<Self> {
+        let located = locate(body, fragments);
+        if located.is_empty() {
+            return None;
+        }
+        let shas = fragment_shas(located.iter().map(|(fragment, _)| *fragment));
+        let mut parts = Vec::with_capacity(located.len() * 2 + 1);
+        let mut position = 0;
+        for ((fragment, start), sha) in located.into_iter().zip(shas) {
+            let follows_fragment = matches!(parts.last(), Some(Part::Fragment { .. }));
+            let glue = if follows_fragment && start - position <= MAX_GLUE {
+                start - position
+            } else {
+                if start > position {
+                    parts.push(text_part(body, position..start));
+                }
+                0
+            };
+            let end = start + fragment.len();
+            parts.push(Part::Fragment { fragment: fragment.clone(), sha, glue, range: start - glue..end });
+            position = end;
+        }
+        if position < body.len() {
+            parts.push(text_part(body, position..body.len()));
+        }
+        Some(Self { len: body.len(), parts })
+    }
+
+    /// Whether these parts were made from a body of this length (a HEAD response has none).
+    pub fn fits(&self, body: &[u8]) -> bool {
+        self.len == body.len()
+    }
+
+    /// The weak ETag's value: 32 hex digits of a SHA-256 over the parts (the same body split the
+    /// same way always gets the same one), as `Rack::ETag`'s is of the body.
+    pub fn etag(&self, body: &[u8]) -> String {
+        let mut hasher = Sha256::new();
+        for part in &self.parts {
+            match part {
+                Part::Text { range, sha } => {
+                    hasher.update(b"T");
+                    hasher.update((range.len() as u64).to_le_bytes());
+                    hasher.update(sha);
+                }
+                Part::Fragment { sha, glue, range, fragment } => {
+                    hasher.update(b"F");
+                    hasher.update((*glue as u64).to_le_bytes());
+                    hasher.update(&body[range.start..range.start + glue]);
+                    hasher.update((fragment.len() as u64).to_le_bytes());
+                    hasher.update(sha);
+                }
+            }
+        }
+        hasher.finalize()[..16].iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    /// The whole gzip member for `body`, decoding to exactly `body`. `mtime` and the Unix OS code
+    /// go in the header, as `Zlib::GzipWriter` writes them.
+    pub fn gzip(&self, body: &[u8], mtime: u32) -> Vec<u8> {
+        let pieces = self.pieces(body);
+        let mut out = Vec::with_capacity(pieces.iter().map(Bytes::len).sum::<usize>() + 20);
+        out.extend_from_slice(&[0x1f, 0x8b, 8, 0]);
+        out.extend_from_slice(&mtime.to_le_bytes());
+        out.extend_from_slice(&[0, 3]);
+        for piece in &pieces {
+            out.extend_from_slice(piece);
+        }
+        // An empty final block (fixed Huffman), after the sync flushes that ended every piece.
+        out.extend_from_slice(&[0x03, 0x00]);
+        // One pass over the whole body is cheaper than combining a CRC per piece.
+        out.extend_from_slice(&crc32fast::hash(body).to_le_bytes());
+        out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        out
+    }
+
+    /// Each part's compressed piece: stored ones where they fit, the rest compressed and stored.
+    fn pieces(&self, body: &[u8]) -> Vec<Bytes> {
+        let befores: Vec<(Before, &[u8])> = std::iter::once((Before::Nothing, &b""[..]))
+            .chain(self.parts.iter().map(|part| part.as_before(body)))
+            .collect();
+        let mut pieces: Vec<Option<Bytes>> = {
+            let fragments = lock(&FRAGMENTS);
+            let texts = &mut lock(&TEXT_PIECES);
+            self.parts
+                .iter()
+                .zip(&befores)
+                .map(|(part, (before, _))| match part {
+                    Part::Text { sha, .. } => texts.get(&(*sha, *before)),
+                    Part::Fragment { fragment, glue, range, .. } => {
+                        let glue = &body[range.start..range.start + glue];
+                        fragments.get(&fragment_key(fragment)).and_then(|known| known.piece_after(*before, glue))
+                    }
+                })
+                .collect()
+        };
+        let mut new_texts = Vec::new();
+        let mut new_fragments = Vec::new();
+        for (index, ((part, (before, dictionary)), piece)) in self.parts.iter().zip(&befores).zip(&mut pieces).enumerate() {
+            if piece.is_some() {
+                continue;
+            }
+            let deflated = compress(dictionary, &body[part.range().clone()]);
+            let pin = match index.checked_sub(1).map(|previous| &self.parts[previous]) {
+                Some(Part::Fragment { fragment, .. }) => Some(Arc::downgrade(fragment)),
+                _ => None,
+            };
+            match part {
+                Part::Text { sha, .. } => new_texts.push(((*sha, *before), TextPiece { deflated: deflated.clone(), _pin: pin })),
+                Part::Fragment { fragment, glue, range, .. } => new_fragments.push((
+                    fragment.clone(),
+                    FragmentPiece { before: *before, _pin: pin, glue: body[range.start..range.start + glue].into(), deflated: deflated.clone() },
+                )),
+            }
+            *piece = Some(deflated);
+        }
+        if !new_texts.is_empty() {
+            let mut texts = lock(&TEXT_PIECES);
+            for (key, piece) in new_texts {
+                texts.insert(key, piece);
+            }
+        }
+        if !new_fragments.is_empty() {
+            let mut fragments = lock(&FRAGMENTS);
+            for (fragment, piece) in new_fragments {
+                if let Some(known) = fragments.get_mut(&fragment_key(&fragment)) {
+                    known.piece = Some(Arc::new(piece));
+                }
+            }
+        }
+        pieces.into_iter().map(|piece| piece.expect("every part has a piece")).collect()
+    }
+}
+
+fn text_part(body: &[u8], range: Range<usize>) -> Part {
+    let sha = Sha256::digest(&body[range.clone()]).into();
+    Part::Text { range, sha }
+}
+
+/// Where each fragment is, searching after the previous one; fragments not found are skipped.
+fn locate<'a>(body: &[u8], fragments: &'a [Arc<String>]) -> Vec<(&'a Arc<String>, usize)> {
+    let mut located = Vec::new();
     let mut position = 0;
     for fragment in fragments.iter().filter(|f| f.len() >= MIN_FRAGMENT) {
-        let Some(start) = find(body, position, fragment.as_bytes()) else { continue };
-        let end = start + fragment.len();
-        let chained = segments.last().filter(|previous| start - previous.end <= MAX_GLUE);
-        let (glue_start, chained) = match chained {
-            Some(previous) => (previous.end, Some(previous.fragment)),
-            None => (start, None),
-        };
-        segments.push(Segment { fragment, glue_start, end, chained });
-        position = end;
+        if let Some(start) = find(body, position, fragment.as_bytes()) {
+            located.push((fragment, start));
+            position = start + fragment.len();
+        }
     }
-    segments.retain(|segment| segment.chained.is_some());
-    segments
+    located
 }
 
 /// The first occurrence of `needle` in `body` at or after `from`. Finding a short prefix and
@@ -112,117 +249,129 @@ fn find(body: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
     None
 }
 
-/// A fragment's stored piece: the glue before it and the fragment, compressed against the
-/// predecessor and sync-flushed (so it ends on a byte boundary with no final block).
-struct Piece {
+/// Raw deflate of `text` at level 6 with `dictionary` (its last 32 KB) preset, sync-flushed so it
+/// ends on a byte boundary with no final block.
+fn compress(dictionary: &[u8], text: &[u8]) -> Bytes {
+    let mut deflate = Compress::new(Compression::default(), false);
+    if !dictionary.is_empty() {
+        deflate
+            .set_dictionary(&dictionary[dictionary.len().saturating_sub(WINDOW)..])
+            .expect("a fresh raw deflate stream takes a dictionary");
+    }
+    let mut out = Vec::with_capacity(text.len() / 4 + 64);
+    loop {
+        let consumed = deflate.total_in() as usize;
+        if out.capacity() - out.len() < 1024 {
+            out.reserve(out.capacity().max(4096));
+        }
+        deflate.compress_vec(&text[consumed..], &mut out, FlushCompress::Sync).expect("deflate doesn't fail on valid input");
+        // Done once all input is in and the flush left spare room in the output.
+        if deflate.total_in() as usize == text.len() && out.len() < out.capacity() {
+            break;
+        }
+    }
+    out.into()
+}
+
+// --- What's remembered -------------------------------------------------------------------------
+
+/// A fragment seen in a page: its SHA-256, and its piece for the predecessor it last followed.
+struct KnownFragment {
     fragment: Weak<String>,
-    predecessor: Weak<String>,
+    sha: Sha,
+    piece: Option<Arc<FragmentPiece>>,
+}
+
+struct FragmentPiece {
+    before: Before,
+    /// Keeps a predecessor fragment's address from being reused while this piece refers to it.
+    _pin: Option<Weak<String>>,
     glue: Box<[u8]>,
     deflated: Bytes,
 }
 
-static PIECES: LazyLock<Mutex<HashMap<usize, Arc<Piece>>>> = LazyLock::new(Mutex::default);
-
-/// Each segment's stored piece, compressing (and storing) the ones missing or stale.
-fn pieces(body: &[u8], segments: &[Segment]) -> Vec<Option<Arc<Piece>>> {
-    let mut found: Vec<Option<Arc<Piece>>> = {
-        let stored = lock();
-        segments.iter().map(|segment| stored.get(&key(segment.fragment)).filter(|p| p.fits(body, segment)).cloned()).collect()
-    };
-    let mut compressed = Vec::new();
-    for (segment, piece) in segments.iter().zip(found.iter_mut()) {
-        if piece.is_none() {
-            let new = Arc::new(Piece::compress(body, segment));
-            compressed.push((key(segment.fragment), new.clone()));
-            *piece = Some(new);
-        }
-    }
-    if !compressed.is_empty() {
-        let mut stored = lock();
-        if stored.len() + compressed.len() > MAX_PIECES {
-            stored.retain(|_, piece| piece.fragment.strong_count() > 0);
-            if stored.len() + compressed.len() > MAX_PIECES {
-                stored.clear();
-            }
-        }
-        stored.extend(compressed);
-    }
-    found
-}
-
-impl Piece {
-    fn compress(body: &[u8], segment: &Segment) -> Self {
-        let predecessor = segment.chained.expect("only chained segments get pieces");
-        let start = segment.end - segment.fragment.len();
-        let text = &body[segment.glue_start..segment.end];
-        let dictionary = &body[segment.glue_start.saturating_sub(WINDOW).max(segment.glue_start - predecessor.len())..segment.glue_start];
-        let mut deflate = Compress::new(Compression::default(), false);
-        deflate.set_dictionary(dictionary).expect("a fresh raw deflate stream takes a dictionary");
-        let mut deflated = Vec::with_capacity(text.len() / 4 + 64);
-        compress_all(&mut deflate, text, &mut deflated);
-        Self {
-            fragment: Arc::downgrade(segment.fragment),
-            predecessor: Arc::downgrade(predecessor),
-            glue: body[segment.glue_start..start].into(),
-            deflated: deflated.into(),
-        }
-    }
-
-    /// Whether this piece decodes correctly at `segment`: the same predecessor right before it,
-    /// with the same text between them. (A `Weak` keeps its allocation, so a live fragment at the
-    /// same address is the same fragment.)
-    fn fits(&self, body: &[u8], segment: &Segment) -> bool {
-        let start = segment.end - segment.fragment.len();
-        segment.chained.is_some_and(|predecessor| std::ptr::eq(self.predecessor.as_ptr(), Arc::as_ptr(predecessor)))
-            && *self.glue == body[segment.glue_start..start]
+impl KnownFragment {
+    fn piece_after(&self, before: Before, glue: &[u8]) -> Option<Bytes> {
+        self.piece.as_ref().filter(|piece| piece.before == before && *piece.glue == *glue).map(|piece| piece.deflated.clone())
     }
 }
 
-fn key(fragment: &Arc<String>) -> usize {
+struct TextPiece {
+    deflated: Bytes,
+    _pin: Option<Weak<String>>,
+}
+
+/// Text pieces in two generations: a read promotes an old piece, and when the young generation
+/// fills half the budget it becomes the old one (dropping the previous old one). Bounded, and what
+/// pages keep using stays.
+#[derive(Default)]
+struct TextPieces {
+    young: HashMap<(Sha, Before), TextPiece>,
+    old: HashMap<(Sha, Before), TextPiece>,
+    young_bytes: usize,
+}
+
+impl TextPieces {
+    fn get(&mut self, key: &(Sha, Before)) -> Option<Bytes> {
+        if let Some(piece) = self.young.get(key) {
+            return Some(piece.deflated.clone());
+        }
+        let piece = self.old.remove(key)?;
+        let deflated = piece.deflated.clone();
+        self.insert(*key, piece);
+        Some(deflated)
+    }
+
+    fn insert(&mut self, key: (Sha, Before), piece: TextPiece) {
+        self.young_bytes += piece.deflated.len();
+        self.young.insert(key, piece);
+        if self.young_bytes > MAX_TEXT_PIECE_BYTES / 2 {
+            self.old = std::mem::take(&mut self.young);
+            self.young_bytes = 0;
+        }
+    }
+}
+
+static FRAGMENTS: LazyLock<Mutex<HashMap<usize, KnownFragment>>> = LazyLock::new(Mutex::default);
+static TEXT_PIECES: LazyLock<Mutex<TextPieces>> = LazyLock::new(Mutex::default);
+
+fn lock<T>(mutex: &'static Mutex<T>) -> MutexGuard<'static, T> {
+    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn fragment_key(fragment: &Arc<String>) -> usize {
     Arc::as_ptr(fragment) as usize
 }
 
-fn lock() -> std::sync::MutexGuard<'static, HashMap<usize, Arc<Piece>>> {
-    PIECES.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
-/// Compresses `body[from..to]` on the live stream, with the output before it as the dictionary
-/// when a stored piece came in between.
-fn deflate_live(live: &mut Compress, fresh: &mut bool, body: &[u8], from: usize, to: usize, out: &mut Vec<u8>) {
-    if from == to {
-        return;
-    }
-    if !*fresh {
-        live.reset();
-        live.set_dictionary(&body[from.saturating_sub(WINDOW)..from]).expect("a reset raw deflate stream takes a dictionary");
-    } else if from > 0 {
-        live.set_dictionary(&body[from.saturating_sub(WINDOW)..from]).expect("a fresh raw deflate stream takes a dictionary");
-    }
-    *fresh = false;
-    compress_all(live, &body[from..to], out);
-}
-
-/// Compresses all of `input` and sync-flushes.
-fn compress_all(deflate: &mut Compress, input: &[u8], out: &mut Vec<u8>) {
-    let start = deflate.total_in();
-    loop {
-        let consumed = (deflate.total_in() - start) as usize;
-        if out.capacity() - out.len() < 1024 {
-            out.reserve(out.capacity().max(4096));
-        }
-        deflate.compress_vec(&input[consumed..], out, FlushCompress::Sync).expect("deflate doesn't fail on valid input");
-        let consumed = (deflate.total_in() - start) as usize;
-        // Done once all input is in and the flush left spare room in the output.
-        if consumed == input.len() && out.len() < out.capacity() {
-            break;
+/// Each fragment's SHA-256, hashing (and remembering) the ones not seen before. A remembered
+/// entry at the same address is the same fragment while its `Weak` keeps the address taken.
+fn fragment_shas<'a>(fragments: impl Iterator<Item = &'a Arc<String>> + Clone) -> Vec<Sha> {
+    let mut known = lock(&FRAGMENTS);
+    let missing = fragments.clone().filter(|f| !known.contains_key(&fragment_key(f))).count();
+    if known.len() + missing > MAX_FRAGMENTS {
+        known.retain(|_, entry| entry.fragment.strong_count() > 0);
+        if known.len() + missing > MAX_FRAGMENTS {
+            known.clear();
         }
     }
+    fragments
+        .map(|fragment| {
+            known
+                .entry(fragment_key(fragment))
+                .or_insert_with(|| KnownFragment {
+                    fragment: Arc::downgrade(fragment),
+                    sha: Sha256::digest(fragment.as_bytes()).into(),
+                    piece: None,
+                })
+                .sha
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Read;
+    use std::io::{Read, Write};
 
     fn gunzip(bytes: &[u8]) -> Vec<u8> {
         let mut out = Vec::new();
@@ -244,74 +393,97 @@ mod tests {
         page
     }
 
-    #[test]
-    fn decodes_to_the_body_and_reuses_pieces() {
-        let messages: Vec<_> = (0..30).map(message).collect();
-        for token in ["abc", "a-different-token"] {
-            let body = page(&format!("<html><meta name=\"csrf-token\" content=\"{token}\">"), &messages, "</html>");
-            let gz = gzip(body.as_bytes(), &messages, 1234).expect("spliced");
-            assert_eq!(gunzip(&gz), body.as_bytes());
-            assert_eq!(&gz[4..8], &1234u32.to_le_bytes());
-            assert_eq!(gz[9], 3);
-        }
-        let stored = lock();
-        let piece = stored.get(&key(&messages[5])).unwrap().clone();
-        drop(stored);
-        let body = page("<html>", &messages, "</html>");
-        gzip(body.as_bytes(), &messages, 0).unwrap();
-        assert!(Arc::ptr_eq(&piece, lock().get(&key(&messages[5])).unwrap()), "the second page reuses the piece");
+    fn gzip(body: &str, fragments: &[Arc<String>]) -> Vec<u8> {
+        PageParts::new(body.as_bytes(), fragments).expect("fragments in the body").gzip(body.as_bytes(), 0)
     }
 
     #[test]
-    fn a_new_predecessor_or_glue_recompresses() {
+    fn decodes_to_the_body_and_reuses_pieces() {
+        let messages: Vec<_> = (0..30).map(message).collect();
+        let body = page("<html><head>layout</head><body>", &messages, "</body></html>");
+        let parts = PageParts::new(body.as_bytes(), &messages).unwrap();
+        let gz = parts.gzip(body.as_bytes(), 1234);
+        assert_eq!(gunzip(&gz), body.as_bytes());
+        assert_eq!(&gz[4..8], &1234u32.to_le_bytes());
+        assert_eq!(gz[9], 3);
+        let piece = lock(&FRAGMENTS)[&fragment_key(&messages[5])].piece.clone().unwrap();
+        assert_eq!(PageParts::new(body.as_bytes(), &messages).unwrap().gzip(body.as_bytes(), 1234), gz, "the same page is the same stored pieces");
+        assert!(Arc::ptr_eq(&piece, lock(&FRAGMENTS)[&fragment_key(&messages[5])].piece.as_ref().unwrap()));
+    }
+
+    #[test]
+    fn a_changed_layout_or_neighbour_decodes_correctly() {
         let messages: Vec<_> = (100..110).map(message).collect();
         let body = page("<p>", &messages, "</p>");
-        gzip(body.as_bytes(), &messages, 0).unwrap();
+        gzip(&body, &messages);
+        for body in [page("<p>changed", &messages, "</p>"), page("<p>", &messages, "</p>changed")] {
+            assert_eq!(gunzip(&gzip(&body, &messages)), body.as_bytes());
+        }
         // Drop one message: the one after it now follows a different predecessor.
         let mut fewer = messages.clone();
         fewer.remove(4);
         let body = page("<p>", &fewer, "</p>");
-        assert_eq!(gunzip(&gzip(body.as_bytes(), &fewer, 0).unwrap()), body.as_bytes());
+        assert_eq!(gunzip(&gzip(&body, &fewer)), body.as_bytes());
         // Different glue between the same fragments.
-        let mut body = String::from("<p>");
-        for message in &messages {
-            body.push_str("\n    ");
-            body.push_str(message);
-        }
-        assert_eq!(gunzip(&gzip(body.as_bytes(), &messages, 0).unwrap()), body.as_bytes());
+        let body: String = std::iter::once("<p>".to_string()).chain(messages.iter().map(|m| format!("\n    {m}"))).collect();
+        assert_eq!(gunzip(&gzip(&body, &messages)), body.as_bytes());
     }
 
     #[test]
-    fn missing_fragments_and_small_ones_are_compressed_live() {
+    fn missing_small_repeated_and_far_apart_fragments() {
         let messages: Vec<_> = (200..206).map(message).collect();
         let small = Arc::new("<i>small</i>".to_string());
         let absent = message(999);
         let listed = vec![messages[0].clone(), small.clone(), absent, messages[1].clone(), messages[2].clone()];
         let body = page("<p>", &[messages[0].clone(), small, messages[1].clone(), messages[2].clone()], "</p>");
-        assert_eq!(gunzip(&gzip(body.as_bytes(), &listed, 0).unwrap()), body.as_bytes());
-        assert!(gzip(b"<p>nothing cached</p>", &messages, 0).is_none());
+        assert_eq!(gunzip(&gzip(&body, &listed)), body.as_bytes());
+        assert!(PageParts::new(b"<p>nothing cached</p>", &messages).is_none());
+
+        let (a, b) = (message(300), message(301));
+        let body = format!("{a}{b}{a}{}{b}{a}", "x".repeat(MAX_GLUE + 1));
+        let listed = vec![a.clone(), b.clone(), a.clone(), b.clone(), a.clone()];
+        for _ in 0..2 {
+            assert_eq!(gunzip(&gzip(&body, &listed)), body.as_bytes());
+        }
     }
 
     #[test]
-    fn repeated_fragments_and_long_glue() {
-        let a = message(300);
-        let b = message(301);
-        let body = format!("{a}{b}{a}{}{b}{a}", "x".repeat(MAX_GLUE + 1));
-        let listed = vec![a.clone(), b.clone(), a.clone(), b.clone(), a.clone()];
-        assert_eq!(gunzip(&gzip(body.as_bytes(), &listed, 0).unwrap()), body.as_bytes());
+    fn etags_follow_the_content() {
+        let messages: Vec<_> = (400..410).map(message).collect();
+        let etag = |body: &str| PageParts::new(body.as_bytes(), &messages).unwrap().etag(body.as_bytes());
+        let body = page("<p>", &messages, "</p>");
+        assert_eq!(etag(&body), etag(&body.clone()));
+        assert_eq!(etag(&body).len(), 32);
+        assert_ne!(etag(&body), etag(&page("<p>", &messages, "</p>!")));
+        assert_ne!(etag(&body), etag(&page("<q>", &messages, "</p>")));
+        let glued: String = std::iter::once("<p>".to_string()).chain(messages.iter().map(|m| format!(" {m}"))).chain(["</p>".into()]).collect();
+        assert_ne!(etag(&body), etag(&glued));
     }
 
     #[test]
     fn stays_close_to_whole_body_compression() {
-        use std::io::Write;
-        let messages: Vec<_> = (400..440).map(message).collect();
+        let messages: Vec<_> = (500..540).map(message).collect();
         let body = page(&"<head>layout</head>".repeat(200), &messages, &"<footer/>".repeat(300));
         let mut whole = flate2::write::GzEncoder::new(Vec::new(), Compression::default());
         whole.write_all(body.as_bytes()).unwrap();
         let whole = whole.finish().unwrap().len();
-        let spliced = gzip(body.as_bytes(), &messages, 0).unwrap().len();
+        let spliced = gzip(&body, &messages).len();
         // Each piece costs its flush marker and block header, not a recompressed message.
-        assert!(spliced < whole + 40 * messages.len(), "{spliced} bytes spliced vs {whole} whole");
+        assert!(spliced < whole + 40 * (messages.len() + 2), "{spliced} bytes spliced vs {whole} whole");
+    }
+
+    #[test]
+    fn text_pieces_stay_within_their_budget() {
+        let mut texts = TextPieces::default();
+        let size = 1 << 20;
+        let piece = || TextPiece { deflated: Bytes::from(vec![0; size]), _pin: None };
+        for n in 0..100u8 {
+            texts.insert(([n; 32], Before::Nothing), piece());
+            let held = (texts.young.len() + texts.old.len()) * size;
+            // Each generation may overshoot half the budget by the piece that filled it.
+            assert!(held <= MAX_TEXT_PIECE_BYTES + 2 * size, "{held} bytes held");
+        }
+        assert!(texts.get(&([99; 32], Before::Nothing)).is_some(), "the latest is kept");
     }
 }
 

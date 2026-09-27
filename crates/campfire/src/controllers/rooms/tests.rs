@@ -202,3 +202,15 @@ async fn cross_site_writes_are_refused() {
     let request = Req::new(Method::POST, "/rooms/opens").form(&[("room[name]", "x")]).header("sec-fetch-site", "cross-site");
     assert_eq!(david.send(request).await.status, StatusCode::UNPROCESSABLE_ENTITY);
 }
+
+#[tokio::test]
+async fn the_last_room_cookie_is_set_only_when_it_changes() {
+    let Some(app) = TestApp::boot().await else { return };
+    let mut david = app.david();
+    let last_room = |reply: &Reply| {
+        reply.headers.get_all(axum::http::header::SET_COOKIE).iter().any(|c| c.to_str().unwrap().starts_with("last_room="))
+    };
+    assert!(last_room(&david.get(&format!("/rooms/{HQ}")).await));
+    assert!(!last_room(&david.get(&format!("/rooms/{HQ}")).await), "the same room again");
+    assert!(last_room(&david.get(&format!("/rooms/{ALL_TALK}")).await));
+}

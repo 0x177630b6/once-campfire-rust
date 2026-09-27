@@ -190,6 +190,12 @@ async fn a_rails_issued_session_cookie_authenticates() {
     let cookies: Vec<&str> = signed_in.headers.get_all(header::SET_COOKIE).iter().map(|v| v.to_str().unwrap()).collect();
     assert!(cookies.iter().any(|c| c.starts_with("session_token=") && c.contains("httponly") && c.contains("samesite=lax")), "{cookies:?}");
 
+    // That request refreshed the seed's stale session; for the next hour it isn't touched again,
+    // so the cookie isn't re-sent (Rails re-signs it on every request).
+    let again = send(&router, get_with_cookie("/whoami", &session.cookie_header)).await;
+    assert_eq!(again.text(), session.user_name);
+    assert!(again.headers.get(header::SET_COOKIE).is_none(), "{:?}", again.headers);
+
     for cookie in [None, Some(vectors.forged.cookie_header.as_str()), Some("session_token=tampered--0000")] {
         let request = match cookie {
             Some(cookie) => get_with_cookie("/whoami", cookie),

@@ -9,7 +9,6 @@ pub mod key_generator;
 pub mod message_verifier;
 pub mod message_encryptor;
 pub mod cookies;
-pub mod csrf;
 pub mod signed_id;
 pub mod global_id;
 pub mod turbo;
