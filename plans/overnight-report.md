@@ -1,6 +1,45 @@
 # Overnight report
 
-Running log; the final summary gets written at the end.
+## Morning summary
+
+**The port is done and matches Rails.**
+
+| Gate (final HEAD, all 5 seeds) | Result |
+|---|---|
+| Ruby vs Ruby, lean | 970/970, 0 flaky |
+| Rust vs Rails, lean | 970/970, 1 flaky (a one-gray-level antialiasing arc), 0 allowlisted |
+| Rust vs Rails, full matrix | _pending_ |
+
+- **What the gates check:**
+  - server output for every state: HTML, live DOM, accessibility tree, every subresource and the
+    cable frames;
+  - pixels on Chromium at desktop and phone in light and dark, plus a smoke set on Firefox and WebKit.
+- **Other checks:**
+  - the header-shape sweep shows 0 differences;
+  - all workspace tests pass;
+  - Rails boots on a database the Rust app has written.
+- **Thruster is gone.** `campfire server` does the TLS/ACME, HTTP/2, caching and compression itself.
+  Thruster's certificate storage is compatible both ways.
+- **Performance (final benchmark):** 9–19× Rails throughput on pages, 19× on message POSTs and
+  22–26× on cable fan-out. It cold-starts 10.6× faster and uses 6.3× less memory at idle. The
+  optimization passes roughly tripled the Rust app's own throughput: gzip on zlib-rs, fragment-first
+  rendering, WAL checkpoints off the writer, cached statements, cable frames shared across
+  subscribers, and LTO plus jemalloc.
+- **Still open or worth a look:**
+  - The fragment cache needs a byte bound. A fix is in progress (see below).
+  - Harness: HTTP-01 ACME is unit-tested only. The sidebar-toggle arc flake is not root-caused.
+  - Reference bugs the port reproduces faithfully, worth fixing upstream in Campfire:
+    - Edge user agents get a 500 on profile and room pages, because `install-edge.svg` is missing.
+    - `/searches?q=NOT` raises.
+    - new-ping autocomplete never shows suggestions.
+    - a mention of a deleted user blanks the whole message.
+    - editing a message with a missing attachment raises.
+    - `directs#show` returns 500.
+  - There's one incident to note under Incidents below.
+- **Repo:** github.com/basecamp/once-campfire-rust (private). Start with `plans/rust-conversion.md`,
+  then `AGENTS.md`.
+
+The running log follows.
 
 ## Log
 
