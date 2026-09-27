@@ -379,10 +379,19 @@ async fn render_incompatible_browser(c: &mut Ctx) -> Result {
     let own_layout = c
         .current::<crate::controllers::MatchedRoute>()
         .is_some_and(|route| route.endpoint.starts_with("messages#") || route.endpoint.starts_with("messages/by_bots#"));
+    use crate::controllers::presenters_a::view_context::{page_in_any_format, page_or_frame_in_any_format};
+
+    // An explicit `render template:`, so no format lookup: a blocked browser gets this page for
+    // /webmanifest.json, /service-worker.js or `Accept: application/json` alike (verified against
+    // the reference), never a 406.
     let response = if own_layout {
-        crate::controllers::presenters_a::view_context::page(c, StatusCode::OK, |ctx| IncompatibleBrowser { ctx }.render()).await?
+        page_in_any_format(c, StatusCode::OK, |ctx| IncompatibleBrowser { ctx }.render()).await?
     } else {
-        crate::controllers::presenters::page::framed_page!(c, StatusCode::OK, |ctx| IncompatibleBrowser { ctx }).await?
+        page_or_frame_in_any_format(c, StatusCode::OK, |ctx| IncompatibleBrowser { ctx }.render(), |ctx| {
+            let page = IncompatibleBrowser { ctx };
+            campfire_views::layouts::frame(ctx, page.as_head(), page.as_content())
+        })
+        .await?
     };
     Ok(response.content_type(campfire_kit::response::HTML_UTF8))
 }

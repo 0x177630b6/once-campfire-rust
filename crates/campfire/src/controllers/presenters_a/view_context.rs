@@ -156,6 +156,16 @@ pub async fn page(
     full: impl FnOnce(&ViewContext) -> askama::Result<String>,
 ) -> Result {
     find_template(c, &format::HTML)?;
+    page_in_any_format(c, status, full).await
+}
+
+/// [`page`] without the implicit render's template lookup: an explicit `render template:`
+/// answers HTML whatever the request's format.
+pub async fn page_in_any_format(
+    c: &mut Ctx,
+    status: StatusCode,
+    full: impl FnOnce(&ViewContext) -> askama::Result<String>,
+) -> Result {
     let layout = Layout::load(c).await?;
     let html = layout.render(c, full)?;
     Ok(layout.page(c, status, html))
@@ -170,6 +180,16 @@ pub async fn page_or_frame(
     frame: impl FnOnce(&ViewContext) -> askama::Result<String>,
 ) -> Result {
     find_template(c, &format::HTML)?;
+    page_or_frame_in_any_format(c, status, full, frame).await
+}
+
+/// [`page_or_frame`] without the template lookup (see [`page_in_any_format`]).
+pub async fn page_or_frame_in_any_format(
+    c: &mut Ctx,
+    status: StatusCode,
+    full: impl FnOnce(&ViewContext) -> askama::Result<String>,
+    frame: impl FnOnce(&ViewContext) -> askama::Result<String>,
+) -> Result {
     let layout = Layout::load(c).await?;
     if c.is_turbo_frame_request() {
         let html = layout.render(c, frame)?;

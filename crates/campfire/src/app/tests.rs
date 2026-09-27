@@ -229,6 +229,13 @@ async fn the_application_chain_blocks_banned_ips_forgeries_and_old_browsers() {
     let old_browser = send(&router, request.body(Body::empty()).unwrap()).await;
     assert_eq!(old_browser.status, StatusCode::OK);
     assert_ne!(old_browser.text(), vectors.sessions[0].user_name);
+
+    // The incompatible-browser page is an explicit `render template:`: HTML whatever the format.
+    for (path, accept) in [("/webmanifest.json", "*/*"), ("/service-worker.js", "*/*"), ("/session/new", "application/json")] {
+        let request = Request::get(path).header(header::HOST, "campfire.test").header(header::USER_AGENT, outdated).header(header::ACCEPT, accept);
+        let blocked = send(&test.booted.router, request.body(Body::empty()).unwrap()).await;
+        assert_eq!((blocked.status, blocked.header("content-type")), (StatusCode::OK, Some("text/html; charset=utf-8")), "{path} {accept}");
+    }
 }
 
 #[tokio::test]
