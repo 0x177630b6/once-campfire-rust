@@ -69,3 +69,17 @@ Running log; the final summary gets written at the end.
   - The front server writes `Date` from the real clock. A frozen `Date` made Chrome treat
     preloaded assets as stale and stall the sign-in pages.
   - What remains is the composer focus-ring timing flake, which the harness agent is fixing.
+- **PARITY MILESTONE** (9ae1c15, candidate built from a clean archive of e89cc43):
+
+  | Gate | Result |
+  |---|---|
+  | Ruby vs Ruby, lean, all seeds | 970/970 pass, 1 flaky |
+  | Rust vs Rails, lean, all seeds | 970/970 pass, 2 flaky, 0 allowlisted |
+
+  The flaky cells are all the same issue: one gray level on the phone sidebar toggle's arc after
+  the sign-up redirect. Their server output is identical. How the gate got here:
+  - The random join code is masked on the first-run page (typed text placeholder, plus pixel masks
+    over the invite field and QR code).
+  - The composer focus race was root-caused and fixed: Playwright's per-document clock offset
+    decided whether Lexxy's rAF mount ran before the composer's zero-delay focus.
+  - `reference`/`candidate` `down --all` now only stop instances the caller owns.
