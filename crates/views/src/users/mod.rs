@@ -176,7 +176,7 @@ pub struct SidebarDirect {
 /// so Rails evaluates none of it then), else the view to render it from.
 #[derive(Clone, Debug)]
 pub enum SidebarDirectItem {
-    Fragment(String),
+    Fragment(crate::fragment_cache::Fragment),
     View(SidebarDirect),
 }
 
@@ -197,16 +197,16 @@ pub fn direct_room(ctx: &ViewContext, membership: &SidebarDirect) -> String {
 }
 
 /// [`direct_room`] where a template renders the partial.
-pub fn cached_direct_room(ctx: &ViewContext, item: &SidebarDirectItem) -> h::Html {
-    match item {
-        SidebarDirectItem::Fragment(html) => h::raw(html.clone()),
-        SidebarDirectItem::View(membership) => h::raw(direct_room(ctx, membership)),
-    }
+pub fn cached_direct_room<'a>(ctx: &ViewContext, item: &'a SidebarDirectItem) -> askama::filters::Safe<std::borrow::Cow<'a, str>> {
+    askama::filters::Safe(match item {
+        SidebarDirectItem::Fragment(html) => std::borrow::Cow::Borrowed(html.as_str()),
+        SidebarDirectItem::View(membership) => std::borrow::Cow::Owned(direct_room(ctx, membership)),
+    })
 }
 
 /// The `users/sidebars/rooms/_direct` fragment for this membership version, if the current store
 /// holds it.
-pub fn cached_direct_room_fragment(membership_id: i64, updated_at: jiff::Timestamp) -> Option<String> {
+pub fn cached_direct_room_fragment(membership_id: i64, updated_at: jiff::Timestamp) -> Option<crate::fragment_cache::Fragment> {
     crate::fragment_cache::read(&direct_room_fragment_key(membership_id, updated_at))
 }
 

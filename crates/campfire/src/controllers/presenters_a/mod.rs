@@ -216,14 +216,14 @@ fn direct_placeholder_users(conn: &Connection, secrets: &Secrets, user: &User) -
     }
     exclude_user_ids.push(user.id);
 
+    // The limit goes in the SQL: under ORDER BY, SQLite recompiles a statement with a bound LIMIT
+    // every time it runs.
     let limit = (DIRECT_PLACEHOLDERS - exclude_user_ids.len() as i64).max(0);
     let sql = format!(
-        r#"SELECT * FROM "users" WHERE "users"."status" = 0 AND "users"."id" NOT IN ({}) ORDER BY "users"."created_at" ASC LIMIT ?"#,
+        r#"SELECT * FROM "users" WHERE "users"."status" = 0 AND "users"."id" NOT IN ({}) ORDER BY "users"."created_at" ASC LIMIT {limit}"#,
         placeholders(exclude_user_ids.len())
     );
-    let mut values: Vec<i64> = exclude_user_ids;
-    values.push(limit);
-    let users = query_users(conn, &sql, &values)?;
+    let users = query_users(conn, &sql, &exclude_user_ids)?;
     Ok(users.iter().map(|user| user_summary(secrets, user)).collect())
 }
 

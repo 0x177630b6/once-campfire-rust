@@ -274,6 +274,7 @@ def routes(sess):
         "room_show_identity": ["--path", f"/rooms/{r}", "--gzip", "0"],
         "messages_page": ["--path", f"/rooms/{r}/messages?before={sess['before']}"],
         "sidebar": ["--path", "/users/me/sidebar"],
+        "search": ["--path", "/searches?q=coffee"],
         "post_message": ["--post-room", w, "--csrf", sess["csrf"]],
     }
 

@@ -160,7 +160,7 @@ pub struct BoostView {
 /// and build a [`MessageView`] only on a miss.
 #[derive(Clone, Debug, PartialEq)]
 pub enum MessageItem {
-    Fragment { client_message_id: String, room_id: i64, html: String },
+    Fragment { client_message_id: String, room_id: i64, html: fragment_cache::Fragment },
     View(MessageView),
 }
 
@@ -290,20 +290,20 @@ pub fn message(ctx: &ViewContext, message: &MessageView) -> String {
 
 /// [`message`] where a template renders the partial.
 pub fn cached_message(ctx: &ViewContext, message: &MessageView) -> crate::helpers::Html {
-    crate::helpers::raw(self::message(ctx, message))
+    askama::filters::Safe(self::message(ctx, message))
 }
 
 /// [`cached_message`] for a [`MessageItem`]: a fragment found up front goes out as it is.
-pub fn cached_message_item(ctx: &ViewContext, item: &MessageItem) -> crate::helpers::Html {
-    match item {
-        MessageItem::Fragment { html, .. } => crate::helpers::raw(html.clone()),
-        MessageItem::View(message) => cached_message(ctx, message),
-    }
+pub fn cached_message_item<'a>(ctx: &ViewContext, item: &'a MessageItem) -> askama::filters::Safe<std::borrow::Cow<'a, str>> {
+    askama::filters::Safe(match item {
+        MessageItem::Fragment { html, .. } => std::borrow::Cow::Borrowed(html.as_str()),
+        MessageItem::View(message) => std::borrow::Cow::Owned(self::message(ctx, message)),
+    })
 }
 
 /// `messages/_message`'s fragment for this message version, if the current store holds it. The
 /// key needs only the message's id and `updated_at`.
-pub fn cached_message_fragment(id: i64, updated_at: Timestamp) -> Option<String> {
+pub fn cached_message_fragment(id: i64, updated_at: Timestamp) -> Option<fragment_cache::Fragment> {
     fragment_cache::read(&message_fragment_key(id, updated_at))
 }
 
@@ -336,7 +336,7 @@ pub fn boost(ctx: &ViewContext, boost: &BoostView) -> String {
 
 /// [`boost`] where a template renders the partial.
 pub fn cached_boost(ctx: &ViewContext, boost: &BoostView) -> crate::helpers::Html {
-    crate::helpers::raw(self::boost(ctx, boost))
+    askama::filters::Safe(self::boost(ctx, boost))
 }
 
 /// The template digest in `messages/_message`'s fragment keys: the partial and what it renders.

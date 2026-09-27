@@ -22,6 +22,9 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
+/// A rendered fragment as the store keeps it.
+pub type Fragment = Arc<String>;
+
 /// How many fragments the store keeps by default.
 pub const DEFAULT_CAPACITY: usize = 50_000;
 
@@ -48,7 +51,7 @@ impl FragmentCache {
 
     /// `Rails.cache.fetch(key) { render }` for a rendered fragment.
     pub fn fetch(&self, key: &str, render: impl FnOnce() -> String) -> String {
-        self.fetch_value(key, render)
+        String::clone(&self.fetch_value(key, || Fragment::new(render())))
     }
 
     /// `Rails.cache.fetch(key) { value }` for any cloneable value (Jbuilder caches the hash it
@@ -149,9 +152,10 @@ pub fn fetch(key: impl FnOnce() -> String, render: impl FnOnce() -> String) -> S
     }
 }
 
-/// The fragment `key` holds in the current store, if any. For callers that gather a fragment's
-/// inputs only on a miss, as `cache key do ... end` evaluates its block only then.
-pub fn read(key: &str) -> Option<String> {
+/// The fragment `key` holds in the current store, if any, shared rather than copied. For callers
+/// that gather a fragment's inputs only on a miss, as `cache key do ... end` evaluates its block
+/// only then.
+pub fn read(key: &str) -> Option<Fragment> {
     current()?.get(key)
 }
 
@@ -247,7 +251,7 @@ mod tests {
         let cache = FragmentCache::new(10);
         assert_eq!(with(&cache, || read("a")), None);
         with(&cache, || fetch(|| "a".into(), || "rendered".into()));
-        assert_eq!(with(&cache, || read("a")), Some("rendered".to_string()));
+        assert_eq!(with(&cache, || read("a")).as_deref().map(String::as_str), Some("rendered"));
         assert_eq!(read("a"), None, "no store, no fragments");
     }
 
