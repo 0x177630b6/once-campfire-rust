@@ -221,7 +221,8 @@ async fn the_application_chain_blocks_banned_ips_forgeries_and_old_browsers() {
     assert_eq!(banned.status, StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(banned.header("content-type"), Some("text/html"));
 
-    let forged = send(&router, post(("x-forwarded-for", "198.51.100.1"))).await;
+    // A post another site's page makes: the browser says so in `Sec-Fetch-Site`.
+    let forged = send(&router, post(("sec-fetch-site", "cross-site"))).await;
     assert_eq!(forged.status, StatusCode::UNPROCESSABLE_ENTITY);
 
     let outdated = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.0.0 Safari/537.36";
