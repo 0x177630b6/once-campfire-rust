@@ -6,6 +6,7 @@
 //!   loadgen http   --base URL --cookie C --path P --conc N --duration S
 //!                  [--post-room ID --csrf T]                     -> latency/throughput
 //!   loadgen cable  --base URL --cookie C --room ID --csrf T --clients N [--streams a,b,c]
+//!                  [--sources 127.0.0.2,127.0.0.3 --hold-secs 60]
 //!                  [--latency-msgs 30 --interval-ms 200 --tput-secs 15 --posters 4]
 //!   loadgen upload --base URL --cookie C --room ID --csrf T --file PATH [--reps 5]
 //!   loadgen fetch  --base URL --cookie C --path P --out FILE     -> saves an uncompressed body
@@ -386,6 +387,7 @@ fn markers(text: &str) -> Vec<u64> {
 
 async fn cable_client(
     addr: String,
+    source: Option<std::net::IpAddr>,
     cookie: String,
     subs: Vec<String>,
     confirmed: Arc<AtomicUsize>,
@@ -402,7 +404,15 @@ async fn cable_client(
     if debug {
         eprintln!("connecting {:?}", req.headers());
     }
-    let (ws, _) = tokio_tungstenite::connect_async(req).await.inspect_err(|e| {
+    // One source address has ~28k ephemeral ports towards one server port; many clients connect
+    // from several loopback addresses (`--sources`).
+    let socket = tokio::net::TcpSocket::new_v4()?;
+    if let Some(source) = source {
+        socket.bind(std::net::SocketAddr::new(source, 0))?;
+    }
+    let stream = socket.connect(tokio::net::lookup_host(&addr).await?.next().ok_or("no address")?).await?;
+    stream.set_nodelay(true)?;
+    let (ws, _) = tokio_tungstenite::client_async(req, stream).await.inspect_err(|e| {
         if debug {
             eprintln!("connect error: {e}")
         }
@@ -517,6 +527,9 @@ async fn cable(a: &Args) -> Res<Value> {
     let interval = Duration::from_millis(a.num("interval-ms", 200));
     let tput_secs: f64 = a.num("tput-secs", 15.0);
     let posters: usize = a.num("posters", 4);
+    let hold_secs: u64 = a.num("hold-secs", 0);
+    let sources: Vec<std::net::IpAddr> =
+        a.opt("sources").unwrap_or_default().split(',').filter(|s| !s.is_empty()).map(|s| s.parse()).collect::<Result<_, _>>()?;
 
     // The chatter.js load shape: presence for the room, unread rooms, heartbeat, and the page's
     // turbo stream sources (rooms list, the room's messages, the user's rooms).
@@ -546,14 +559,15 @@ async fn cable(a: &Args) -> Res<Value> {
     let connect_start = Instant::now();
     let gate = Arc::new(tokio::sync::Semaphore::new(50));
     let mut handles = Vec::new();
-    for _ in 0..clients {
+    for n in 0..clients {
         let permit = gate.clone().acquire_owned().await?;
+        let source = (!sources.is_empty()).then(|| sources[n % sources.len()]);
         let (addr, cookie, subs, confirmed, connected, stop, delivery, failed) =
             (addr.clone(), cookie.clone(), subs.clone(), confirmed.clone(), connected.clone(), stop.clone(), delivery.clone(), failed.clone());
         let before = connected.load(Ordering::Relaxed);
         handles.push(tokio::spawn(async move {
             let c2 = connected.clone();
-            let task = tokio::spawn(cable_client(addr, cookie, subs, confirmed, connected, stop, delivery));
+            let task = tokio::spawn(cable_client(addr, source, cookie, subs, confirmed, connected, stop, delivery));
             // Release the permit once this client has connected (or failed).
             let until = Instant::now() + Duration::from_secs(30);
             while c2.load(Ordering::Relaxed) <= before && !task.is_finished() && Instant::now() < until {
@@ -565,7 +579,7 @@ async fn cable(a: &Args) -> Res<Value> {
             }
         }));
     }
-    let until = Instant::now() + Duration::from_secs(120);
+    let until = Instant::now() + Duration::from_secs(120.max(clients as u64 / 200));
     while confirmed.load(Ordering::Relaxed) + failed.load(Ordering::Relaxed) < clients && Instant::now() < until {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
@@ -573,6 +587,12 @@ async fn cable(a: &Args) -> Res<Value> {
     let ready = confirmed.load(Ordering::Relaxed);
     phase("connected");
     tokio::time::sleep(Duration::from_secs(1)).await;
+    if hold_secs > 0 {
+        // Everyone connected and idle: what the server spends on heartbeats and holding sockets.
+        phase("idle");
+        tokio::time::sleep(Duration::from_secs(hold_secs)).await;
+        phase("idle_done");
+    }
     phase("paced");
 
     // Phase 1: paced messages, one at a time (open loop at `interval`), for delivery latency.

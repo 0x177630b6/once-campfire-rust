@@ -63,7 +63,7 @@ pub fn verified_stream_name_from_params(
 #[async_trait::async_trait]
 impl<U: Send + Sync + 'static> Channel<U> for StreamsChannel {
     async fn subscribed(&mut self, sub: &mut Subscription<U>) -> ChannelResult {
-        let stream_name = self.verified_stream_name_from_params(sub.params())?;
+        let stream_name = self.verified_stream_name_from_params(&sub.params())?;
         if let Some(guard) = &self.guard
             && guard(stream_name.as_deref().unwrap_or(""))
         {

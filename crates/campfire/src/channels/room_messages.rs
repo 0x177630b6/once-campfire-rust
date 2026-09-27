@@ -72,7 +72,7 @@ impl RoomMessagesChannel {
     /// `authorized_stream_name`: the verified stream name, if present and for a room the user
     /// belongs to.
     async fn authorized_stream_name(&self, sub: &Subscription<CableUser>) -> ChannelResult<Option<String>> {
-        let Some(stream_name) = self.streams.verified_stream_name_from_params(sub.params())? else {
+        let Some(stream_name) = self.streams.verified_stream_name_from_params(&sub.params())? else {
             return Ok(None);
         };
         if stream_name.trim().is_empty() {
@@ -107,7 +107,7 @@ impl Channel<CableUser> for RoomMessagesChannel {
         }
         match action {
             "subscribed" => self.subscribed(sub).await.map(|()| true),
-            "verified_stream_name_from_params" => self.streams.verified_stream_name_from_params(sub.params()).map(|_| true),
+            "verified_stream_name_from_params" => self.streams.verified_stream_name_from_params(&sub.params()).map(|_| true),
             _ => Ok(false),
         }
     }

@@ -29,7 +29,7 @@ pub async fn subscribe(db: &Database, sub: &mut Subscription<CableUser>) -> Chan
 
 /// `current_user.rooms.find_by(id: params[:room_id])`.
 async fn find_room(db: &Database, sub: &Subscription<CableUser>) -> ChannelResult<Option<Room>> {
-    let Some(room_id) = sub.param("room_id").and_then(cast_id) else {
+    let Some(room_id) = sub.param("room_id").as_ref().and_then(cast_id) else {
         return Ok(None);
     };
     let user_id = sub.current_user().id;
