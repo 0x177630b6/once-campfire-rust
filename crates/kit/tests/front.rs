@@ -156,6 +156,20 @@ fn test_app() -> (Router, Arc<AtomicUsize>) {
             }),
         )
         .route(
+            "/streamed",
+            get(|| async {
+                // `send_file`: a streamed body whose length is declared up front, so the server
+                // never polls it past its last byte.
+                let chunks = futures_util::stream::iter(["stream", "ed"].map(|c| Ok::<_, std::io::Error>(axum::body::Bytes::from(c))));
+                Response::builder()
+                    .header("cache-control", "public, max-age=60")
+                    .header("content-length", "8")
+                    .header("vary", "Accept-Encoding")
+                    .body(Body::from_stream(chunks))
+                    .unwrap()
+            }),
+        )
+        .route(
             "/private",
             get(|| async {
                 Response::builder()
@@ -239,6 +253,17 @@ async fn caches_public_responses() {
         assert_eq!(private.get("x-cache"), Some("miss"));
         assert_eq!(private.get("set-cookie"), Some("session=1; path=/"));
         assert_eq!(private.all("vary"), ["Accept-Encoding"]);
+    }
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn caches_streamed_responses_of_declared_length() {
+    let (app, _) = test_app();
+    let server = Server::start(&[], app).await;
+    for (encoding, expected) in [("identity", "miss"), ("identity", "hit"), ("gzip", "miss"), ("gzip", "hit")] {
+        let reply = exchange(server.http, &get_request("/streamed", &format!("Accept-Encoding: {encoding}\r\n"))).await;
+        assert_eq!((reply.get("x-cache"), reply.body.as_slice()), (Some(expected), b"streamed".as_slice()), "{encoding}");
     }
     server.stop().await;
 }

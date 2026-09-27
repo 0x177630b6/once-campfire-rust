@@ -110,13 +110,23 @@ impl Handler {
         headers.remove("x-cache");
         let (cache, variant) = (self.cache.clone(), variant.variant_headers());
         let store = move |body: Bytes| cache.set(key, CachedResponse { status, headers, body, variant }, now + lifetime, now);
-        if head {
-            // A HEAD response has no body to record (the connection never reads one).
+        if head || hyper::body::Body::is_end_stream(response.body()) {
+            // A HEAD response has no body to record (the connection never reads one), and neither
+            // has an empty one (it's never polled).
             store(Bytes::new());
             return (response, HeaderMerge::Replace);
         }
+        let declared = response.headers().get(header::CONTENT_LENGTH).and_then(|v| v.to_str().ok()?.parse().ok());
         let (parts, body) = response.into_parts();
-        let body = RecordingBody { inner: body, limit: self.max_cacheable_body, recorded: BytesMut::new(), overflowed: false, store: Some(Box::new(store)) };
+        let body = RecordingBody {
+            inner: body,
+            limit: self.max_cacheable_body,
+            recorded: BytesMut::new(),
+            seen: 0,
+            declared,
+            overflowed: false,
+            store: Some(Box::new(store)),
+        };
         (Response::from_parts(parts, Body::new(body)), HeaderMerge::Replace)
     }
 
@@ -171,11 +181,16 @@ fn hit(cached: &CachedResponse, request: &Request<Body>) -> Response<Body> {
 }
 
 /// Records a cacheable response's body as it's sent (`stashingWriter`), and stores it at the end
-/// unless it grew past the cache's item limit.
+/// unless it grew past the cache's item limit. The end is the body's end of stream or, for a body
+/// of declared length, its last byte: hyper stops polling a streamed body (`send_file`'s) once the
+/// `Content-Length` is written, so its end of stream would never be seen. (Thruster stores the
+/// response when the handler returns, however it was written.)
 struct RecordingBody {
     inner: Body,
     limit: usize,
     recorded: BytesMut,
+    seen: u64,
+    declared: Option<u64>,
     overflowed: bool,
     store: Option<Box<dyn FnOnce(Bytes) + Send>>,
 }
@@ -199,13 +214,14 @@ impl hyper::body::Body for RecordingBody {
         match Pin::new(&mut this.inner).poll_frame(cx) {
             Poll::Ready(Some(Ok(frame))) => {
                 if let Some(data) = frame.data_ref() {
+                    this.seen += data.len() as u64;
                     if this.recorded.len() + data.len() > this.limit {
                         this.overflowed = true;
                     } else if !this.overflowed {
                         this.recorded.extend_from_slice(data);
                     }
                 }
-                if this.inner.is_end_stream() {
+                if this.inner.is_end_stream() || this.declared == Some(this.seen) {
                     this.finish();
                 }
                 Poll::Ready(Some(Ok(frame)))
