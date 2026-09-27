@@ -78,6 +78,7 @@
       return {
         consumer: true,
         open: consumer.connection.isOpen(),
+        active: consumer.connection.isActive(), // open or connecting
         identifiers: consumer.subscriptions.subscriptions.map((s) => s.identifier),
         pending: consumer.subscriptions.guarantor.pendingSubscriptions.map((s) => s.identifier),
         unsubscribedSources,
@@ -138,24 +139,40 @@
     return busy
   }
 
+  // Where focus went and from what code, for diagnosing captures that differ in focus.
+  const focusLog = []
+  addEventListener("focusin", (event) => {
+    const frames = (new Error().stack || "").split("\n").slice(2, 6).map((l) => l.trim().replace(/^at /, "").replace(/https?:\/\/[^/]+\/assets\//, "").replace(/-[0-9a-f]{8,}\.js/, ".js"))
+    focusLog.push(`${describe(event.target)} <- ${frames.join(" < ")}`)
+  }, true)
+
+  // Tags with a custom-element name that nothing ever defines: Action Text's attachment markup,
+  // which Lexxy keeps as-is inside the editor (a mention in the edit form).
+  const NEVER_DEFINED = new Set(["action-text-attachment"])
+
   window.__parity = {
     async snapshot(socketSeen) {
       const body = document.body
+      const stimulus = stimulusState()
       return {
         readyState: document.readyState,
         fonts: document.fonts ? document.fonts.status : "loaded",
-        stimulus: stimulusState(),
+        stimulus,
         cable: await cableState(socketSeen),
         media: mediaState(),
         turboBusy: turboState(),
-        undefinedElements: [...new Set([...document.querySelectorAll(":not(:defined)")].map((el) => el.localName))],
-        fingerprint: body ? `${body.getElementsByTagName("*").length}:${body.innerHTML.length}:${describe(document.activeElement || body)}:${scrollState()}` : "",
+        undefinedElements: [...new Set([...document.querySelectorAll(":not(:defined)")].map((el) => el.localName))].filter((name) => !NEVER_DEFINED.has(name)),
+        fingerprint: body ? `${body.getElementsByTagName("*").length}:${body.innerHTML.length}:${describe(document.activeElement || body)}:${scrollState()}:${stimulus.connected}` : "",
       }
     },
 
     // Pause every animation at the state's declared time; transitions (hover, focus) are finished
     // so the target style shows. Without a declared time, infinite animations are paused at 0 and
     // finite ones just before their end, so no animationend fires (the flash removes itself on it).
+    focusLog() {
+      return focusLog.slice()
+    },
+
     pauseAnimations(at) {
       const report = []
       for (const animation of document.getAnimations()) {

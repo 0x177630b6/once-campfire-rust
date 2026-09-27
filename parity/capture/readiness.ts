@@ -5,14 +5,24 @@
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import type { Page, Request, Route, WebSocket } from "playwright"
+import type { CableLog } from "./network.ts"
 
 export const READINESS_SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), "readiness.js")
 export const DETERMINISM_SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), "determinism.js")
 
-const QUIET_MS = 250
+const QUIET_MS = 250 // network quiet before time may move
 const POLL_MS = 40
-// Fake time advanced per poll once the network is idle (see freezeClock in capture.ts).
+// Fake time moves in ticks (see freezeClock in capture.ts). A tick happens only when the page has
+// settled in real time: network idle, every module loaded, nothing pending that real time will
+// resolve (cable confirmations, images, fonts), and the DOM unchanged for SETTLE_MS since the last
+// change and since the last tick, so a tick's effects (a fetch it starts, a smooth scroll) are seen
+// before the next one. The page is ready after QUIET_TICKS ticks in a row that changed nothing.
+// How much fake time passes is then a function of the app's timers alone, never of how fast the
+// machine is: every timer due within QUIET_TICKS * ADVANCE_MS of the last change has fired, and
+// none later.
 const ADVANCE_MS = 50
+const SETTLE_MS = 60
+const QUIET_TICKS = 8
 
 // Excluded from "network idle": long-lived by design, and covered by their own signals.
 const LONG_LIVED = new Set(["websocket", "eventsource", "media"])
@@ -30,9 +40,15 @@ export class PageTracker {
   // last welcome: a resubscription (turbo-cable-stream-source reconnected by a frame load) needs
   // its own confirmation, not the previous one's.
   outstanding = new Map<string, number>()
+  // The server closed the connection (a "disconnect" frame: close_remote_connections when the user
+  // loses a membership). ActionCable's ConnectionMonitor would reconnect once pings look stale,
+  // which it measures with Date, frozen here: the page stays disconnected, as it is at that moment
+  // in a real browser.
+  serverDisconnected = false
   errors: string[] = []
   networkErrors: string[] = []
   cableLog: string[] = [] // subscribe/unsubscribe/confirm/reject frames, for diagnosing readiness
+  cable?: CableLog // every frame, normalized: the cable layer of the comparison
   console: string[] = []
 
   constructor(page: Page) {
@@ -66,7 +82,9 @@ export class PageTracker {
       if (response.status() >= 400) this.console.push(`http: ${response.status()} ${response.request().method()} ${response.url()}`)
     })
     page.on("framenavigated", (frame) => {
-      if (frame === page.mainFrame()) this.resetCable()
+      if (frame !== page.mainFrame()) return
+      this.resetCable()
+      if (this.cable) this.cable.recording = false
     })
   }
 
@@ -92,6 +110,7 @@ export class PageTracker {
     }
     socket.on("framesent", ({ payload }) => {
       if (typeof payload !== "string") return
+      this.cable?.sent(payload)
       try {
         const message = JSON.parse(payload)
         if (message.command) this.cableLog.push(`> ${message.command} ${short(message.identifier)}`)
@@ -101,6 +120,7 @@ export class PageTracker {
       } catch {}
     })
     socket.on("framereceived", ({ payload }) => {
+      if (typeof payload === "string") this.cable?.received(payload)
       if (socket !== this.socket || typeof payload !== "string") return
       let message: any
       try {
@@ -112,6 +132,9 @@ export class PageTracker {
       if (message.type === "welcome") {
         this.confirmed.clear()
         this.outstanding.clear()
+        this.serverDisconnected = false
+      } else if (message.type === "disconnect") {
+        this.serverDisconnected = true
       } else if (message.type === "confirm_subscription" || message.type === "reject_subscription") {
         ;(message.type === "confirm_subscription" ? this.confirmed : this.rejected).add(message.identifier)
         this.outstanding.set(message.identifier, (this.outstanding.get(message.identifier) ?? 0) - 1)
@@ -149,19 +172,27 @@ export interface ReadinessResult {
   unknownControllers: string[]
 }
 
-export async function waitForReady(trackers: PageTracker[], timeoutMs: number, time: number): Promise<ReadinessResult[]> {
-  return Promise.all(trackers.map((t) => waitForPage(t, timeoutMs, time)))
+export async function waitForReady(trackers: PageTracker[], timeoutMs: number, time?: number): Promise<ReadinessResult[]> {
+  const results = await Promise.all(trackers.map((t) => settle(t, timeoutMs, time)))
+  for (const t of trackers) if (t.cable) t.cable.recording = true
+  return results
 }
 
-async function waitForPage(tracker: PageTracker, timeoutMs: number, time: number): Promise<ReadinessResult> {
+// Settles the page (see ADVANCE_MS): until it's ready, or, with `until`, until that holds (a step
+// waiting for an element that appears after a debounce or a fetch). Time only moves while the page
+// is settled, so a step's wait ends at the same fake time on every run.
+export async function settle(tracker: PageTracker, timeoutMs: number, time: number | undefined, until?: () => Promise<boolean>): Promise<ReadinessResult> {
   const { page } = tracker
   const started = Date.now()
   if (tracker.networkErrors.length) throw new Error(`network failure: ${tracker.networkErrors[0]}`)
   let lastFingerprint = ""
-  let stableSince = Date.now()
+  let changedAt = Date.now()
+  let tickedAt = 0
+  let quietTicks = 0
   let reasons: string[] = []
   let snapshot: any
   while (true) {
+    if (until && (await until())) return readinessResult(snapshot, started)
     try {
       snapshot = await page.evaluate((socketSeen) => (window as any).__parity?.snapshot(socketSeen) ?? null, !!tracker.socket)
     } catch (error) {
@@ -169,51 +200,56 @@ async function waitForPage(tracker: PageTracker, timeoutMs: number, time: number
       snapshot = null
       reasons = [`evaluate: ${String(error).split("\n")[0]}`]
     }
+    if (tracker.networkErrors.length) throw new Error(`network failure: ${tracker.networkErrors[0]}`)
     if (snapshot) {
-      reasons = unreadyReasons(snapshot, tracker)
       if (snapshot.fingerprint !== lastFingerprint) {
         lastFingerprint = snapshot.fingerprint
-        stableSince = Date.now()
+        changedAt = Date.now()
+        quietTicks = 0
       }
-      const idle = tracker.networkIdleFor()
-      if (idle < QUIET_MS) reasons.push(`network: ${tracker.inflight.size} in flight`)
-      // Time only moves once every module has loaded and every controller has connected, so the
-      // timers they schedule while connecting all exist before any of them fires.
-      else if (!loading(snapshot)) await advanceClock(page, time)
-      if (Date.now() - stableSince < QUIET_MS) reasons.push("dom changing")
-      if (tracker.networkErrors.length) throw new Error(`network failure: ${tracker.networkErrors[0]}`)
-      if (!reasons.length) {
-        return {
-          elapsedMs: Date.now() - started,
-          controllers: snapshot.stimulus.connected ?? 0,
-          subscriptions: snapshot.cable.identifiers ?? [],
-          unknownControllers: snapshot.stimulus.unknown ?? [],
-        }
+      reasons = unreadyReasons(snapshot, tracker)
+      const now = Date.now()
+      const settled = tracker.networkIdleFor() >= QUIET_MS && now - changedAt >= SETTLE_MS && now - tickedAt >= SETTLE_MS
+      if (tracker.networkIdleFor() < QUIET_MS) reasons.push(`network: ${tracker.inflight.size} in flight`)
+      if (settled && !reasons.length && !until && quietTicks >= QUIET_TICKS) return readinessResult(snapshot, started)
+      // A Turbo visit or frame load may be waiting on a timer (a repaint); anything else pending is
+      // for real time to resolve.
+      if (settled && reasons.every((r) => r.startsWith("turbo busy"))) {
+        await advanceClock(page, time)
+        tickedAt = Date.now()
+        quietTicks++
+        continue
       }
+      if (!settled) reasons.push(Date.now() - changedAt < SETTLE_MS ? "dom changing" : "settling")
     } else if (!reasons.length) {
       reasons = ["readiness script not installed"]
     }
     if (Date.now() - started > timeoutMs) {
       const inflight = [...tracker.inflight].map((r) => `${r.method()} ${r.url()}`)
-      throw new Error(`not ready after ${timeoutMs}ms at ${page.url()}: ${reasons.join("; ")}${inflight.length ? ` [${inflight.join(", ")}]` : ""}`)
+      throw new Error(`not ready after ${timeoutMs}ms at ${page.url()}: ${until ? "waiting for the step's element; " : ""}${reasons.join("; ")}${inflight.length ? ` [${inflight.join(", ")}]` : ""}`)
     }
     await new Promise((resolve) => setTimeout(resolve, POLL_MS))
   }
 }
 
-// Fire the timers due in the next ADVANCE_MS, then put Date back to the frozen instant.
-export async function advanceClock(page: Page, time: number) {
-  try {
-    await page.clock.runFor(ADVANCE_MS)
-    await page.clock.setSystemTime(time)
-  } catch {
-    // navigated mid-advance; the next poll sees the new document
+function readinessResult(snapshot: any, started: number): ReadinessResult {
+  return {
+    elapsedMs: Date.now() - started,
+    controllers: snapshot?.stimulus.connected ?? 0,
+    subscriptions: snapshot?.cable.identifiers ?? [],
+    unknownControllers: snapshot?.stimulus.unknown ?? [],
   }
 }
 
-function loading(s: any): boolean {
-  return s.readyState !== "complete" || s.undefinedElements.length > 0 || (!s.stimulus.present && s.stimulus.expectsApp) ||
-    s.stimulus.unregistered?.length > 0 || s.stimulus.missing?.length > 0
+// Fire the timers due in the next ADVANCE_MS, then put Date back to the frozen instant (unless the
+// state lets it advance).
+async function advanceClock(page: Page, time: number | undefined) {
+  try {
+    await page.clock.runFor(ADVANCE_MS)
+    if (time !== undefined) await page.clock.setSystemTime(time)
+  } catch {
+    // navigated mid-advance; the next poll sees the new document
+  }
 }
 
 function unreadyReasons(s: any, tracker: PageTracker): string[] {
@@ -226,7 +262,7 @@ function unreadyReasons(s: any, tracker: PageTracker): string[] {
   const cable = s.cable
   if (cable.unsubscribedSources) reasons.push(`${cable.unsubscribedSources} turbo-cable-stream-source without subscription`)
   if (cable.streamSources && !tracker.socket) reasons.push("stream sources but no socket yet")
-  if (tracker.socket) {
+  if (tracker.socket && !(tracker.serverDisconnected && !cable.active)) {
     if (cable.error) reasons.push(`cable: ${cable.error}`)
     else if (!cable.open) reasons.push("cable connection not open")
     for (const identifier of cable.identifiers ?? []) {

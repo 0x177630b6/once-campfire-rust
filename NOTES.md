@@ -293,68 +293,31 @@ Add requests under the owning crate's heading. The owner removes an entry once i
   (verified by running `cargo test -p campfire_storage --test vectors` in `rust:1-trixie` with
   those packages). Don't install poppler-utils or mupdf-tools: the reference has neither, so
   PDFs aren't previewable. Regenerate vectors with `reference-tools/storage/run.sh`.
-- (from parity/capture, for parity/bin/reference) A docker-runtime instance started with
-  `parity/bin/reference up --seed default --port 4201 --time 2026-03-02T16:00:00Z --tick` has no
-  Redis reachable at 127.0.0.1:6379: every `PresenceChannel` subscribe fails with
-  `Redis::CannotConnectError`, so the subscription is never confirmed and the capture harness
-  (correctly) reports the room as not ready. Resque workers log the same error.
-- (from parity/capture, for parity/bin/reference) Captures sign in through the real form once per
-  (server, user) per run; `SessionsController` allows 10 sign-ins per 3 minutes per IP in the
-  Rails cache. Each instance needs its own cache/Redis so two instances (and repeated runs) don't
-  share the counter.
-- (from parity/capture, for the reference container and for cable) Action Cable handles a
-  connection's commands on a worker pool, so an `unsubscribe` immediately followed by a
-  `subscribe` for the same identifier (every room page does this when the sidebar turbo-frame
-  replaces its two `turbo-cable-stream-source` elements) is processed in either order. When the
-  subscribe wins, the server drops it as a duplicate and never confirms it, so one stream source
-  never gets its `connected` attribute: the reference renders differently from run to run. The
-  capture harness now waits for every subscribe to be confirmed, so these pages time out instead
-  of diffing silently. Proposed reference-side fix for parity runs:
-  `config.action_cable.worker_pool_size = 1` (in-order command processing per server); the Rust
-  cable server should process a connection's commands in order.
-- (from parity/capture, for parity/screens.yml) States whose steps POST the sign-in form
-  (`auth/sign_in/error`, `auth/sign_in/banned_ip`, ...) spend the 10-per-3-minutes sign-in budget
-  once per matrix cell (12+ cells), which then rate-limits the harness's own fixture sign-ins on
-  that server. Mark them `mutates: true` (fresh instance per cell) or narrow their matrix.
-- (from parity/capture, for parity/screens.yml) `interactions/boost_picker` clicks
-  `.boost__action` without hovering the message first; the button is hidden until hover, so the
-  step never becomes actionable on any engine. Add a `hover:` on the message before the click.
-- (from parity/capture, for parity/screens.yml) `rooms/show/busy/scrolled_to_previous_page` and
-  `scrolled_to_next_page` scroll `#message-area`, which has no box of its own; the scroller is
-  `.messages` (the MessagePaginator container). With `scroll: { selector: ".messages", ... }`
-  the next page loads on every engine (verified).
-- (from parity/capture, for parity/seeds + screens.yml) `search/submitted` (kevin searches
-  "cuckoo") renders an empty `#search-results` on every engine, with real timers too, so its
-  `wait_for: "#search-results .message"` never matches. Either kevin can't see the fixture message
-  containing "cuckoo" or the seed's FTS index lacks fixture messages (fixtures skip callbacks).
-- (from parity/capture) Mutating states now get a fresh instance per capture started with
-  `--freeze`: records they write carry the server's time (message timestamps, avatar `?v=`
-  cache busters), which a ticking clock makes differ by a second between two servers. The
-  Rust server's clock should likewise be frozen for these states.
-- (from parity/capture, for parity/screens.yml) `realtime/message_sent` sends with `press: Enter`,
-  which on touch viewports (tablet, phone) inserts a newline instead of sending
-  (composer_controller.js submits by keyboard only off touch devices), so the message never
-  arrives. Click `#composer button[name=send]` instead, or narrow the matrix to desktop/laptop.
-- (from parity/capture, for parity/seeds + screens.yml) Visiting a room marks it read for that
-  user, so sidebar unread badges in one capture depend on which other captures of the same user
-  ran first (seen: `rooms/show/original_with_invitation` with "All Talk" unread in one run and
-  read in another). Either give unread-sensitive states their own user, or mark room-visiting
-  states `mutates: true`.
 - (from parity/candidate) `parity/bin/candidate` runs the Rust image (`campfire-candidate`, built
   from /Dockerfile + parity/docker/candidate) with the same seed copy, env file, CPU cap and
   libfaketime clock as `reference up`; `candidate compare` runs reference vs candidate with
   `--reset-host "parity/bin/candidate reset --app {target} --port {port} ..."` (starts a reference
   when {target} is `reference`/`expected`, a candidate otherwise), so no harness change is needed.
-- (from parity/candidate, for the harness) Chromium runs with `--network host`, so every container
-  a reset starts or stops (a veth appearing) is a network change: in-flight requests fail with
-  `net::ERR_NETWORK_CHANGED` (17 errors in a 1242-cell run, both targets) or hang ("2 in flight").
-  Consider `--disable-features=NetworkChangeNotifier...`/a bridge network, or keeping the isolated
-  slots up and resetting their storage only.
-- (from parity/candidate, for screens.yml) Fail on the reference too: `rooms/involvement/*` (the
-  `involvement_*` frame only loads on `notifications:ready`, which needs notification permission
-  granted and a push subscription (`notifications_controller#isEnabled`); the harness has neither,
-  so the bell shows its alert instead: 72 cells),
-  `auth/transfer/expired` (`body:not(:has(form))` never true), `users/avatar/{image,initials}`
-  (302: the fragment is fetched signed out). `users/profile/qr_code` differs whenever the two
-  servers' clocks tick apart (the QR encodes a transfer URL whose `exp` has milliseconds): freeze
-  the clock for it (`mutates: true`) or mask it.
+- (from parity) Resolved in the harness (see parity/SCREENS.md, parity/seeds/README.md): the
+  reference image pins `config.action_cable.worker_pool_size = 1`
+  (parity/docker/parity_action_cable.rb) so a connection's commands run in order; every
+  self-parity server runs with a frozen clock (`reference up --freeze`); `mutates: true` states
+  (now also sign-in POSTs, the typing states, `users/profile/qr_code` and every state that opens a
+  room with unread messages for its user) run on fresh servers of their own, `--isolated N` at a
+  time on ports P + 1000 * (k + 1); captures run with no network (docker `--network none`) and
+  reach servers through parity/capture/forward.ts, so container churn no longer causes
+  ERR_NETWORK_CHANGED; fake time moves in settled ticks (parity/capture/readiness.ts); CSS
+  animations are held paused until capture; scripts load after the document's first rendering
+  update; Chromium runs with `--disable-font-subpixel-positioning`. Inventory fixes: boost picker
+  via the actions menu, `.messages` scrolling, `search/submitted` searches "launch", touch sends
+  use the send button (keyboard send is its own desktop state), involvement states use
+  `notifications: granted`, avatar fragments sign in, `auth/transfer/expired` has no wait,
+  `realtime/removed_from_room` uses `clock: advancing`.
+- (from parity, for campfire and cable) The Rust server must match what the reference does here:
+  process a connection's cable commands in order; answer a plain `fetch` of
+  `/autocompletable/users?query=…` (Accept `*/*`) with the HTML prompt items, not JSON (reference
+  bug: the new-ping autocomplete never shows suggestions, `interactions/sidebar/new_ping/autocomplete`);
+  and close a user's cable connections with `reconnect: true` when they lose a membership. For
+  Ruby-vs-Rust runs, freeze the Rust server's clock at the seed instant too (`candidate compare`
+  should pass `--freeze` for the shared servers as well as the isolated ones), or pages that
+  derive values from the server clock (transfer links, QR codes) differ.

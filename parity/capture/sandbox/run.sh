@@ -7,8 +7,9 @@
 #   host     the host's Node and Playwright browsers; for developing the harness only, NOT canonical
 # Default: docker when the daemon is reachable, else sandbox.
 #
-# The repo is mounted at its host path, so absolute paths mean the same thing on both sides, and
-# the servers under test are reached over the host network.
+# The repo is mounted at its host path, so absolute paths mean the same thing on both sides. The
+# capture itself has no network; it reaches the servers under test (on the host's loopback)
+# through capture/forward.ts (see run_in_image).
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
 PARITY=$ROOT/parity
@@ -41,17 +42,33 @@ docker_image() {
 # run_in_image ARGS... runs `node capture/cli.ts ARGS...` in parity/.
 run_in_image() {
   local runtime; runtime=$(capture_runtime)
+  # The capture has no network of its own, only loopback: Chromium fails requests in flight with
+  # ERR_NETWORK_CHANGED whenever an interface comes or goes in its namespace, which on the host
+  # network is every docker run/rm. Its proxies reach the servers through capture/forward.ts,
+  # which runs on the host network, over a Unix socket in NET_DIR.
+  local net_dir; net_dir=$(mktemp -d "$PARITY/out/.net.XXXXXX")
+  NET_DIRS+=("$net_dir")
+  local socket=$net_dir/upstream.sock
   case "$runtime" in
     docker)
       local image; image=$(docker_image)
-      # Named, so parity_cleanup can stop it if the run is interrupted.
+      # Named, so parity_cleanup can stop them if the run is interrupted.
       local name=parity-capture-$$-$RANDOM
-      CAPTURE_CONTAINERS+=("$name")
-      docker run --rm --init --name "$name" --network host --ipc host \
+      CAPTURE_CONTAINERS+=("$name" "$name-forward")
+      docker run -d --rm --init --name "$name-forward" --network host -u "$(id -u):$(id -g)" \
+        -v "$ROOT:$ROOT" --tmpfs "$PARITY/node_modules" -w "$PARITY" \
+        "$image" node capture/forward.ts "$socket" >/dev/null
+      wait_for_socket "$socket"
+      docker run --rm --init --name "$name" --network none --ipc host \
         -u "$(id -u):$(id -g)" -e HOME=/tmp -e TZ=UTC -e CI="${CI:-}" -e PARITY_WORKERS="${PARITY_WORKERS:-}" \
+        -e PARITY_UPSTREAM_SOCKET="$socket" \
         -v "$ROOT:$ROOT" --tmpfs "$PARITY/node_modules" -w "$PARITY" \
         "$image" node capture/cli.ts "$@" &
-      wait $! # in the background so an interrupt runs the caller's trap (parity_cleanup) at once
+      local status=0
+      wait $! || status=$? # in the background so an interrupt runs the caller's trap (parity_cleanup) at once
+      docker kill "$name-forward" >/dev/null 2>&1 || true
+      rm -rf "$net_dir"
+      return $status
       ;;
     sandbox)
       local paths rootfs modules
@@ -60,14 +77,22 @@ run_in_image() {
       # The image is read-only; a tmpfs over the repo's top-level directory (e.g. /home) lets
       # bubblewrap create the mount point for the repo at its host path.
       local top; top="/$(echo "$ROOT" | cut -d/ -f2)"
-      bwrap --ro-bind "$rootfs" / --tmpfs "$top" --bind "$ROOT" "$ROOT" --ro-bind "$modules" /node_modules \
-        --tmpfs "$PARITY/node_modules" --dev /dev --proc /proc --tmpfs /tmp --tmpfs /dev/shm \
-        --ro-bind /etc/resolv.conf /etc/resolv.conf --share-net --unshare-user --unshare-pid --unshare-ipc \
-        --die-with-parent --clearenv \
-        --setenv PATH /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-        --setenv HOME /tmp --setenv TZ UTC --setenv LANG C.UTF-8 \
-        --setenv PLAYWRIGHT_BROWSERS_PATH /ms-playwright --setenv CI "${CI:-}" --setenv PARITY_WORKERS "${PARITY_WORKERS:-}" \
-        --chdir "$PARITY" node capture/cli.ts "$@"
+      local bw=(bwrap --ro-bind "$rootfs" / --tmpfs "$top" --bind "$ROOT" "$ROOT" --ro-bind "$modules" /node_modules
+        --tmpfs "$PARITY/node_modules" --dev /dev --proc /proc --tmpfs /tmp --tmpfs /dev/shm
+        --ro-bind /etc/resolv.conf /etc/resolv.conf --unshare-user --unshare-pid --unshare-ipc
+        --die-with-parent --clearenv
+        --setenv PATH /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+        --setenv HOME /tmp --setenv TZ UTC --setenv LANG C.UTF-8
+        --setenv PLAYWRIGHT_BROWSERS_PATH /ms-playwright --setenv CI "${CI:-}" --setenv PARITY_WORKERS "${PARITY_WORKERS:-}"
+        --chdir "$PARITY")
+      "${bw[@]}" --share-net node capture/forward.ts "$socket" &
+      local forward=$!
+      wait_for_socket "$socket"
+      local status=0
+      "${bw[@]}" --unshare-net --setenv PARITY_UPSTREAM_SOCKET "$socket" node capture/cli.ts "$@" || status=$?
+      kill "$forward" 2>/dev/null || true
+      rm -rf "$net_dir"
+      return $status
       ;;
     host)
       echo "parity: WARNING running on the host; captures are not canonical" >&2
@@ -78,36 +103,53 @@ run_in_image() {
   esac
 }
 
-# Resetting servers between captures of `mutates: true` states has to happen on the host (that's
-# where parity/bin/reference runs), so the capture process asks for it through files in a control
-# directory, and a host loop runs RESET_CMD with {port} {target} {url} substituted.
+wait_for_socket() {
+  for _ in $(seq 1 100); do [ -S "$1" ] && return 0; sleep 0.1; done
+  die "the upstream forwarder did not start ($1)"
+}
+
+# Resetting servers for captures of `mutates: true` states has to happen on the host (that's where
+# parity/bin/reference runs), so the capture process asks for it through files in a control
+# directory, and a host loop runs RESET_CMD with {port} {target} {url} substituted. Requests are
+# served concurrently (each isolated slot is its own server); a port is only ever reset by the one
+# capture holding it.
 start_reset_loop() {
   local reset_cmd=$1
   RESET_CTRL=$(mktemp -d "$PARITY/out/.control.XXXXXX")
   (
+    serve() {
+      local id=$1 port target url cmd status
+      read -r port target url <"$RESET_CTRL/work.$id"
+      cmd=${reset_cmd//\{port\}/$port}; cmd=${cmd//\{target\}/$target}; cmd=${cmd//\{url\}/$url}
+      if sh -c "$cmd" >&2; then status=ok; else status=failed; fi
+      echo "$status" >"$RESET_CTRL/.done.$id" && mv "$RESET_CTRL/.done.$id" "$RESET_CTRL/done.$id"
+      rm -f "$RESET_CTRL/work.$id"
+    }
     while [ -d "$RESET_CTRL" ]; do
       for req in "$RESET_CTRL"/req.*; do
         [ -e "$req" ] || continue
-        read -r port target url <"$req"
-        local cmd=${reset_cmd//\{port\}/$port}; cmd=${cmd//\{target\}/$target}; cmd=${cmd//\{url\}/$url}
-        if sh -c "$cmd" >&2; then status=ok; else status=failed; fi
-        echo "$status" >"$RESET_CTRL/done.${req##*/req.}"
-        rm -f "$req"
+        id=${req##*/req.}
+        mv "$req" "$RESET_CTRL/work.$id" 2>/dev/null || continue
+        serve "$id" &
       done
       sleep 0.2
     done
+    wait
   ) &
   RESET_LOOP_PID=$!
   RESET_ARG="$SANDBOX/reset-request.sh $RESET_CTRL {port} {target} {url}"
 }
 
 CAPTURE_CONTAINERS=()
+NET_DIRS=()
 
 # EXIT/INT/TERM trap for the bin scripts: no browsers or reset loops outlive them.
 parity_cleanup() {
   stop_reset_loop
   local name
   for name in "${CAPTURE_CONTAINERS[@]+"${CAPTURE_CONTAINERS[@]}"}"; do docker kill "$name" >/dev/null 2>&1 || true; done
+  local dir
+  for dir in "${NET_DIRS[@]+"${NET_DIRS[@]}"}"; do rm -rf "$dir"; done
 }
 
 stop_reset_loop() {

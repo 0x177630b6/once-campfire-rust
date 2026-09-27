@@ -13,19 +13,26 @@
 //   --time ISO             the instant both servers' clocks are frozen at (default: the seed's)
 //   --only GLOB[,GLOB]     state id globs      --engines chromium,firefox,webkit
 //   --viewports desktop,…  --schemes light,dark
+//   --matrix lean|full     lean (default): Chromium desktop+phone, light+dark for every state, a smoke
+//                          set on Firefox and WebKit, the breakpoint sweep on Chromium; full: the
+//                          whole support matrix (release checks). See inventory.ts LEAN_*.
 //   --breakpoints include|only|exclude (default include)
 //   --breakpoint-states GLOBS   states swept across breakpoints (default DEFAULT_BREAKPOINT_STATES)
 //   --workers N            --timeout MS        --inventory FILE
 //   --allowlist FILE | --no-allowlist           --report NAME (report NAME.html, NAME.json)
 //   --origin URL           the origin the browser sees for every server (default http://localhost:3999)
-//   --reset CMD            run before each capture of a `mutates: true` state ({url} {port} {target} {seed})
+//   --reset CMD            start a fresh server from the seed at {port} ({url} {port} {target} {seed}); with it,
+//                          each capture of a `mutates: true` state gets fresh servers of its own
+//   --isolated N           how many such captures run at once (default 3); slot k of a server on
+//                          port P listens on P + OFFSET * (k + 1)
+//   --isolated-port-offset OFFSET  (default 1000)
 //
 // The self-parity gate (reference vs reference) is orchestrated by parity/bin/compare --self-parity,
 // because it starts and stops servers on the host.
 import fs from "node:fs"
 import path from "node:path"
 import { parseArgs } from "node:util"
-import { execFileSync } from "node:child_process"
+import { execFile } from "node:child_process"
 import { Allowlist } from "./allowlist.ts"
 import { DEFAULT_ORIGIN } from "./proxy.ts"
 import { BrowserPool } from "./browsers.ts"
@@ -57,6 +64,7 @@ const { values: opts, positionals } = parseArgs({
     viewports: { type: "string" },
     schemes: { type: "string" },
     breakpoints: { type: "string", default: "include" },
+    matrix: { type: "string", default: "lean" },
     "breakpoint-states": { type: "string" },
     workers: { type: "string" },
     timeout: { type: "string" },
@@ -64,6 +72,8 @@ const { values: opts, positionals } = parseArgs({
     allowlist: { type: "string", default: ALLOWLIST_FILE },
     "seed-dir": { type: "string", default: SEED_DIR },
     reset: { type: "string" },
+    isolated: { type: "string" },
+    "isolated-port-offset": { type: "string" },
     origin: { type: "string", default: DEFAULT_ORIGIN },
     "no-allowlist": { type: "boolean", default: false },
     report: { type: "string", default: "report" },
@@ -81,7 +91,8 @@ function filter(): MatrixFilter {
   for (const v of viewports ?? []) if (!VIEWPORT_NAMES.includes(v)) fail(`unknown viewport ${v}`)
   for (const s of schemes ?? []) if (!SCHEMES.includes(s)) fail(`unknown scheme ${s}`)
   if (!["include", "only", "exclude"].includes(opts.breakpoints!)) fail(`--breakpoints must be include, only or exclude`)
-  return { engines, viewports, schemes, only: list(opts.only), breakpoints: opts.breakpoints as MatrixFilter["breakpoints"], breakpointStates: list(opts["breakpoint-states"]) }
+  if (!["lean", "full"].includes(opts.matrix!)) fail(`--matrix must be lean or full`)
+  return { engines, viewports, schemes, only: list(opts.only), breakpoints: opts.breakpoints as MatrixFilter["breakpoints"], breakpointStates: list(opts["breakpoint-states"]), matrix: opts.matrix as MatrixFilter["matrix"] }
 }
 
 function states() {
@@ -108,17 +119,24 @@ function common() {
     workers: opts.workers ? Number(opts.workers) : defaultWorkers(),
     timeoutMs: opts.timeout ? Number(opts.timeout) : DEFAULT_TIMEOUT_MS,
     seedDir: opts["seed-dir"],
+    isolatedSlots: opts.isolated ? Number(opts.isolated) : undefined,
+    isolatedPortOffset: opts["isolated-port-offset"] ? Number(opts["isolated-port-offset"]) : undefined,
   }
 }
 
-// --reset "CMD" runs before each capture of a mutating state, with {url} {port} {target} {seed}.
+// --reset "CMD" starts a fresh server from the seed, with {url} {port} {target} {seed}. It runs
+// asynchronously: other captures carry on while a server boots.
 function resetHook() {
   const template = opts.reset
   if (!template) return undefined
   return (target: Target) => {
     const url = new URL(target.url)
     const command = template.replaceAll("{url}", target.url).replaceAll("{port}", url.port).replaceAll("{target}", target.name).replaceAll("{seed}", opts.seed!)
-    execFileSync("sh", ["-c", command], { stdio: ["ignore", "inherit", "inherit"] })
+    return new Promise<void>((resolve, reject) => {
+      const child = execFile("sh", ["-c", command], (error) => (error ? reject(new Error(`reset failed: ${command}: ${error.message}`)) : resolve()))
+      child.stdout?.pipe(process.stdout)
+      child.stderr?.pipe(process.stderr)
+    })
   }
 }
 

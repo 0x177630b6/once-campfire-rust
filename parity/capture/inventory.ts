@@ -37,6 +37,8 @@ export interface State {
   expect_status?: number // HTTP status of the main document (default 200)
   mutates?: boolean // changes the database: runs serially, each capture on a freshly reset server
   breakpoints?: boolean // include in the breakpoint sweep (besides DEFAULT_BREAKPOINT_STATES)
+  notifications?: "denied" | "granted" // the browser's notification state (default denied)
+  clock?: "frozen" | "advancing" // the browser's Date: frozen at the seed instant (default), or advancing with fake time
 }
 
 export interface Cell {
@@ -97,6 +99,8 @@ function validateState(entry: any, where: string): State {
   for (const s of entry.matrix?.schemes ?? []) {
     if (!SCHEMES.includes(s)) throw new Error(`${entry.id}: unknown scheme ${s}`)
   }
+  if (entry.clock && !["frozen", "advancing"].includes(entry.clock)) throw new Error(`${entry.id}: clock must be frozen or advancing`)
+  if (entry.notifications && !["denied", "granted"].includes(entry.notifications)) throw new Error(`${entry.id}: notifications must be denied or granted`)
   if (entry.kind && !["page", "fragment"].includes(entry.kind)) throw new Error(`${entry.id}: unknown kind ${entry.kind}`)
   return { seed: "default", ...entry, steps }
 }
@@ -108,7 +112,24 @@ export interface MatrixFilter {
   only?: string[] // state id globs
   breakpoints?: "include" | "only" | "exclude"
   breakpointStates?: string[] // state id globs swept across breakpoints (default DEFAULT_BREAKPOINT_STATES)
+  matrix?: "lean" | "full" // default lean (see expandJobs)
 }
+
+// The lean matrix (plans/rust-conversion.md, decision 4). The frontend is byte-identical and the
+// browsers are pinned, so a port can only change pixels by sending different bytes, and the
+// server-output layers (server HTML, live DOM, accessibility tree, every response, every cable
+// frame) are compared in every cell. Pixels back that up thinly: Chromium on desktop and phone in
+// light and dark for every state, the breakpoint sweep on Chromium, and the smoke states below on
+// Firefox and WebKit, desktop and phone, light. The full matrix is for release checks.
+export const LEAN_VIEWPORTS = ["desktop", "phone"]
+export const LEAN_SMOKE_STATES = [
+  "realtime/**",
+  "auth/sign_in",
+  "rooms/show/designers",
+  "interactions/composer/with_text",
+  "interactions/lightbox",
+  "interactions/mention_autocomplete/results",
+]
 
 // Representative layouts swept 1px either side of every width breakpoint: signed out, a room
 // (group, direct, composer in use), settings forms, profile, search, and the empty state.
@@ -134,26 +155,48 @@ export function expandJobs(states: State[], filter: MatrixFilter, breakpointWidt
   const jobs: Job[] = []
   const onlyRes = filter.only?.map(globToRegExp)
   const sweepRes = (filter.breakpointStates ?? DEFAULT_BREAKPOINT_STATES).map(globToRegExp)
+  const smokeRes = LEAN_SMOKE_STATES.map(globToRegExp)
+  const lean = (filter.matrix ?? "lean") === "lean"
   for (const state of states) {
     if (onlyRes && !onlyRes.some((re) => re.test(state.id))) continue
-    const engines = intersect(state.matrix?.engines ?? ENGINES, filter.engines)
-    const schemes = intersect(state.matrix?.schemes ?? SCHEMES, filter.schemes)
+    const stateEngines = state.matrix?.engines ?? ENGINES
+    const stateViewports = state.matrix?.viewports ?? VIEWPORT_NAMES
+    const stateSchemes = state.matrix?.schemes ?? SCHEMES
+    // (engines, viewports, schemes) groups this state is captured in
+    const groups: [readonly Engine[], readonly string[], readonly Scheme[]][] = []
+    if (!lean) {
+      groups.push([stateEngines, stateViewports, stateSchemes])
+    } else {
+      // A state narrowed to other viewports (tablet only, say) keeps its first one.
+      const leanViewports = stateViewports.filter((v) => LEAN_VIEWPORTS.includes(v))
+      const viewports = leanViewports.length ? leanViewports : stateViewports.slice(0, 1)
+      const primary = stateEngines.includes("chromium") ? ["chromium" as Engine] : stateEngines.slice(0, 1)
+      groups.push([primary, viewports, stateSchemes])
+      if (smokeRes.some((re) => re.test(state.id))) {
+        const others = stateEngines.filter((e) => !primary.includes(e))
+        const light = stateSchemes.includes("light") ? ["light" as Scheme] : stateSchemes.slice(0, 1)
+        groups.push([others, viewports, light])
+      }
+    }
     if (isFragment(state)) {
       // A response, not a rendering: one capture, whatever the matrix.
+      const engines = intersect(stateEngines, filter.engines)
       if (filter.breakpoints !== "only" && engines.length) {
         jobs.push({ state, cell: { engine: engines[0], viewport: VIEWPORTS.desktop, scheme: "light" } })
       }
       continue
     }
     if (filter.breakpoints !== "only") {
-      const viewports = intersect(state.matrix?.viewports ?? VIEWPORT_NAMES, filter.viewports)
-      for (const engine of engines) for (const vp of viewports) for (const scheme of schemes) {
-        jobs.push({ state, cell: { engine, viewport: VIEWPORTS[vp], scheme } })
+      for (const [groupEngines, groupViewports, groupSchemes] of groups) {
+        for (const engine of intersect(groupEngines, filter.engines)) for (const vp of intersect(groupViewports, filter.viewports)) for (const scheme of intersect(groupSchemes, filter.schemes)) {
+          jobs.push({ state, cell: { engine, viewport: VIEWPORTS[vp], scheme } })
+        }
       }
     }
     const swept = state.breakpoints || sweepRes.some((re) => re.test(state.id))
     if (swept && filter.breakpoints !== "exclude") {
-      for (const engine of engines) for (const width of breakpointWidths[engine] ?? []) for (const scheme of schemes) {
+      const sweepEngines = intersect(lean ? groups[0][0] : stateEngines, filter.engines)
+      for (const engine of sweepEngines) for (const width of breakpointWidths[engine] ?? []) for (const scheme of intersect(stateSchemes, filter.schemes)) {
         jobs.push({ state, cell: { engine, viewport: breakpointViewport(width), scheme } })
       }
     }

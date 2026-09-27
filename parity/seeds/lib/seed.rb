@@ -149,11 +149,20 @@ module Parity
       at time
       attributes = { creator: creator, body: body, client_message_id: next_client_message_id }
       message = if attachment
-        room.messages.create_with_attachment!(attributes.merge(attachment: attachment))
+        room.messages.create_with_attachment!(attributes.merge(attachment: attachment)).tap { |m| process_poster(m) }
       else
         room.messages.create!(attributes)
       end
       as ? label(:messages, as, message) : message
+    end
+
+    # A video's poster is a different representation from the one Message::Attachment processes
+    # (app/helpers/messages/attachment_presentation.rb adds resize_to_limit), so the app would make
+    # it on the first request, under a random blob key, on every server. Process it here instead.
+    def process_poster(message)
+      if message.attachment.video?
+        message.attachment.preview(format: :webp, resize_to_limit: [ Message::THUMBNAIL_MAX_WIDTH, Message::THUMBNAIL_MAX_HEIGHT ]).processed
+      end
     end
 
     # Rewrite a message body in place, bypassing Action Text canonicalization: for bodies saved by

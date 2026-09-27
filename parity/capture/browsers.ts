@@ -63,7 +63,18 @@ export class BrowserPool {
 // Chromium rasterizes in tiles on several threads, and antialiased edges crossing tile or
 // partial-raster boundaries came out one gray level apart between identical runs. These make its
 // software raster single-pass and deterministic. No GPU: it renders with SwiftShader/Skia.
+// Subpixel glyph positioning is off too: with it, the same text at the same layout position came
+// out a device pixel apart between identical runs (the mention autocomplete's item text on the
+// phone viewport, about 1 in 8 captures) with the layout identical to 1/64px and no matter how
+// the layer was repainted or recreated; without it, 40 of 40 captures were identical. Glyph
+// origins then snap to whole device pixels, the same way for both servers.
 const CHROMIUM_ARGS = [
+  "--disable-font-subpixel-positioning",
+  // Skia caches rasterized masks across draws, and a border drawn from the cache came out a gray
+  // level apart from one rastered fresh (the sidebar toggle's circle on the phone viewport after
+  // auth/join/completed, in about half the captures): the pixels depended on what had been
+  // painted before. Without the cache, 8 of 8 were identical.
+  "--skia-resource-cache-limit-mb=0",
   "--disable-gpu",
   "--disable-gpu-rasterization",
   "--disable-partial-raster",

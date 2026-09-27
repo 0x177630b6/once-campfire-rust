@@ -4,7 +4,7 @@ import path from "node:path"
 import type { Page } from "playwright"
 import { REPO_DIR } from "./config.ts"
 import type { Step } from "./inventory.ts"
-import { advanceClock } from "./readiness.ts"
+import { settle } from "./readiness.ts"
 import type { PageTracker } from "./readiness.ts"
 
 export interface StepContext {
@@ -14,7 +14,7 @@ export interface StepContext {
   touch: boolean
   baseUrl: string
   timeoutMs: number
-  time: number // the frozen instant, epoch ms
+  time?: number // the instant Date is put back to after each tick (undefined: it advances)
   pauseAnimationsAt?: number
 }
 
@@ -24,7 +24,8 @@ export async function runStep(step: Step, ctx: StepContext): Promise<void> {
   if (!page) throw new Error(`step for unknown actor ${actor}`)
   const timeout = ctx.timeoutMs
   // Timers run on the paused fake clock (capture.ts freezeClock), so whatever a step waits for
-  // may need time to pass first (pagination, debounced autocomplete): advance it while waiting.
+  // may need time to pass first (pagination, debounced autocomplete): time moves while waiting,
+  // in the same settled ticks as readiness (readiness.ts settle).
   const target = targetSelector(step)
   if (target) await waitWithClock(page, ctx.trackers[actor], target.selector, target.state, ctx)
   if ("click" in step) {
@@ -74,13 +75,11 @@ function targetSelector(step: Step): { selector: string; state: "visible" | "att
 
 async function waitWithClock(page: Page, tracker: PageTracker, selector: string, state: "visible" | "attached", ctx: StepContext) {
   const locator = page.locator(selector).first()
-  const deadline = Date.now() + ctx.timeoutMs
-  while (true) {
-    const ok = state === "visible" ? await locator.isVisible().catch(() => false) : (await locator.count().catch(() => 0)) > 0
-    if (ok) return
-    if (Date.now() > deadline) throw new Error(`step: ${selector} not ${state} after ${ctx.timeoutMs}ms`)
-    if (tracker.networkIdleFor() > 100) await advanceClock(page, ctx.time)
-    else await page.waitForTimeout(40)
+  const present = async () => (state === "visible" ? await locator.isVisible().catch(() => false) : (await locator.count().catch(() => 0)) > 0)
+  try {
+    await settle(tracker, ctx.timeoutMs, ctx.time, present)
+  } catch (error: any) {
+    throw new Error(`step: ${selector} not ${state}: ${String(error?.message ?? error).split("\n")[0]}`)
   }
 }
 

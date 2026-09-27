@@ -9,10 +9,19 @@
 #   headers: {...}    extra request headers for every request of the state.
 #   expect_status: N  HTTP status of the main document (default 200).
 #   accept_dialogs: true  accept turbo_confirm (window.confirm) dialogs instead of dismissing them.
+#   clock: advancing  the browser's Date advances with the harness's fake-time ticks instead of
+#                     staying at the seed instant (timers run on fake time either way).
+#   notifications: granted  the browser has notification permission and a push subscription (the
+#                     default is permission denied, with no subscription).
 #   kind: fragment    not a page (turbo-stream, JSON, SVG, layout-less HTML): no screenshot, compare
 #                     the response (status, content type, normalized body) only.
 #   request: {method, body, headers}  for fragments that aren't plain GETs.
-#   mutates: true     the state changes the database; run it on a fresh instance.
+#   mutates: true     the state changes the server's state (the database, the sign-in rate limit's
+#                     counter), or its broadcasts would reach other captures (typing): each capture
+#                     runs on fresh servers of its own. Visiting a room marks it read for that user
+#                     (PresenceChannel#present), so states that open a room where their user has
+#                     unread messages are marked too: otherwise every sidebar showing that room
+#                     would depend on which captures ran first.
 #   Steps beyond SCREENS.md:
 #     type: {selector, text}     key presses (Playwright pressSequentially), for the Lexxy editor
 #     upload: {selector, files}  set files on an <input type=file>; paths are relative to the repo
@@ -38,6 +47,7 @@
 - id: auth/sign_in/error
   path: /session/new
   expect_status: 200
+  mutates: true    # each POST spends the sign-in rate limit (10 per 3 minutes per IP)
   steps:
     - fill: { selector: "#email_address", text: "david@37signals.com" }
     - fill: { selector: "#password", text: "wrong-password" }
@@ -162,8 +172,8 @@
 
 - id: auth/transfer/expired
   path: /session/transfers/{{transfers.david_expired}}
-  steps:
-    - wait_for: "body:not(:has(form))"   # the PUT answers 400 with an empty body
+  # The form auto-submits (PUT) and the answer is a 400 with an empty body, which Turbo doesn't
+  # render: the page stays as it was. Readiness waits for the submission to finish.
   covers: [sessions/transfers/show]
 
 - id: auth/signed_out_redirect
@@ -243,6 +253,7 @@
 
 - id: rooms/show/designers/member
   as: kevin      # a member (not admin) in a room someone else created
+  mutates: true  # reads designers for Kevin
   path: /rooms/{{rooms.designers}}
   covers: [rooms/show, messages/_message, users/sidebars/show]
 
@@ -255,6 +266,7 @@
 - id: rooms/show/designers/custom_styles/member
   seed: custom_styles
   as: kevin
+  mutates: true  # reads designers for Kevin
   path: /rooms/{{rooms.designers}}
   covers: [rooms/show]
 
@@ -276,6 +288,7 @@
 - id: rooms/show/closed
   as: david
   path: /rooms/{{rooms.watercooler}}
+  mutates: true    # reads watercooler for David
   covers: [rooms/show]
 
 - id: rooms/show/open
@@ -285,37 +298,43 @@
 
 - id: rooms/show/busy/last_page
   as: david
+  mutates: true    # reads watercooler for David
   path: /rooms/{{rooms.watercooler}}
   covers: [rooms/show, messages/_message]
 
 - id: rooms/show/busy/scrolled_to_previous_page
   as: david
+  mutates: true    # reads watercooler for David
   path: /rooms/{{rooms.watercooler}}
   steps:
-    - scroll: { selector: "#message-area", to: top }
+    - scroll: { selector: ".messages", to: top }       # the MessagePaginator scroller
     - wait_for: '[data-message-id="{{messages.busy_082}}"]'
   covers: [messages/index]
 
 - id: rooms/show/busy/top_of_pagination
   as: david
+  mutates: true    # reads watercooler for David
   path: /rooms/{{rooms.watercooler}}/@{{messages.busy_001}}   # page_around the oldest: 0 before, 40 after
   covers: [rooms/show]
 
 - id: rooms/show/busy/page_around_middle
   as: david
+  mutates: true    # reads watercooler for David
   path: /rooms/{{rooms.watercooler}}/@{{messages.busy_060}}   # the full window: 40 + 1 + 40
   covers: [rooms/show]
 
 - id: rooms/show/busy/page_around_newest
   as: david
+  mutates: true    # reads watercooler for David
   path: /rooms/{{rooms.watercooler}}/@{{messages.thirteenth}} # 40 before, 0 after
   covers: [rooms/show]
 
 - id: rooms/show/busy/scrolled_to_next_page
   as: david
+  mutates: true    # reads watercooler for David
   path: /rooms/{{rooms.watercooler}}/@{{messages.busy_001}}
   steps:
-    - scroll: { selector: "#message-area", to: bottom }
+    - scroll: { selector: ".messages", to: bottom }
     - wait_for: '[data-message-id="{{messages.busy_042}}"]'
   covers: [messages/index]
 
@@ -326,6 +345,7 @@
 
 - id: rooms/show/direct/group
   as: david
+  mutates: true    # reads group_direct for David
   path: /rooms/{{rooms.group_direct}}
   covers: [rooms/show, users/sidebars/rooms/_direct]
 
@@ -348,6 +368,7 @@
 
 - id: rooms/involvement/mentions
   as: david
+  notifications: granted
   path: /rooms/{{rooms.designers}}
   steps:
     - wait_for: "#nav turbo-frame[id^=involvement_] button.mentions"
@@ -355,6 +376,7 @@
 
 - id: rooms/involvement/everything
   as: david
+  notifications: granted
   path: /rooms/{{rooms.pets}}
   steps:
     - wait_for: "#nav turbo-frame[id^=involvement_] button.everything"
@@ -362,6 +384,7 @@
 
 - id: rooms/involvement/nothing
   as: david
+  notifications: granted
   path: /rooms/{{rooms.hq}}
   steps:
     - wait_for: "#nav turbo-frame[id^=involvement_] button.nothing"
@@ -369,6 +392,7 @@
 
 - id: rooms/involvement/invisible
   as: david
+  notifications: granted
   path: /rooms/{{rooms.archive}}
   steps:
     - wait_for: "#nav turbo-frame[id^=involvement_] button.invisible"
@@ -376,6 +400,8 @@
 
 - id: rooms/involvement/direct_nothing
   as: david
+  mutates: true    # reads david_and_kevin for David
+  notifications: granted
   path: /rooms/{{rooms.david_and_kevin}}
   steps:
     - wait_for: "#nav turbo-frame[id^=involvement_] button.nothing"
@@ -383,6 +409,7 @@
 
 - id: rooms/involvement/cycled
   as: david
+  notifications: granted
   path: /rooms/{{rooms.designers}}
   mutates: true
   steps:
@@ -467,6 +494,7 @@
 
 - id: messages/mention/mentioned
   as: kevin      # the mention is of Kevin: message--mentioned
+  mutates: true  # reads designers for Kevin
   path: /rooms/{{rooms.designers}}/@{{messages.mention}}
   covers: [users/_mention]
 
@@ -557,6 +585,7 @@
 
 - id: messages/boosts/many
   as: kevin
+  mutates: true  # reads designers for Kevin
   path: /rooms/{{rooms.designers}}/@{{messages.boosted_many}}
   covers: [messages/boosts/_boosts, messages/boosts/_boost]
 
@@ -601,8 +630,11 @@
 - id: interactions/boost_picker
   as: david
   path: /rooms/{{rooms.designers}}/@{{messages.unboosted}}
+  # A message without boosts hides its inline .boost__action (messages.css .message__boost-inline);
+  # the picker opens from "New boost" in the actions menu.
   steps:
-    - click: '[data-message-id="{{messages.unboosted}}"] .boost__action'
+    - click: '[data-message-id="{{messages.unboosted}}"] .message__options-btn'
+    - click: '[data-message-id="{{messages.unboosted}}"] .message__boost-btn'
     - wait_for: '[data-message-id="{{messages.unboosted}}"] input.input--boost'
   covers: [messages/boosts/new]
 
@@ -610,7 +642,8 @@
   as: david
   path: /rooms/{{rooms.designers}}/@{{messages.unboosted}}
   steps:
-    - click: '[data-message-id="{{messages.unboosted}}"] .boost__action'
+    - click: '[data-message-id="{{messages.unboosted}}"] .message__options-btn'
+    - click: '[data-message-id="{{messages.unboosted}}"] .message__boost-btn'
     - fill: { selector: '[data-message-id="{{messages.unboosted}}"] input.input--boost', text: "Great!" }
   covers: [messages/boosts/new]
 
@@ -618,10 +651,11 @@
   as: david
   path: /rooms/{{rooms.designers}}/@{{messages.unboosted}}
   steps:
-    - click: '[data-message-id="{{messages.unboosted}}"] .boost__action'
+    - click: '[data-message-id="{{messages.unboosted}}"] .message__options-btn'
+    - click: '[data-message-id="{{messages.unboosted}}"] .message__boost-btn'
     - wait_for: '[data-message-id="{{messages.unboosted}}"] input.input--boost'
     - press: "Escape"
-    - wait_for: '[data-message-id="{{messages.unboosted}}"] .boost__action'
+    - wait_for: '[data-message-id="{{messages.unboosted}}"]:not(:has(input.input--boost))'
   covers: [messages/boosts/index, messages/boosts/_boosts]
 
 - id: interactions/boost_created
@@ -629,10 +663,11 @@
   path: /rooms/{{rooms.designers}}/@{{messages.unboosted}}
   mutates: true
   steps:
-    - click: '[data-message-id="{{messages.unboosted}}"] .boost__action'
+    - click: '[data-message-id="{{messages.unboosted}}"] .message__options-btn'
+    - click: '[data-message-id="{{messages.unboosted}}"] .message__boost-btn'
     - fill: { selector: '[data-message-id="{{messages.unboosted}}"] input.input--boost', text: "Great!" }
     - press: "Enter"
-    - wait_for: '[data-message-id="{{messages.unboosted}}"] .boost'
+    - wait_for: '[data-message-id="{{messages.unboosted}}"] .boost-item'
   covers: [messages/boosts/index, messages/boosts/_boost]
 
 - id: interactions/quick_boost
@@ -642,7 +677,7 @@
   steps:
     - click: '[data-message-id="{{messages.unboosted}}"] .message__options-btn'
     - click: '[data-message-id="{{messages.unboosted}}"] .quick-boosts button[data-emoji]'
-    - wait_for: '[data-message-id="{{messages.unboosted}}"] .boost'
+    - wait_for: '[data-message-id="{{messages.unboosted}}"] .boost-item'
   covers: [messages/boosts/index, messages/boosts/_boost]
 
 - id: interactions/boost_delete_revealed
@@ -731,6 +766,7 @@
 - id: interactions/composer/rich_text_toolbar
   as: david
   path: /rooms/{{rooms.designers}}
+  matrix: { viewports: [desktop, laptop] }   # composer.css shows the button at >= 100ch with a fine pointer
   steps:
     - click: ".composer__rich-text-btn"
     - type: { selector: "#composer .lexxy-editor__content", text: "Formatted" }
@@ -768,6 +804,18 @@
   mutates: true
   steps:
     - type: { selector: "#composer .lexxy-editor__content", text: "Sent from the parity harness" }
+    - click: "#composer button[name=send]"
+    - wait_for: '.message:not([id^="message_$"]) .message__body-content:has-text("Sent from the parity harness")'
+  covers: [messages/create.turbo_stream, messages/_message]
+
+- id: interactions/composer/sent_by_keyboard
+  as: david
+  path: /rooms/{{rooms.designers}}
+  mutates: true
+  # composer_controller.js submits on Enter only off touch devices (on them Enter is a newline)
+  matrix: { viewports: [desktop, laptop] }
+  steps:
+    - type: { selector: "#composer .lexxy-editor__content", text: "Sent from the parity harness" }
     - press: "Enter"
     - wait_for: '.message:not([id^="message_$"]) .message__body-content:has-text("Sent from the parity harness")'
   covers: [messages/create.turbo_stream, messages/_message]
@@ -788,7 +836,7 @@
   mutates: true
   steps:
     - type: { selector: "#composer .lexxy-editor__content", text: "/play crickets" }
-    - press: "Enter"
+    - click: "#composer button[name=send]"
     - wait_for: ".message--me .sound"
   covers: [messages/create.turbo_stream, messages/_presentation]
 
@@ -849,7 +897,7 @@
 - id: interactions/phone_sidebar
   as: david
   path: /rooms/{{rooms.designers}}
-  matrix: { viewports: [phone, tablet] }
+  matrix: { viewports: [phone] }   # the toggle only shows below 100ch, which the tablet width straddles per engine
   steps:
     - wait_for: "#user_sidebar .sidebar__toggle"
     - click: "#user_sidebar .sidebar__toggle"
@@ -914,30 +962,35 @@
 - id: interactions/sidebar/new_ping
   as: david
   path: /rooms/{{rooms.designers}}
+  matrix: { viewports: [desktop, laptop] }   # the sidebar is always open at >= 100ch
   steps:
     - click: "#user_sidebar .direct__new"
     - wait_for: "#direct_rooms_control .autocomplete__input input"
   covers: [rooms/directs/new, users/autocompletables/_template]
 
+- id: interactions/sidebar/new_ping/touch
+  as: david
+  path: /rooms/{{rooms.designers}}
+  matrix: { viewports: [phone] }     # below 100ch the sidebar opens with its toggle first (the tablet width straddles 100ch per engine)
+  steps:
+    - click: "#user_sidebar .sidebar__toggle"
+    - click: "#user_sidebar .direct__new"
+    - wait_for: "#direct_rooms_control .autocomplete__input input"
+  covers: [rooms/directs/new, users/autocompletables/_template]
+
+# Reference bug, kept: lib/autocomplete/base_autocomplete_handler.js fetches
+# /autocompletable/users?query=… with a plain fetch (Accept: */*), so the controller answers with
+# the HTML prompt items, response.json() rejects, and the suggestion list stays empty. So no user
+# can be picked here (the old new_ping/selected state could never be reached).
 - id: interactions/sidebar/new_ping/autocomplete
   as: david
   path: /rooms/{{rooms.designers}}
+  matrix: { viewports: [desktop, laptop] }
   steps:
     - click: "#user_sidebar .direct__new"
     - type: { selector: "#direct_rooms_control input[data-autocomplete-target=input]", text: "j" }
-    - wait_for: ".autocomplete__list, [data-autocomplete-target=list] *"
-  covers: [rooms/directs/new, autocompletable/users/index.json, autocompletable/users/_user.json]
-
-- id: interactions/sidebar/new_ping/selected
-  as: david
-  path: /rooms/{{rooms.designers}}
-  steps:
-    - click: "#user_sidebar .direct__new"
-    - type: { selector: "#direct_rooms_control input[data-autocomplete-target=input]", text: "jz" }
-    - wait_for: ".autocomplete__list, [data-autocomplete-target=list] *"
-    - press: "Enter"
-    - wait_for: "#direct_rooms_control .autocomplete__pill"
-  covers: [rooms/directs/new, users/autocompletables/_template]
+    - wait_for: ".autocomplete__list"
+  covers: [rooms/directs/new, autocompletable/users/index]
 
 - id: interactions/notifications_help
   as: david
@@ -972,7 +1025,9 @@
 - { id: pwa/notifications_help/chrome_mac,      as: david, path: "/rooms/{{rooms.designers}}", user_agent: chrome_mac,      steps: [ { click: "[data-notifications-target=bell]" }, { click: "dialog[open] details.notifications-help:not(.hide-in-browser) summary" } ], covers: [pwa/_browser_settings, pwa/_system_settings] }
 - { id: pwa/notifications_help/chrome_windows,  as: david, path: "/rooms/{{rooms.designers}}", user_agent: chrome_windows,  steps: [ { click: "[data-notifications-target=bell]" }, { click: "dialog[open] details.notifications-help:not(.hide-in-browser) summary" } ], covers: [pwa/_browser_settings, pwa/_system_settings] }
 - { id: pwa/notifications_help/chrome_android,  as: david, path: "/rooms/{{rooms.designers}}", user_agent: chrome_android,  matrix: { viewports: [phone] }, steps: [ { click: "[data-notifications-target=bell]" }, { click: "dialog[open] details.notifications-help:not(.hide-in-browser) summary" } ], covers: [pwa/_browser_settings, pwa/_system_settings, pwa/_install_instructions] }
-- { id: pwa/notifications_help/chrome_ios,      as: david, path: "/rooms/{{rooms.designers}}", user_agent: chrome_ios,      matrix: { viewports: [phone] }, steps: [ { click: "[data-notifications-target=bell]" }, { click: "dialog[open] details.pwa__instructions summary" } ], covers: [pwa/_browser_settings, pwa/_system_settings, pwa/_install_instructions] }
+# Chrome on iOS gets no visible help at all: _browser_settings skips iOS, _install_instructions
+# skips every Chrome, and _system_settings is hidden in the browser.
+- { id: pwa/notifications_help/chrome_ios,      as: david, path: "/rooms/{{rooms.designers}}", user_agent: chrome_ios,      matrix: { viewports: [phone] }, steps: [ { click: "[data-notifications-target=bell]" }, { wait_for: "dialog[open]" } ], covers: [pwa/_browser_settings, pwa/_system_settings, pwa/_install_instructions] }
 - { id: pwa/notifications_help/safari_mac,      as: david, path: "/rooms/{{rooms.designers}}", user_agent: safari_mac,      steps: [ { click: "[data-notifications-target=bell]" }, { click: "dialog[open] details.notifications-help:not(.hide-in-browser) summary" } ], covers: [pwa/_browser_settings, pwa/_system_settings] }
 - { id: pwa/notifications_help/safari_ios,      as: david, path: "/rooms/{{rooms.designers}}", user_agent: safari_ios,      matrix: { viewports: [phone] }, steps: [ { click: "[data-notifications-target=bell]" }, { click: "dialog[open] details.pwa__instructions summary" } ], covers: [pwa/_browser_settings, pwa/_system_settings, pwa/_install_instructions] }
 - { id: pwa/notifications_help/firefox_mac,     as: david, path: "/rooms/{{rooms.designers}}", user_agent: firefox_mac,     steps: [ { click: "[data-notifications-target=bell]" }, { click: "dialog[open] details.notifications-help:not(.hide-in-browser) summary" } ], covers: [pwa/_browser_settings, pwa/_system_settings] }
@@ -1225,6 +1280,7 @@
 - id: users/profile/qr_code
   as: david
   path: /users/me/profile
+  mutates: true    # the QR code encodes a transfer URL whose expiry is the server's now + 4h, to the ms
   steps:
     - click: 'a[href^="/qr_code/"]'
   covers: [users/profiles/_transfer]
@@ -1271,11 +1327,13 @@
 
 - id: users/avatar/initials
   kind: fragment
+  as: david      # Users::AvatarsController requires authentication
   path: /users/{{avatar_tokens.david}}/avatar
   covers: [users/avatars/show.svg]
 
 - id: users/avatar/image
   kind: fragment
+  as: david
   path: /users/{{avatar_tokens.jason}}/avatar
   covers: []
 
@@ -1319,7 +1377,7 @@
   path: /searches
   mutates: true
   steps:
-    - fill: { selector: "#q", text: "cuckoo" }
+    - fill: { selector: "#q", text: "launch" }     # designers messages Kevin can reach
     - press: "Enter"
     - wait_for: "#search-results .message"
   covers: [searches/index]
@@ -1346,7 +1404,7 @@
   mutates: true
   steps:
     - { actor: a, type: { selector: "#composer .lexxy-editor__content", text: "Live from Jason" } }
-    - { actor: a, press: "Enter" }
+    - { actor: a, click: "#composer button[name=send]" }
     - { actor: b, wait_for: '.message:has-text("Live from Jason")' }
   covers: [messages/_message]
 
@@ -1395,7 +1453,7 @@
   steps:
     - { actor: a, click: '[data-message-id="{{messages.unboosted}}"] .message__options-btn' }
     - { actor: a, click: '[data-message-id="{{messages.unboosted}}"] .quick-boosts button[data-emoji]' }
-    - { actor: b, wait_for: '[data-message-id="{{messages.unboosted}}"] .boost' }
+    - { actor: b, wait_for: '[data-message-id="{{messages.unboosted}}"] .boost-item' }
   covers: [messages/boosts/_boost]
 
 - id: realtime/boost_removed
@@ -1413,6 +1471,7 @@
   actors: { a: jason, b: david }
   capture: b
   path: /rooms/{{rooms.designers}}
+  mutates: true   # Jason's typing broadcasts reach every capture with designers open
   steps:
     - { actor: a, type: { selector: "#composer .lexxy-editor__content", text: "Thinking" } }
     - { actor: b, wait_for: ".typing-indicator--active" }
@@ -1423,6 +1482,7 @@
   actors: { a: jason, c: jz, b: david }
   capture: b
   path: /rooms/{{rooms.designers}}
+  mutates: true   # Jason's typing broadcasts reach every capture with designers open
   steps:
     - { actor: a, type: { selector: "#composer .lexxy-editor__content", text: "Thinking" } }
     - { actor: c, type: { selector: "#composer .lexxy-editor__content", text: "Me too" } }
@@ -1438,7 +1498,7 @@
   steps:
     - { actor: a, goto: "/rooms/{{rooms.pets}}" }
     - { actor: a, type: { selector: "#composer .lexxy-editor__content", text: "Pets news" } }
-    - { actor: a, press: "Enter" }
+    - { actor: a, click: "#composer button[name=send]" }
     - { actor: b, wait_for: '#user_sidebar [data-room-id="{{rooms.pets}}"].unread' }
   covers: [users/sidebars/rooms/_shared]
 
@@ -1459,6 +1519,10 @@
   capture: b
   path: /rooms/{{rooms.designers}}
   mutates: true
+  # Losing the membership closes Kevin's cable connection (Membership after_destroy_commit ->
+  # reset_remote_connections); ActionCable's ConnectionMonitor reconnects once its Date-based
+  # staleness check says so, which a frozen Date never does.
+  clock: advancing
   steps:
     - { actor: a, goto: "/rooms/closeds/{{rooms.designers}}/edit" }
     - { actor: a, click: 'li[data-value="kevin"] label.switch' }
@@ -1476,7 +1540,7 @@
     - { actor: a, goto: "/rooms/closeds/{{rooms.quiet}}/edit" }
     - { actor: a, click: 'button[aria-label^="Delete"]' }
     - { actor: b, type: { selector: "#composer .lexxy-editor__content", text: "Anyone here?" } }
-    - { actor: b, press: "Enter" }
+    - { actor: b, click: "#composer button[name=send]" }
     - { actor: b, wait_for: "#composer-frame .shake" }
   covers: [messages/room_not_found]
 
@@ -1487,7 +1551,7 @@
   mutates: true
   steps:
     - { actor: a, type: { selector: "#composer .lexxy-editor__content", text: "You are here" } }
-    - { actor: a, press: "Enter" }
+    - { actor: a, click: "#composer button[name=send]" }
     - { actor: b, wait_for: '.message:has-text("You are here")' }
   covers: [messages/_message]
 
@@ -1515,6 +1579,7 @@
 - id: bot_api/boosts/create
   kind: fragment
   mutates: true
+  expect_status: 201
   path: /rooms/{{rooms.watercooler}}/{{bot_keys.bender}}/messages/{{messages.thirteenth}}/boosts
   request: { method: POST, headers: { Content-Type: "text/plain" }, body: "🤖" }
   covers: [messages/boosts/by_bots/show.json, messages/boosts/_boost.json, users/_user.json]

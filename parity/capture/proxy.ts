@@ -3,9 +3,11 @@
 // (parity/seeds/README.md). Each target gets its own forward proxy; a browser context for that
 // target uses it, and the proxy sends everything, including the Action Cable WebSocket (tunneled
 // with CONNECT, or an absolute-URI upgrade), to the real server with the Host header untouched.
+// Connections to the server go through forward.ts when the capture runs without a network.
 import http from "node:http"
 import net from "node:net"
 import type { AddressInfo } from "node:net"
+import { connectUpstream } from "./forward.ts"
 
 export const DEFAULT_ORIGIN = "http://localhost:3999"
 
@@ -21,6 +23,11 @@ export async function startProxy(upstreamUrl: string): Promise<Proxy> {
   const host = upstream.hostname
   const port = Number(upstream.port || 80)
   const agent = new http.Agent({ keepAlive: true, maxSockets: 64 })
+  // Through forward.ts when the capture has no network of its own.
+  ;(agent as any).createConnection = (_options: unknown, callback: (error: Error | null, socket: net.Socket) => void) => {
+    const socket = connectUpstream(host, port, () => callback(null, socket))
+    socket.once("error", (error) => callback(error, socket))
+  }
   const sockets = new Set<net.Socket>()
 
   const server = http.createServer((req, res) => {
@@ -44,7 +51,7 @@ export async function startProxy(upstreamUrl: string): Promise<Proxy> {
 
   // CONNECT host:port — Chromium tunnels WebSockets through an HTTP proxy this way.
   server.on("connect", (req, client: net.Socket, head: Buffer) => {
-    const socket = net.connect(port, host, () => {
+    const socket = connectUpstream(host, port, () => {
       client.write("HTTP/1.1 200 Connection Established\r\n\r\n")
       if (head.length) socket.write(head)
       socket.pipe(client)
@@ -56,7 +63,7 @@ export async function startProxy(upstreamUrl: string): Promise<Proxy> {
   // GET ws://… with Upgrade — how Firefox and WebKit may send WebSockets to a plain proxy.
   server.on("upgrade", (req, client: net.Socket, head: Buffer) => {
     const url = new URL(req.url ?? "/", "http://placeholder")
-    const socket = net.connect(port, host, () => {
+    const socket = connectUpstream(host, port, () => {
       const lines = [`${req.method} ${url.pathname}${url.search} HTTP/1.1`]
       for (let i = 0; i < req.rawHeaders.length; i += 2) {
         const name = req.rawHeaders[i].toLowerCase()

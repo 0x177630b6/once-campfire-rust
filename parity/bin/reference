@@ -298,6 +298,7 @@ workers: FORK_PER_JOB=false INTERVAL=0.1 bundle exec resque-pool
 EOF
   rm -f "$dir/app/config/resque-pool.yml"
   cp "$PARITY/docker/resque-pool.yml" "$dir/app/config/resque-pool.yml"
+  cp "$PARITY/docker/parity_action_cable.rb" "$dir/app/config/initializers/parity_action_cable.rb"
   echo "$seed" > "$dir/seed"
   (
     cd "$dir/app"

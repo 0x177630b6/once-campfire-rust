@@ -39,6 +39,10 @@ local convenience only, because the host's libvips/ffmpeg make different variant
    explicit instant (`at`), so callbacks, rich text canonicalization, attachment analysis, the
    `:thumb`/`:square` variants and video previews are all Ruby's.
 4. Background jobs are discarded (push, webhooks, banned-content removal).
+5. Every representation a page asks for is processed here, so no server makes one on the fly under
+   a random blob key: a video's poster is `preview(format: :webp, resize_to_limit: [1200, 800])`
+   (app/helpers/messages/attachment_presentation.rb), not the plain `preview(format: :webp)` that
+   `Message::Attachment#process_attachment` makes.
 
 ## The clock
 
@@ -144,6 +148,24 @@ group_direct; Kevin has designers.
   bot curl commands. Serve both apps under the same origin (or map it) or they differ.
 - **Mutating states** (`mutates: true` in `screens.yml`) change the database; give each a fresh
   instance (`reference up` takes a few seconds and instances run side by side).
+- **Visiting a room marks it read** for that user (`PresenceChannel#present` clears
+  `memberships.unread_at`), and every sidebar shows unread rooms. States that open a room where
+  their user has unread messages (David: watercooler, david_and_kevin, group_direct; Kevin:
+  designers) are therefore `mutates: true`, so the other states see the seed's unread badges
+  whatever order they run in.
+
+## Action Cable in the reference image
+
+The parity image (`parity/docker/Dockerfile`) adds one initializer to the app,
+`config/initializers/parity_action_cable.rb`, which sets `config.action_cable.worker_pool_size = 1`
+(`PARITY_CABLE_WORKER_POOL_SIZE` overrides it, for experiments). Action Cable otherwise hands each
+incoming command to a pool of 4 threads, so a connection's commands can run out of order. Every room
+page sends an `unsubscribe` immediately followed by a `subscribe` for the same identifier (the
+sidebar turbo-frame replaces its `turbo-cable-stream-source` elements); when the subscribe runs
+first the server drops it as a duplicate and never confirms it, and the page renders differently
+from run to run. The Rust cable server runs a connection's commands sequentially, in the order they
+arrive, so one worker makes the oracle behave the way the port does, deterministically. It changes
+no rendering: it only removes the reordering.
 - **External images** in seeded embeds (`https://example.com/og/**`,
   `https://pbs.twimg.com/profile_images/**`) must be answered by the harness, e.g. with
   `reference/test/fixtures/files/moon.jpg`.

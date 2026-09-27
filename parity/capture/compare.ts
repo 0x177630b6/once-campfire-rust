@@ -31,7 +31,9 @@ export interface CellComparison {
   diffImage?: string
 }
 
-const TEXT_LAYERS: [Layer, string][] = [["server", ".server.norm.html"], ["live", ".live.norm.html"], ["aria", ".aria.yml"]]
+const TEXT_LAYERS: [Layer, string][] = [
+  ["server", ".server.norm.html"], ["live", ".live.norm.html"], ["aria", ".aria.yml"], ["network", ".network.txt"], ["cable", ".cable.txt"],
+]
 
 export function compareJob(job: Job, runDir: string, expectedName: string, actualName: string, allowlist: Allowlist): CellComparison {
   const cell = cellId(job.cell)

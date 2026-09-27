@@ -37,3 +37,18 @@
   Object.defineProperty(Notification, "permission", { configurable: true, get: () => "denied" })
   Notification.requestPermission = () => Promise.resolve("denied")
 })()
+
+// CSS animations run on the document timeline, in real time, which no fake clock slows: the flash
+// (appear-then-fade 3s after 300ms) faded out and removed itself (animationend) before capture on
+// a slow run and not on a fast one. Every CSS animation is held paused from the start instead; the
+// capture then sets each one to its state's declared time (readiness.js pauseAnimations), so what
+// shows never depends on how long the steps took. Transitions still run (the app waits for some,
+// with failsafe timers). An adopted stylesheet, so the page's DOM is untouched.
+;(() => {
+  try {
+    const sheet = new CSSStyleSheet()
+    sheet.replaceSync("*, *::before, *::after { animation-play-state: paused !important; }")
+    document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet]
+  } catch {}
+})()
+

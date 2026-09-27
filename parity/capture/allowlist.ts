@@ -9,7 +9,7 @@ import fs from "node:fs"
 import YAML from "yaml"
 import { globToRegExp } from "./inventory.ts"
 
-export const LAYERS = ["pixels", "server", "live", "aria"] as const
+export const LAYERS = ["pixels", "server", "live", "aria", "network", "cable"] as const
 export type Layer = (typeof LAYERS)[number]
 
 export interface AllowEntry {
