@@ -172,3 +172,23 @@ The running log follows.
   One surprise: after the HTTP suite the Rust process holds 1.37 GB. That is the fragment store
   filled to its 50,000-entry cap by the ~100k messages the POST suite creates (Rails creates ~5.8k
   in the same time). It needs a byte bound.
+- **Fragment store bounded by bytes** (1d6ac20). This fixes the 1.37 GB surprise in the final
+  benchmark. The reference keeps fragments in Redis, and its `config/redis.conf` sets no
+  `maxmemory`, so there is no bound to copy. The store now works like Rails' `MemoryStore`:
+  - Each entry counts its key, its payload and 240 bytes.
+  - Going over the limit evicts least recently used entries down to three quarters of it.
+  - The default limit is 32 MB, and `CAMPFIRE_FRAGMENT_CACHE_MB` sets it.
+  - Fragments are shrunk to fit before they're stored. Askama's size hint had left most of each
+    fragment's allocation as spare capacity, which the `Arc` kept alive.
+
+  Measured on native builds pinned to cores 8–15, after 60k POSTs (RssAnon):
+
+  | Build | RssAnon |
+  |---|---|
+  | Before | 1,280 MB |
+  | After | 129 MB |
+  | After, with the store off | 92 MB |
+
+  Room show and POSTs, 3 interleaved reps, didn't change beyond noise: room show c=16 at
+  2,212 → 2,216 req/s, and POST c=16 at 4,532 → 4,479 req/s. The workspace tests pass, and the
+  header sweep shows 0 differences.
