@@ -131,6 +131,30 @@ bytes, so a write-heavy run could grow it past 1 GB. It's now bounded by bytes, 
 `MemoryStore`: 32 MB by default, set with `CAMPFIRE_FRAGMENT_CACHE_MB`. After 60,000 message posts
 the process now holds 129 MB instead of 1.28 GB, at the same throughput.
 
+### 100,000 clients, and a Raspberry Pi 5
+
+One Campfire holds 100,000 connected clients in 1.5 GB: every one connects in about 13 s, and
+memory stays flat while messages fan out to all of them. On a Raspberry Pi 5's CPU budget
+(emulated: four pinned cores capped at 1.2 cores' worth), the app delivered over a million
+messages a second to those clients, the load generator's limit, using 0.71 of its 1.2 cores. What
+limits a Pi is its gigabit Ethernet: about 51,000 compressed deliveries a second. That's 100,000
+chatters in rooms of 100, each posting every five minutes, with a third to spare; a single room of
+100,000 can't be busy on one gigabit link. Details and caveats in
+[`bench/results/pi-100k-20260928/report.md`](bench/results/pi-100k-20260928/report.md).
+
+| At 100,000 clients | Before | After |
+|---|---|---|
+| Memory, idle | 3.2 GB | 1.5 GB |
+| Memory, while fanning out | 5.9 GB | 1.6 GB |
+| A message on the wire | ~10 KB | ~2.3 KB (compressed) |
+| Posting while a message fans out to everyone, p50 | 637 ms | 43 ms |
+
+What changed: Action Cable sockets use their own small WebSocket implementation, which writes each
+broadcast's shared bytes to every socket without copying them per connection, and compresses a
+broadcast once for all of its subscribers (`permessage-deflate`, which browsers offer). Connections
+run on threads of their own, so page loads and posts don't queue behind a fan-out. The app also
+raises its own open-file limit, which in Docker would otherwise stop it at 65,536 clients.
+
 ### Where the speed came from
 
 A straight translation was already 3–10× faster than Rails. Profiling (in
@@ -229,6 +253,9 @@ bench/run                                                  # benchmark both apps
 
 Deliberate:
 
+- **Compressed WebSocket frames.** The app accepts the `permessage-deflate` compression browsers
+  offer (without context takeover, so each broadcast is compressed once for all of its
+  subscribers); Rails' Action Cable doesn't negotiate it. The frames decode to the same messages.
 - **No CSRF tokens.** Forgery protection checks the `Sec-Fetch-Site` header browsers send, as Rails
   main's `protect_from_forgery using: :header_only` does, instead of per-request tokens. Writes are
   accepted from `same-origin` and `same-site` requests; `cross-site` ones, and HTTPS requests
