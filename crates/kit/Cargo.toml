@@ -37,6 +37,7 @@ x509-parser.workspace = true
 zstd.workspace = true
 url.workspace = true
 p256 = { workspace = true, features = ["pkcs8", "pem"] }
+libc.workspace = true
 
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }

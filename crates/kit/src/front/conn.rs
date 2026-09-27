@@ -18,7 +18,7 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use axum::body::Body;
-use axum::http::{Request, Response, StatusCode};
+use axum::http::{HeaderValue, Request, Response, StatusCode, header};
 use bytes::Bytes;
 use hyper::body::{Frame, Incoming, SizeHint};
 use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
@@ -160,6 +160,10 @@ where
                     Some(deadline) => tokio::time::timeout_at(deadline, response).await.map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "write timeout"))?,
                     None => response.await,
                 };
+                let mut response = response;
+                if options.date {
+                    response.headers_mut().entry(header::DATE).or_insert_with(http_date);
+                }
                 if response.status() == StatusCode::SWITCHING_PROTOCOLS {
                     return Ok::<_, std::io::Error>(response);
                 }
@@ -195,21 +199,49 @@ where
     match protocol {
         Protocol::Http1 => {
             let mut builder = hyper::server::conn::http1::Builder::new();
-            builder.timer(TokioTimer::new()).header_read_timeout(options.read_timeout).auto_date_header(options.date);
+            builder.timer(TokioTimer::new()).header_read_timeout(options.read_timeout).auto_date_header(false);
             drive!(builder.serve_connection(io, hyper_service).with_upgrades())
         }
         Protocol::Http2 => {
             let mut builder = hyper::server::conn::http2::Builder::new(TokioExecutor::new());
-            builder.timer(TokioTimer::new()).auto_date_header(options.date);
+            builder.timer(TokioTimer::new()).auto_date_header(false);
             drive!(builder.serve_connection(io, hyper_service))
         }
         Protocol::Auto => {
             let mut builder = Builder::new(TokioExecutor::new());
-            builder.http1().timer(TokioTimer::new()).header_read_timeout(options.read_timeout).auto_date_header(options.date);
-            builder.http2().timer(TokioTimer::new()).auto_date_header(options.date);
+            builder.http1().timer(TokioTimer::new()).header_read_timeout(options.read_timeout).auto_date_header(false);
+            builder.http2().timer(TokioTimer::new()).auto_date_header(false);
             drive!(builder.serve_connection_with_upgrades(io, hyper_service))
         }
     }
+}
+
+/// The `Date` Go's `http.Server` writes. Go reads the wall clock through the vDSO, never through
+/// libc, so a libfaketime-frozen clock (the parity harness runs the app under one) doesn't reach
+/// Thruster's `Date`: it stays the real time while Rails' clock is frozen. `std::time::SystemTime`
+/// goes through libc, so the real time is read with the raw system call here. (A frozen `Date`
+/// makes every asset stale on arrival — its age is the whole freeze — so browsers revalidate
+/// assets Thruster lets them keep.)
+fn http_date() -> HeaderValue {
+    let printer = jiff::fmt::rfc2822::DateTimePrinter::new();
+    let date = printer.timestamp_to_rfc9110_string(&wall_clock()).unwrap_or_default();
+    HeaderValue::from_str(&date).unwrap_or_else(|_| HeaderValue::from_static(""))
+}
+
+#[cfg(target_os = "linux")]
+fn wall_clock() -> jiff::Timestamp {
+    let mut now = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+    // SAFETY: clock_gettime(2) writes one `timespec` through a valid pointer.
+    let status = unsafe { libc::syscall(libc::SYS_clock_gettime, libc::CLOCK_REALTIME, &mut now as *mut libc::timespec) };
+    match status {
+        0 => jiff::Timestamp::new(now.tv_sec, 0).unwrap_or_else(|_| jiff::Timestamp::now()),
+        _ => jiff::Timestamp::now(),
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn wall_clock() -> jiff::Timestamp {
+    jiff::Timestamp::now()
 }
 
 /// Requests in flight on a connection, and when the last one ended.
