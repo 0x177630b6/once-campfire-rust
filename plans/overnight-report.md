@@ -61,3 +61,11 @@ Running log; the final summary gets written at the end.
 
   How: a 4 KiB read buffer read in its own task, each frame encoded once and shared across
   subscribers, batched writes, and connections reading straight from the hub's ring buffers.
+- **Rust vs Rails app fixes** (3b70734, 69bda70, eda40f2, 03218c3). A rerun of every affected
+  state passed 114 of 114 cells.
+  - Broadcast URLs drop the request's port, as Rails' `ApplicationController.renderer` does.
+  - A panicking action now returns the normal 500 page.
+  - Empty autocomplete keeps ERB's trailing newline, which gives it Rack's ETag.
+  - The front server writes `Date` from the real clock. A frozen `Date` made Chrome treat
+    preloaded assets as stale and stall the sign-in pages.
+  - What remains is the composer focus-ring timing flake, which the harness agent is fixing.
