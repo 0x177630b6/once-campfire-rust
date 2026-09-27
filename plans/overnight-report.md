@@ -20,3 +20,32 @@ Running log; the final summary gets written at the end.
 - While fetching the mimalloc source, the profiling agent sent the user's email address in the
   User-Agent header of one crates.io API request. It didn't happen again, and nothing else left
   the machine.
+
+## Log, continued
+
+- **Lean gate committed** (4797f84). Ruby vs Ruby: 963 of 970 cells identical; crowd, custom_styles
+  and restricted are fully clean. What remains is a random join code on first run (4 cells) plus 3
+  rare pixel flakes.
+- **Harness determinism fixes that landed with it:**
+  - one Action Cable command worker in the reference;
+  - frozen clocks for every server;
+  - a capture container with no network of its own;
+  - fixed-tick readiness;
+  - scripts delivered in request order;
+  - pinned Chromium font and Skia flags.
+- **Reference bug found:** new-ping autocomplete never shows suggestions, because a plain fetch
+  requests JSON and gets HTML back.
+- **Rust vs Rails, first lean run:**
+
+  | Seed | Pass | Of |
+  |---|---|---|
+  | crowd | 25 | 25 |
+  | custom_styles | 33 | 33 |
+  | restricted | 8 | 8 |
+  | first_run | 12 | 16 (the join-code cells) |
+  | default | 822 | 888 (54 fail, 12 error) |
+
+- **Coordinator decisions:**
+  - Mask the random join code, since seeding Ruby's RNG can't make Rust match.
+  - A pixel-only difference whose server output is identical gets up to 2 re-captures; if one
+    matches, the cell passes but is flagged flaky. Server-output differences are never retried.
