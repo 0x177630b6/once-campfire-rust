@@ -11,7 +11,7 @@
 //!   loadgen fetch  --base URL --cookie C --path P --out FILE     -> saves an uncompressed body
 //!   loadgen gzip   --file F [--iters 200]                         -> CPU per compression, by backend/level
 //!
-//! `http` also takes `--gzip 0` (no Accept-Encoding), `--requests N` (stop after N requests,
+//! `http` also takes `--gzip 0` (`Accept-Encoding: identity`), `--requests N` (stop after N requests,
 //! for allocation counting) and `--trace FILE` (each request's start, latency and status). `cable` prints `PHASE <name> <unix ms>` lines on stderr so memory
 //! samples can be attributed to its phases.
 
@@ -248,6 +248,7 @@ async fn http_load(a: &Args) -> Res<Value> {
     let post_room = a.opt("post-room");
     let csrf = a.opt("csrf").unwrap_or_default();
     let gzip = a.num("gzip", 1u8) != 0;
+    let accept_encoding = if gzip { "gzip" } else { "identity" };
     let limit: u64 = a.num("requests", u64::MAX);
     let trace_path = a.opt("trace");
     let trace = Arc::new(Mutex::new(Vec::<(u128, u64, u16)>::new()));
@@ -286,16 +287,12 @@ async fn http_load(a: &Args) -> Res<Value> {
                     Some(room) => {
                         i += 1;
                         let (mut h, b) = message_request(&cookie, &csrf, &format!("bench write {i}"));
-                        if gzip {
-                            h.push(("accept-encoding", "gzip".into()));
-                        }
+                        h.push(("accept-encoding", accept_encoding.into()));
                         ("POST", format!("/rooms/{room}/messages"), h, b)
                     }
                     None => {
                         let mut h = vec![("cookie", cookie.clone())];
-                        if gzip {
-                            h.push(("accept-encoding", "gzip".into()));
-                        }
+                        h.push(("accept-encoding", accept_encoding.into()));
                         ("GET", path.clone(), h, Bytes::new())
                     }
                 };

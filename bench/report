@@ -3,8 +3,10 @@
 
   bench/report bench/results/<stamp>
 
-The last column is the Rust advantage: >1 means Rust is better (higher throughput, or lower
-latency/memory/time), computed from the medians.
+"Rust adv." is the Rust advantage: >1 means Rust is better (higher throughput, or lower
+latency/memory/time), computed from the medians. When the results include `rust-identity` runs
+(the Rust image serving `Accept-Encoding: identity`), the HTTP table adds a "Rust, no gzip" column
+and its advantage over Rust with gzip.
 """
 import glob, json, os, statistics, sys
 
@@ -13,6 +15,7 @@ runs = {}
 for f in sorted(glob.glob(os.path.join(out, "*-*.json"))):
     r = json.load(open(f))
     runs.setdefault(r["app"], []).append(r)
+identity = runs.pop("rust-identity", None)
 apps = [a for a in ("reference", "rust") if a in runs]
 
 
@@ -26,7 +29,7 @@ def cell(vals):
     return m, fmt(m) + spread
 
 
-def row(name, getter, higher_better):
+def row(name, getter, higher_better, with_identity=False):
     meds, cells = {}, []
     for a in apps:
         vals = []
@@ -42,19 +45,36 @@ def row(name, getter, higher_better):
     if len(apps) == 2 and meds["reference"] and meds["rust"]:
         x = meds["rust"] / meds["reference"] if higher_better else meds["reference"] / meds["rust"]
         ratio = f"{x:.1f}×"
-    print(f"| {name} | " + " | ".join(cells) + f" | {ratio} |")
+    extra = ""
+    if with_identity:
+        vals = []
+        for r in identity:
+            try:
+                vals.append(getter(r))
+            except (KeyError, IndexError, TypeError, StopIteration):
+                vals.append(None)
+        m, c = cell(vals)
+        vs = "–"
+        if m and meds.get("rust"):
+            vs = f"{(m / meds['rust'] if higher_better else meds['rust'] / m):.2f}×"
+        extra = f" {c} | {vs} |"
+    print(f"| {name} | " + " | ".join(cells) + f" | {ratio} |" + extra)
 
 
-def header(title):
+def header(title, with_identity=False, note=""):
     print(f"\n### {title}\n")
-    print("| Metric | " + " | ".join("Rails" if a == "reference" else "Rust" for a in apps) + " | Rust adv. |")
-    print("|---|" + "---|" * len(apps) + "---|")
+    if note:
+        print(note + "\n")
+    more = " Rust, no gzip | vs Rust gzip |" if with_identity else ""
+    print("| Metric | " + " | ".join("Rails" if a == "reference" else "Rust" for a in apps) + " | Rust adv. |" + more)
+    print("|---|" + "---|" * len(apps) + "---|" + ("---|---|" if with_identity else ""))
 
 
 env = os.path.join(out, "env.txt")
 if os.path.exists(env):
     print("```\n" + open(env).read().strip() + "\n```")
-print(f"\nReps: " + ", ".join(f"{a} {len(runs[a])}" for a in apps) + ". Cells: median [min–max].")
+print(f"\nReps: " + ", ".join(f"{a} {len(runs[a])}" for a in apps) + (f", rust-identity {len(identity)}" if identity else "")
+      + ". Cells: median [min–max].")
 
 header("Startup and memory")
 row("cold start: docker run → /up 200 (ms)", lambda r: r["cold_start_ms"], False)
@@ -79,15 +99,16 @@ def http(route, conc, key):
     return get
 
 
-header("HTTP (signed in as david; keep-alive; c = concurrent connections)")
+wi = bool(identity)
+header("HTTP (signed in as david; keep-alive; c = concurrent connections)", wi)
 for route, conc in routes:
-    row(f"{route} c={conc} req/s", http(route, conc, "rps"), True)
-    row(f"{route} c={conc} p50 ms", http(route, conc, "p50_ms"), False)
-    row(f"{route} c={conc} p99 ms", http(route, conc, "p99_ms"), False)
+    row(f"{route} c={conc} req/s", http(route, conc, "rps"), True, wi)
+    row(f"{route} c={conc} p50 ms", http(route, conc, "p50_ms"), False, wi)
+    row(f"{route} c={conc} p99 ms", http(route, conc, "p99_ms"), False, wi)
 
 header("HTTP errors / non-2xx-3xx (first rep, per app)")
-for a in apps:
-    bad = [f"{h['route']} c={h['conc']}: {h['statuses']} errors={h['errors']}" for h in runs[a][0]["http"]
+for a in apps + (["rust-identity"] if identity else []):
+    bad = [f"{h['route']} c={h['conc']}: {h['statuses']} errors={h['errors']}" for h in (runs.get(a) or identity)[0]["http"]
            if h["errors"] or any(int(k) >= 400 for k in h["statuses"])]
     print(f"- {a}: " + ("; ".join(bad) if bad else "none"))
 
@@ -110,3 +131,33 @@ med = lambda key: (lambda r: statistics.median([x[key] for x in r["upload"]["run
 row("POST with attachment (ms)", med("post_ms"), False)
 row("then GET thumb → 200 (ms)", med("thumb_ms"), False)
 row("POST → thumbnail served (ms)", lambda r: r["upload"]["median_total_ms"], False)
+
+
+def procmem(n, phase, what):
+    def get(r):
+        c = next(c for c in r["cable"] if c["clients"] == n)
+        p = c["process_memory"][phase]
+        roles = p["roles"]
+        if what == "app":
+            return roles["campfire" if r["app"] == "rust" else "puma"]["peak_pss_mb"]
+        if what == "app_anon":
+            return roles["campfire" if r["app"] == "rust" else "puma"]["peak_anon_mb"]
+        if what == "serving":  # everything that takes part in a cable delivery
+            keys = ["campfire"] if r["app"] == "rust" else ["puma", "redis", "thrust"]
+            return sum(roles[k]["peak_pss_mb"] for k in keys if k in roles)
+        return p["peak_total_pss_mb"]
+    return get
+
+
+if all("process_memory" in c for a in apps for r in runs[a] for c in r["cable"]):
+    header("Memory during cable fan-out, by process (MB, peak within the phase)", note=(
+        "App process: Rails' Puma master and workers (Action Cable runs in them), or Rust's one campfire\n"
+        "process (its front server included). Pss counts pages shared between forked workers once;\n"
+        "RssAnon counts them in every process."))
+    for c in first["cable"]:
+        n = c["clients"]
+        for phase, label in (("connected", "all subscribed, idle"), ("saturated", "saturated fan-out")):
+            row(f"{n} clients, {label}: app process Pss", procmem(n, phase, "app"), False)
+            row(f"{n} clients, {label}: app process RssAnon", procmem(n, phase, "app_anon"), False)
+            row(f"{n} clients, {label}: app + Redis + Thruster Pss", procmem(n, phase, "serving"), False)
+            row(f"{n} clients, {label}: whole container Pss", procmem(n, phase, "total"), False)
