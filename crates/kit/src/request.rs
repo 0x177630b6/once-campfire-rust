@@ -236,11 +236,6 @@ impl Request {
     pub fn remote_ip(&self) -> Result<&str> {
         self.remote_ip.as_deref().map_err(|_| Error::IpSpoofAttack)
     }
-
-    /// `X-CSRF-Token`
-    pub fn x_csrf_token(&self) -> Option<&str> {
-        self.header("x-csrf-token")
-    }
 }
 
 pub fn media_type(content_type: Option<&str>) -> Option<String> {

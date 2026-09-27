@@ -133,7 +133,9 @@ def requests(labels, found):
         ("406 yaml", "GET", f"/rooms/{hq}.yaml", {}, {}),
         ("head 404 any", "HEAD", "/nope", {"Accept": "*/*"}, {}),
         ("head 406 xml", "HEAD", f"/rooms/{hq}.xml", {}, {}),
-        ("422 csrf", "POST", f"/rooms/{hq}/messages", {"Content-Type": "application/x-www-form-urlencoded"}, {"body": "message[body]=x"}),
+        # A cross-site post: Rails refuses it for having no token, the Rust app for Sec-Fetch-Site.
+        ("422 csrf", "POST", f"/rooms/{hq}/messages", {"Content-Type": "application/x-www-form-urlencoded", "Sec-Fetch-Site": "cross-site"},
+         {"body": "message[body]=x"}),
         ("401 bad sign in", "POST", "/session", {"Content-Type": "application/x-www-form-urlencoded"},
          {"csrf": "/session", "body": "email_address=nobody%40example.com&password=x"}),
         ("other user avatar 404", "GET", "/users/nope/avatar", {"Accept": "image/*"}, {}),

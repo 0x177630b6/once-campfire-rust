@@ -10,7 +10,6 @@ use campfire_routes as routes;
 use jiff::Timestamp;
 use serde::Deserialize;
 
-use crate::helpers as h;
 use crate::ViewContext;
 use crate::fragment_cache;
 use support::{epoch_ms, iso8601, RubyNumber};

@@ -36,7 +36,6 @@ pub struct Ctx {
     flash: Option<Flash>,
     kit: Kit,
     extensions: Extensions,
-    csrf_token: Option<String>,
     marked_for_same_origin_verification: bool,
     formats: Option<std::result::Result<Vec<Format>, InvalidMimeType>>,
     rendered_format: Option<Format>,
@@ -97,7 +96,6 @@ impl Ctx {
             flash: None,
             kit,
             extensions: Extensions::new(),
-            csrf_token: None,
             marked_for_same_origin_verification: false,
             formats: None,
             rendered_format: None,
@@ -178,10 +176,9 @@ impl Ctx {
         self.session.load(&self.cookies)
     }
 
-    /// `reset_session`: new session id, no data, no CSRF token, no flash.
+    /// `reset_session`: new session id, no data, no flash.
     pub fn reset_session(&mut self) {
         self.session.reset();
-        self.csrf_token = None;
         self.flash = None;
     }
 
@@ -194,38 +191,14 @@ impl Ctx {
         self.flash.as_mut().unwrap()
     }
 
-    // --- CSRF (ActionController::RequestForgeryProtection) -----------------------------------
+    // --- Forgery protection ---------------------------------------------------------------------
 
-    /// The raw session CSRF secret, created on first use and stored at the end of the request.
-    fn real_csrf_token(&mut self) -> String {
-        if let Some(token) = &self.csrf_token {
-            return token.clone();
-        }
-        let token = match self.session().get_str("_csrf_token") {
-            Some(token) => token.to_string(),
-            None => self.kit.crypto().generate_csrf_token(),
-        };
-        self.csrf_token = Some(token.clone());
-        token
-    }
-
-    /// `form_authenticity_token` / `csrf_meta_tags`: a freshly masked global token.
-    pub fn csrf_token(&mut self) -> String {
-        let real = self.real_csrf_token();
-        self.kit.crypto().masked_csrf_token(&real)
-    }
-
-    /// The token `form_with`/`button_to` embed: per-form (bound to action and method) when
-    /// `per_form_csrf_tokens` is on.
-    pub fn csrf_token_for_form(&mut self, action: &str, method: &str) -> String {
-        if !self.kit.config().per_form_csrf_tokens {
-            return self.csrf_token();
-        }
-        let real = self.real_csrf_token();
-        self.kit.crypto().per_form_masked_csrf_token(&real, action, method, self.request.path())
-    }
-
-    /// The `verify_authenticity_token` before-action (with `protect_from_forgery with: :exception`).
+    /// The `verify_authenticity_token` before-action, by `Sec-Fetch-Site` rather than tokens (Rails
+    /// main's `protect_from_forgery using: :header_only`): pages carry no per-request token, so they
+    /// render the same until what they show changes. Browsers send the header on every request to a
+    /// secure origin; without it (an old browser, or plain HTTP where browsers don't send it) a
+    /// write is only allowed when neither the request nor the app uses SSL, where the
+    /// `SameSite=Lax` session cookie and the `Origin` check are the protection.
     pub fn verify_authenticity_token(&mut self) -> Result<()> {
         self.marked_for_same_origin_verification = self.request.is_get();
         if self.request.is_get() || self.request.is_head() {
@@ -239,10 +212,14 @@ impl Ctx {
             );
             return Err(Error::InvalidAuthenticityToken(message));
         }
-        if !self.any_authenticity_token_valid() {
-            return Err(Error::InvalidAuthenticityToken("Can't verify CSRF token authenticity.".into()));
+        match self.request.header("sec-fetch-site") {
+            Some("same-origin" | "same-site") => Ok(()),
+            None if !self.request.is_ssl() && !self.kit.config().force_ssl => Ok(()),
+            Some("cross-site") => {
+                Err(Error::InvalidAuthenticityToken("Sec-Fetch-Site header (cross-site) indicates a cross-site request".into()))
+            }
+            other => Err(Error::InvalidAuthenticityToken(format!("Sec-Fetch-Site header is missing or invalid ({other:?})"))),
         }
-        Ok(())
     }
 
     fn valid_request_origin(&self) -> Result<bool> {
@@ -254,24 +231,6 @@ impl Ctx {
             Some(origin) => Ok(origin == self.request.base_url()),
             None => Ok(true),
         }
-    }
-
-    fn any_authenticity_token_valid(&mut self) -> bool {
-        let candidates: Vec<String> = [
-            self.params.str("authenticity_token").map(str::to_string),
-            self.request.x_csrf_token().map(str::to_string),
-        ]
-        .into_iter()
-        .flatten()
-        .filter(|t| !t.is_empty())
-        .collect();
-        if candidates.is_empty() {
-            return false;
-        }
-        let real = self.real_csrf_token();
-        let path = self.request.path().to_string();
-        let method = self.request.method.as_str().to_string();
-        candidates.iter().any(|token| self.kit.crypto().valid_csrf_token(&real, token, &path, &method))
     }
 
     // --- Formats -------------------------------------------------------------------------------
@@ -639,7 +598,7 @@ impl Ctx {
         Ok(())
     }
 
-    /// `commit_flash`, `commit_csrf_token`, `commit_session`, then the cookie jar's `write`.
+    /// `commit_flash`, `commit_session`, then the cookie jar's `write`.
     fn commit(&mut self, response: &mut Response) -> Result<()> {
         if let Some(flash) = self.flash.take() {
             let has_flash_key = self.session().contains_key("flash");
@@ -654,9 +613,6 @@ impl Ctx {
         }
         if self.session.is_loaded() && self.session.contains_key("flash") && self.session.get("flash").is_none() {
             self.session.remove("flash");
-        }
-        if let Some(token) = self.csrf_token.clone() {
-            self.session().insert("_csrf_token", token);
         }
         // A Live response writes the cookie jar when it commits (`Live::Response#before_committed`),
         // and the Cookies middleware writes it again after the session store has added its

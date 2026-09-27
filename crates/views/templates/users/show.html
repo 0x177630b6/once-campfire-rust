@@ -27,7 +27,7 @@
         </div>
 
 {% if user.active() %}          <div class="pad-inline-double margin-inline margin-block-start">
-            {% filter button_to(ctx, h::rooms_directs_with_user(user.id), h::attrs().class("btn btn--reversed full-width txt-large")) %}
+            {% filter button_to(h::rooms_directs_with_user(user.id), h::attrs().class("btn btn--reversed full-width txt-large")) %}
               {{ h::image_tag(ctx, "messages.svg", h::attrs().aria("hidden", "true").aria("label", "Ping " ~ user.name)) }}
 {% endfilter %}          </div>
 

@@ -28,8 +28,7 @@ async fn show(c: &mut Ctx) -> Result {
 }
 
 async fn form(c: &mut Ctx) -> Result {
-    let token = c.csrf_token();
-    Ok(c.html(format!("<input name=\"authenticity_token\" value=\"{token}\">")))
+    Ok(c.html("<form method=\"post\" action=\"/form\"></form>"))
 }
 
 async fn create(c: &mut Ctx) -> Result {
@@ -387,65 +386,62 @@ async fn missing_required_param_is_400() {
     assert_eq!(reply.status, StatusCode::BAD_REQUEST);
 }
 
-async fn csrf_setup(app: &Router) -> (String, String) {
-    let page = send(app, get("/form").body(AxumBody::empty()).unwrap()).await;
-    let token = page.text().split("value=\"").nth(1).unwrap().split('"').next().unwrap().to_string();
-    let session_cookie = page.cookies().into_iter().find(|c| c.starts_with("_campfire_session=")).expect("session cookie");
-    assert!(session_cookie.contains("; path=/; expires=Wed, 01 Jun 2044 12:00:00 GMT; httponly; samesite=lax"));
-    (token, page.cookie_jar())
+/// The test app as Campfire runs it in production: behind TLS (`assume_ssl`) with `force_ssl`.
+fn ssl_app() -> Router {
+    let public = tempfile::tempdir().unwrap().keep();
+    std::fs::write(public.join("422.html"), "<h1>Unprocessable</h1>").unwrap();
+    let mut config = KitConfig { public_path: Some(public), force_ssl: true, ..KitConfig::default() };
+    config.proxy.assume_ssl = true;
+    app_with(config)
 }
 
-#[tokio::test]
-async fn csrf_rejects_forged_posts_and_accepts_the_session_token() {
-    let app = app();
-    let (token, cookie) = csrf_setup(&app).await;
-
-    let forged = send(&app, post("/form").header(header::COOKIE, &cookie).body(AxumBody::empty()).unwrap()).await;
-    assert_eq!(forged.status, StatusCode::UNPROCESSABLE_ENTITY);
-    assert_eq!(forged.text(), "<h1>Unprocessable</h1>");
-    assert!(forged.cookies().is_empty(), "errors don't commit cookies");
-
-    let body = format!("authenticity_token={}&x=1", campfire_kit::cookies::escape(&token));
-    let ok = send(
-        &app,
-        post("/form")
-            .header(header::COOKIE, &cookie)
-            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-            .body(AxumBody::from(body))
-            .unwrap(),
-    )
-    .await;
-    assert_eq!(ok.status, StatusCode::OK);
-    assert_eq!(ok.json()["params"]["x"], "1");
-
-    let header_ok =
-        send(&app, post("/form").header(header::COOKIE, &cookie).header("x-csrf-token", &token).body(AxumBody::empty()).unwrap())
-            .await;
-    assert_eq!(header_ok.status, StatusCode::OK);
-
-    // A token from another session is no good.
-    let (other_token, _) = csrf_setup(&app).await;
-    let wrong = send(
-        &app,
-        post("/form").header(header::COOKIE, &cookie).header("x-csrf-token", &other_token).body(AxumBody::empty()).unwrap(),
-    )
-    .await;
-    assert_eq!(wrong.status, StatusCode::UNPROCESSABLE_ENTITY);
-}
-
-#[tokio::test]
-async fn csrf_checks_the_origin() {
-    let app = app();
-    let (token, cookie) = csrf_setup(&app).await;
-    let with_origin = |origin: &str| {
-        post("/form")
-            .header(header::COOKIE, &cookie)
-            .header("x-csrf-token", &token)
-            .header(header::ORIGIN, origin)
-            .body(AxumBody::empty())
-            .unwrap()
+fn post_from(site: Option<&str>) -> HttpRequest<AxumBody> {
+    let request = post("/form");
+    let request = match site {
+        Some(site) => request.header("sec-fetch-site", site),
+        None => request,
     };
-    assert_eq!(send(&app, with_origin("http://chat.example.com")).await.status, StatusCode::OK);
+    request.header(header::CONTENT_TYPE, "application/x-www-form-urlencoded").body(AxumBody::from("x=1")).unwrap()
+}
+
+#[tokio::test]
+async fn forgery_protection_trusts_same_site_requests_by_sec_fetch_site() {
+    let app = ssl_app();
+    for site in ["same-origin", "same-site"] {
+        let ok = send(&app, post_from(Some(site))).await;
+        assert_eq!(ok.status, StatusCode::OK, "{site}");
+        assert_eq!(ok.json()["params"]["x"], "1");
+    }
+    for site in [Some("cross-site"), Some("none"), Some("bogus"), None] {
+        let forged = send(&app, post_from(site)).await;
+        assert_eq!(forged.status, StatusCode::UNPROCESSABLE_ENTITY, "{site:?}");
+        assert_eq!(forged.text(), "<h1>Unprocessable</h1>");
+        assert!(forged.cookies().is_empty(), "errors don't commit cookies");
+    }
+}
+
+#[tokio::test]
+async fn forgery_protection_allows_a_missing_header_only_without_ssl() {
+    // Browsers send `Sec-Fetch-Site` only to secure origins, so plain HTTP can't require it.
+    let app = app();
+    assert_eq!(send(&app, post_from(None)).await.status, StatusCode::OK);
+    assert_eq!(send(&app, post_from(Some("cross-site"))).await.status, StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn pages_carry_no_forgery_token_or_session() {
+    let page = send(&app(), get("/form").body(AxumBody::empty()).unwrap()).await;
+    assert!(!page.text().contains("authenticity_token"));
+    assert!(page.cookies().is_empty(), "rendering a form doesn't start a session");
+}
+
+#[tokio::test]
+async fn forgery_protection_checks_the_origin() {
+    let app = ssl_app();
+    let with_origin = |origin: &str| {
+        post("/form").header("sec-fetch-site", "same-origin").header(header::ORIGIN, origin).body(AxumBody::empty()).unwrap()
+    };
+    assert_eq!(send(&app, with_origin("https://chat.example.com")).await.status, StatusCode::OK);
     assert_eq!(send(&app, with_origin("https://evil.example")).await.status, StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(send(&app, with_origin("null")).await.status, StatusCode::UNPROCESSABLE_ENTITY);
 }

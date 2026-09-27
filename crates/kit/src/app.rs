@@ -22,8 +22,6 @@ pub struct KitConfig {
     pub session: SessionConfig,
     /// `forgery_protection_origin_check` (on since `load_defaults 5.0`).
     pub forgery_protection_origin_check: bool,
-    /// `per_form_csrf_tokens` (on since `load_defaults 5.0`).
-    pub per_form_csrf_tokens: bool,
     /// `action_dispatch.default_headers` (`load_defaults 7.1`).
     pub default_headers: Vec<(HeaderName, HeaderValue)>,
     /// Where `404.html`, `422.html`, `500.html` live (`Rails.public_path`).
@@ -42,7 +40,6 @@ impl Default for KitConfig {
             hsts: "max-age=63072000; includeSubDomains".into(),
             session: SessionConfig::default(),
             forgery_protection_origin_check: true,
-            per_form_csrf_tokens: true,
             default_headers: rails_default_headers(),
             public_path: None,
             max_body_bytes: None,

@@ -1,5 +1,5 @@
 //! `ApplicationHelper`, `CableHelper`, `VersionHelper`, `TimeHelper`, `ClipboardHelper`,
-//! `DropTargetHelper`, `QrCodeHelper` and `csrf_meta_tags` (`reference/app/helpers/*.rb`).
+//! `DropTargetHelper` and `QrCodeHelper` (`reference/app/helpers/*.rb`).
 
 use base64_url::urlsafe_encode64;
 
@@ -12,16 +12,6 @@ use crate::ViewContext;
 /// `page_title_tag`: `@page_title || "Campfire"`.
 pub fn page_title_tag(page_title: Option<&str>) -> Html {
     content_tag_text("title", attrs(), page_title.unwrap_or("Campfire"))
-}
-
-/// `csrf_meta_tags`.
-pub fn csrf_meta_tags(ctx: &ViewContext) -> Html {
-    if ctx.csrf_token.is_empty() {
-        return Safe(String::new());
-    }
-    let param = legacy_tag("meta", attrs().name("csrf-param").attr("content", "authenticity_token"));
-    let token = legacy_tag("meta", attrs().name("csrf-token").attr("content", ctx.csrf_token.as_str()));
-    Safe(format!("{}\n{}", param.0, token.0))
 }
 
 /// `current_user_meta_tags`.

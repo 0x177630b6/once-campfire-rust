@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use base64::Engine;
-use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+use base64::engine::general_purpose::STANDARD;
 use jiff::Timestamp;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -69,20 +69,6 @@ impl TestCrypto {
             }
         Some(payload["v"].clone())
     }
-
-    fn global_token(&self, session_token: &str) -> Vec<u8> {
-        Sha256::digest(format!("{}!real_csrf_token{session_token}", self.secret)).to_vec()
-    }
-
-    fn per_form_token(&self, session_token: &str, action_path: &str, method: &str) -> Vec<u8> {
-        Sha256::digest(format!("{}{action_path}#{}{session_token}", self.secret, method.to_lowercase())).to_vec()
-    }
-
-    fn mask(raw: &[u8]) -> String {
-        let pad: Vec<u8> = (0..raw.len()).map(|_| rand::random::<u8>()).collect();
-        let encrypted: Vec<u8> = pad.iter().zip(raw).map(|(p, r)| p ^ r).collect();
-        URL_SAFE_NO_PAD.encode([pad, encrypted].concat())
-    }
 }
 
 impl Crypto for TestCrypto {
@@ -102,31 +88,6 @@ impl Crypto for TestCrypto {
 
     fn decrypt_cookie(&self, name: &str, raw: &str, now: Timestamp) -> Option<Value> {
         self.open("encrypted", name, raw.get(8..)?, now)
-    }
-
-    fn generate_csrf_token(&self) -> String {
-        let bytes: [u8; 32] = rand::random();
-        URL_SAFE_NO_PAD.encode(bytes)
-    }
-
-    fn masked_csrf_token(&self, session_token: &str) -> String {
-        Self::mask(&self.global_token(session_token))
-    }
-
-    fn per_form_masked_csrf_token(&self, session_token: &str, action: &str, method: &str, request_path: &str) -> String {
-        let action_path = rails_compat::csrf::normalize_action_path(action, request_path);
-        Self::mask(&self.per_form_token(session_token, &action_path, method))
-    }
-
-    fn valid_csrf_token(&self, session_token: &str, submitted: &str, request_path: &str, request_method: &str) -> bool {
-        let Ok(masked) = URL_SAFE_NO_PAD.decode(submitted.trim_end_matches('=')) else { return false };
-        if masked.len() != 64 {
-            return false;
-        }
-        let (pad, encrypted) = masked.split_at(32);
-        let token: Vec<u8> = pad.iter().zip(encrypted).map(|(p, e)| p ^ e).collect();
-        let path = request_path.strip_suffix('/').unwrap_or(request_path);
-        token == self.global_token(session_token) || token == self.per_form_token(session_token, path, request_method)
     }
 }
 

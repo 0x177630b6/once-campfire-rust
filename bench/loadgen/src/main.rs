@@ -137,8 +137,14 @@ fn cookie_header(jar: &[(String, String)]) -> String {
     jar.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join("; ")
 }
 
+/// The page's CSRF token: the Rails app renders one; the Rust app doesn't (it checks `Sec-Fetch-Site`).
 fn csrf_from(html: &str) -> Option<String> {
     regex::Regex::new(r#"<meta name="csrf-token" content="([^"]*)""#).unwrap().captures(html).map(|c| c[1].to_string())
+}
+
+/// What a browser sends with requests its pages make; the Rust app's forgery protection needs it.
+fn same_origin() -> (&'static str, String) {
+    ("sec-fetch-site", "same-origin".into())
 }
 
 fn unescape(s: &str) -> String {
@@ -150,13 +156,13 @@ async fn login(a: &Args) -> Res<Value> {
     let mut jar = Vec::new();
     let r = one_shot(&addr, "GET", "/session/new", &[], Bytes::new()).await?;
     merge_cookies(&mut jar, &r.headers);
-    let token = csrf_from(&String::from_utf8_lossy(&r.body)).ok_or("no csrf token on /session/new")?;
+    let token = csrf_from(&String::from_utf8_lossy(&r.body)).unwrap_or_default();
     let body = form(&[("email_address", &a.get("email")), ("password", &a.get("password")), ("authenticity_token", &token)]);
     let r = one_shot(
         &addr,
         "POST",
         "/session",
-        &[("cookie", cookie_header(&jar)), ("content-type", "application/x-www-form-urlencoded".into())],
+        &[("cookie", cookie_header(&jar)), ("content-type", "application/x-www-form-urlencoded".into()), same_origin()],
         body,
     )
     .await?;
@@ -234,6 +240,7 @@ fn message_request(cookie: &str, csrf: &str, body_text: &str) -> (Vec<(&'static 
             ("content-type", "application/x-www-form-urlencoded".into()),
             ("accept", "text/vnd.turbo-stream.html, text/html, application/xhtml+xml".into()),
             ("x-csrf-token", csrf.to_string()),
+            same_origin(),
         ],
         body,
     )
@@ -504,7 +511,7 @@ async fn cable(a: &Args) -> Res<Value> {
     let addr = host_port(&a.get("base"));
     let cookie = a.get("cookie");
     let room = a.get("room");
-    let csrf = a.get("csrf");
+    let csrf = a.opt("csrf").unwrap_or_default();
     let clients: usize = a.num("clients", 100);
     let latency_msgs: u64 = a.num("latency-msgs", 30);
     let interval = Duration::from_millis(a.num("interval-ms", 200));
@@ -675,7 +682,7 @@ async fn upload(a: &Args) -> Res<Value> {
     let addr = host_port(&a.get("base"));
     let cookie = a.get("cookie");
     let room = a.get("room");
-    let csrf = a.get("csrf");
+    let csrf = a.opt("csrf").unwrap_or_default();
     let file = a.get("file");
     let reps: usize = a.num("reps", 5);
     let data = std::fs::read(&file)?;
@@ -706,6 +713,7 @@ async fn upload(a: &Args) -> Res<Value> {
                 ("content-type", format!("multipart/form-data; boundary={boundary}")),
                 ("accept", "text/vnd.turbo-stream.html, text/html".into()),
                 ("x-csrf-token", csrf.clone()),
+                same_origin(),
             ],
             Bytes::from(body),
         )

@@ -188,7 +188,7 @@ run_rep() {
   local cookie scrape csrf streams css
   cookie=$(lg login --base "$BASE" --email "$EMAIL" --password "$PASSWORD" | python3 -c 'import json,sys; print(json.load(sys.stdin)["cookie"])')
   scrape=$(lg scrape --base "$BASE" --cookie "$cookie" --room "$ROOM")
-  csrf=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["csrf"])' "$scrape")
+  csrf=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["csrf"] or "")' "$scrape")
   streams=$(python3 -c 'import json,sys; print(",".join(json.loads(sys.argv[1])["streams"]))' "$scrape")
   css=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["css"])' "$scrape")
 

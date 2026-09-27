@@ -105,37 +105,24 @@ impl Reply {
         self.headers.get_all(header::SET_COOKIE).iter().map(|v| v.to_str().unwrap().to_string()).collect()
     }
 
-    /// The global token from `csrf_meta_tags`.
-    fn csrf_meta_token(&self) -> String {
+    /// Asserts the page has a form posting to `action`.
+    fn assert_form(&self, action: &str) {
         let html = self.text();
-        let at = html.find("name=\"csrf-token\" content=\"").expect("csrf meta tag") + "name=\"csrf-token\" content=\"".len();
-        html[at..].split('"').next().unwrap().to_string()
+        assert!(
+            html.contains(&format!("action=\"{action}\"")) || html.contains(&format!("action=\"http://{HOST}{action}\"")),
+            "no form for {action} in {html}"
+        );
     }
 
-    /// The per-form token of the `button_to` form for `action` that sends `method`.
-    fn button_token(&self, action: &str, method: &str) -> String {
+    /// Asserts the page has a `button_to` form for `action` that sends `method`.
+    fn assert_button(&self, action: &str, method: &str) {
         let html = self.text();
-        for form in html.split("<form").skip(1) {
+        let method_field = format!("name=\"_method\" value=\"{method}\"");
+        let found = html.split("<form").skip(1).any(|form| {
             let form = &form[..form.find("</form>").unwrap_or(form.len())];
-            let method_field = format!("name=\"_method\" value=\"{method}\"");
-            if form.contains(&format!("action=\"{action}\"")) && form.contains(&method_field) {
-                let at = form.find("name=\"authenticity_token\" value=\"").unwrap() + "name=\"authenticity_token\" value=\"".len();
-                return form[at..].split('"').next().unwrap().to_string();
-            }
-        }
-        panic!("no {method} button for {action}")
-    }
-
-    /// The per-form `authenticity_token` of the form posting to `action`.
-    fn form_token(&self, action: &str) -> String {
-        let html = self.text();
-        let start = html
-            .find(&format!("action=\"{action}\""))
-            .or_else(|| html.find(&format!("action=\"http://{HOST}{action}\"")))
-            .unwrap_or_else(|| panic!("no form for {action} in {html}"));
-        let rest = &html[start..];
-        let at = rest.find("name=\"authenticity_token\" value=\"").expect("token") + "name=\"authenticity_token\" value=\"".len();
-        rest[at..rest[at..].find('"').unwrap() + at].to_string()
+            form.contains(&format!("action=\"{action}\"")) && form.contains(&method_field)
+        });
+        assert!(found, "no {method} button for {action}");
     }
 }
 
@@ -148,6 +135,8 @@ struct Browser<'a> {
 impl Browser<'_> {
     async fn request(&mut self, method: Method, path: &str, headers: &[(&str, &str)], body: Option<(&str, String)>) -> Reply {
         let mut request = Request::builder().method(method).uri(path).header(header::HOST, HOST).header(header::USER_AGENT, CHROME).header("x-forwarded-for", &self.ip);
+        // What a browser sends for requests the page itself makes (forms, fetches).
+        request = request.header("sec-fetch-site", "same-origin");
         if !self.cookies.is_empty() {
             let cookie = self.cookies.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join("; ");
             request = request.header(header::COOKIE, cookie);
@@ -182,8 +171,8 @@ impl Browser<'_> {
         self.request(Method::GET, path, &[], None).await
     }
 
-    async fn form(&mut self, method: &str, path: &str, token: &str, fields: &[(&str, &str)]) -> Reply {
-        let mut pairs = vec![("authenticity_token".to_string(), token.to_string())];
+    async fn form(&mut self, method: &str, path: &str, fields: &[(&str, &str)]) -> Reply {
+        let mut pairs = Vec::new();
         if method != "post" {
             pairs.push(("_method".into(), method.into()));
         }
@@ -195,8 +184,8 @@ impl Browser<'_> {
     async fn sign_in(&mut self, email: &str) {
         let page = self.get("/session/new").await;
         assert_eq!(page.status, StatusCode::OK, "{}", page.text());
-        let token = page.form_token("/session");
-        let reply = self.form("post", "/session", &token, &[("email_address", email), ("password", PASSWORD)]).await;
+        page.assert_form("/session");
+        let reply = self.form("post", "/session", &[("email_address", email), ("password", PASSWORD)]).await;
         assert_eq!(reply.status, StatusCode::FOUND, "sign in as {email}: {}", reply.text());
     }
 }
@@ -223,8 +212,8 @@ async fn signs_in_with_a_password_and_out_again() {
     assert_eq!(page.status, StatusCode::OK);
     assert!(page.text().contains("<title>Sign in</title>"));
     assert!(page.header("link").is_some_and(|link| link.contains("rel=preload; as=style")));
-    let token = page.form_token("/session");
-    let signed_in = browser.form("post", "/session", &token, &[("email_address", &test.label("emails.david")), ("password", PASSWORD)]).await;
+    page.assert_form("/session");
+    let signed_in = browser.form("post", "/session", &[("email_address", &test.label("emails.david")), ("password", PASSWORD)]).await;
     assert_redirect(&signed_in, "http://campfire.test/account/edit");
     let session_cookie = signed_in.set_cookies().into_iter().find(|c| c.starts_with("session_token=")).expect("session cookie");
     assert!(session_cookie.contains("httponly") && session_cookie.contains("samesite=lax") && session_cookie.contains("expires="), "{session_cookie}");
@@ -238,8 +227,8 @@ async fn signs_in_with_a_password_and_out_again() {
     // Sign out from the profile page's form.
     let profile = browser.get("/users/me/profile").await;
     assert_eq!(profile.status, StatusCode::OK, "{}", profile.text());
-    let token = profile.form_token("/session");
-    let signed_out = browser.form("delete", "/session", &token, &[]).await;
+    profile.assert_form("/session");
+    let signed_out = browser.form("delete", "/session", &[]).await;
     assert_redirect(&signed_out, "http://campfire.test/");
     assert!(signed_out.set_cookies().iter().any(|c| c.starts_with("session_token=;")), "{:?}", signed_out.set_cookies());
     assert_redirect(&browser.get("/users/me/profile").await, "http://campfire.test/session/new");
@@ -249,9 +238,9 @@ async fn signs_in_with_a_password_and_out_again() {
 async fn rejects_bad_passwords_and_rate_limits_sign_ins() {
     let Some(test) = boot_seed("default").await else { return };
     let mut browser = test.browser("198.51.100.2");
-    let token = browser.get("/session/new").await.form_token("/session");
+    browser.get("/session/new").await.assert_form("/session");
     for attempt in 1..=11 {
-        let reply = browser.form("post", "/session", &token, &[("email_address", "david@37signals.com"), ("password", "wrong")]).await;
+        let reply = browser.form("post", "/session", &[("email_address", "david@37signals.com"), ("password", "wrong")]).await;
         let expected = if attempt <= 10 { StatusCode::UNAUTHORIZED } else { StatusCode::TOO_MANY_REQUESTS };
         assert_eq!(reply.status, expected, "attempt {attempt}");
         let html = reply.text();
@@ -260,8 +249,8 @@ async fn rejects_bad_passwords_and_rate_limits_sign_ins() {
     }
     // Deactivated users can't sign in.
     let mut other = test.browser("198.51.100.3");
-    let token = other.get("/session/new").await.form_token("/session");
-    let reply = other.form("post", "/session", &token, &[("email_address", &test.label("emails.rita")), ("password", PASSWORD)]).await;
+    other.get("/session/new").await.assert_form("/session");
+    let reply = other.form("post", "/session", &[("email_address", &test.label("emails.rita")), ("password", PASSWORD)]).await;
     assert_eq!(reply.status, StatusCode::UNAUTHORIZED);
 }
 
@@ -296,18 +285,14 @@ async fn transfers_sign_in_on_another_device() {
     let path = format!("/session/transfers/{transfer_id}");
     let show = phone.get(&path).await;
     assert_eq!(show.status, StatusCode::OK);
-    let token = show.form_token(&path);
-    assert_redirect(&phone.form("put", &path, &token, &[]).await, "http://campfire.test/");
+    show.assert_form(&path);
+    assert_redirect(&phone.form("put", &path, &[]).await, "http://campfire.test/");
     assert_eq!(phone.get("/users/me/profile").await.status, StatusCode::OK);
 
     let mut stranger = test.browser("198.51.100.7");
-    let token = stranger.get(&path).await.form_token(&path);
     let bogus = "/session/transfers/bogus";
-    let reply = stranger.form("put", bogus, &token, &[]).await;
-    // The token was minted for another action, so CSRF fails first; with the right one it's a 400.
-    assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY);
-    let token = stranger.get(bogus).await.form_token(bogus);
-    assert_eq!(stranger.form("put", bogus, &token, &[]).await.status, StatusCode::BAD_REQUEST);
+    stranger.get(bogus).await.assert_form(bogus);
+    assert_eq!(stranger.form("put", bogus, &[]).await.status, StatusCode::BAD_REQUEST);
 }
 
 // --- Joining and first run -------------------------------------------------------------------------
@@ -320,16 +305,16 @@ async fn joins_with_the_join_code() {
     let path = format!("/join/{}", test.label("join_codes.signal"));
     let page = browser.get(&path).await;
     assert_eq!(page.status, StatusCode::OK);
-    let token = page.form_token(&path);
+    page.assert_form(&path);
     let fields = [("user[name]", "New Person"), ("user[email_address]", "new@example.com"), ("user[password]", PASSWORD)];
-    assert_redirect(&browser.form("post", &path, &token, &fields).await, "http://campfire.test/");
+    assert_redirect(&browser.form("post", &path, &fields).await, "http://campfire.test/");
     assert_eq!(browser.get("/users/me/profile").await.status, StatusCode::OK);
 
     // A taken email address goes to sign in instead.
     let mut other = test.browser("198.51.100.9");
-    let token = other.get(&path).await.form_token(&path);
+    other.get(&path).await.assert_form(&path);
     let fields = [("user[name]", "Imposter"), ("user[email_address]", "new@example.com"), ("user[password]", PASSWORD)];
-    assert_redirect(&other.form("post", &path, &token, &fields).await, "http://campfire.test/session/new?email_address=new%40example.com");
+    assert_redirect(&other.form("post", &path, &fields).await, "http://campfire.test/session/new?email_address=new%40example.com");
 }
 
 #[tokio::test]
@@ -339,9 +324,9 @@ async fn first_run_sets_up_the_account() {
     assert_redirect(&browser.get("/session/new").await, "http://campfire.test/first_run");
     let page = browser.get("/first_run").await;
     assert_eq!(page.status, StatusCode::OK, "{}", page.text());
-    let token = page.form_token("/first_run");
+    page.assert_form("/first_run");
     let fields = [("user[name]", "Owner"), ("user[email_address]", "owner@example.com"), ("user[password]", PASSWORD)];
-    assert_redirect(&browser.form("post", "/first_run", &token, &fields).await, "http://campfire.test/");
+    assert_redirect(&browser.form("post", "/first_run", &fields).await, "http://campfire.test/");
     assert_redirect(&browser.get("/first_run").await, "http://campfire.test/");
     assert!(browser.get("/").await.location().starts_with("http://campfire.test/rooms/"));
 }
@@ -358,23 +343,23 @@ async fn administers_the_account() {
     let edit = admin.get("/account/edit").await;
     assert_eq!(edit.status, StatusCode::OK, "{}", edit.text());
     let action = format!("/account.{account_id}");
-    let token = edit.form_token(&action);
-    let updated = admin.form("patch", &action, &token, &[("account[name]", "Renamed")]).await;
+    edit.assert_form(&action);
+    let updated = admin.form("patch", &action, &[("account[name]", "Renamed")]).await;
     assert_redirect(&updated, "http://campfire.test/account/edit");
     let edit = admin.get("/account/edit").await;
     assert!(edit.text().contains("Renamed"));
     assert!(edit.text().contains("flash"), "the ✓ notice shows once");
 
     // Join code reset.
-    let token = edit.form_token("/account/join_code");
-    assert_redirect(&admin.form("post", "/account/join_code", &token, &[]).await, "http://campfire.test/account/edit");
+    edit.assert_form("/account/join_code");
+    assert_redirect(&admin.form("post", "/account/join_code", &[]).await, "http://campfire.test/account/edit");
     assert!(!admin.get("/account/edit").await.text().contains(&test.label("join_codes.signal")));
 
     // Custom styles.
     let page = admin.get("/account/custom_styles/edit").await;
     assert_eq!(page.status, StatusCode::OK);
-    let token = page.form_token("/account/custom_styles");
-    let reply = admin.form("patch", "/account/custom_styles", &token, &[("account[custom_styles]", "body { --x: 1 }")]).await;
+    page.assert_form("/account/custom_styles");
+    let reply = admin.form("patch", "/account/custom_styles", &[("account[custom_styles]", "body { --x: 1 }")]).await;
     assert_redirect(&reply, "http://campfire.test/account/custom_styles/edit");
     assert!(admin.get("/account/custom_styles/edit").await.text().contains("<style data-turbo-track=\"reload\">body { --x: 1 }</style>"));
 
@@ -390,8 +375,7 @@ async fn administers_the_account() {
     let edit = member.get("/account/edit").await;
     assert_eq!(edit.status, StatusCode::OK);
     assert!(!edit.text().contains(&format!("action=\"{action}\"")), "members get no account form");
-    let token = edit.csrf_meta_token();
-    assert_eq!(member.form("patch", &action, &token, &[("account[name]", "Mine")]).await.status, StatusCode::FORBIDDEN);
+    assert_eq!(member.form("patch", &action, &[("account[name]", "Mine")]).await.status, StatusCode::FORBIDDEN);
     assert_eq!(member.get("/account/bots").await.status, StatusCode::FORBIDDEN);
 }
 
@@ -405,8 +389,8 @@ async fn manages_bots() {
     assert!(index.text().contains(&test.label("bot_keys.bender")));
 
     let new = admin.get("/account/bots/new").await;
-    let token = new.form_token("/account/bots");
-    let reply = admin.form("post", "/account/bots", &token, &[("user[name]", "Robo"), ("user[webhook_url]", "https://example.com/robo")]).await;
+    new.assert_form("/account/bots");
+    let reply = admin.form("post", "/account/bots", &[("user[name]", "Robo"), ("user[webhook_url]", "https://example.com/robo")]).await;
     assert_redirect(&reply, "http://campfire.test/account/bots");
     assert!(admin.get("/account/bots").await.text().contains("Robo"));
 
@@ -414,17 +398,17 @@ async fn manages_bots() {
     let edit = admin.get(&format!("/account/bots/{bender}/edit")).await;
     assert_eq!(edit.status, StatusCode::OK);
     let action = format!("/account/bots/{bender}");
-    let token = edit.form_token(&action);
-    assert_redirect(&admin.form("patch", &action, &token, &[("user[name]", "Bender 2")]).await, "http://campfire.test/account/bots");
+    edit.assert_form(&action);
+    assert_redirect(&admin.form("patch", &action, &[("user[name]", "Bender 2")]).await, "http://campfire.test/account/bots");
 
     let edit = admin.get(&format!("/account/bots/{bender}/edit")).await;
     let key_action = format!("/account/bots/{bender}/key");
-    let token = edit.button_token(&key_action, "put");
-    assert_redirect(&admin.form("put", &key_action, &token, &[]).await, "http://campfire.test/account/bots");
+    edit.assert_button(&key_action, "put");
+    assert_redirect(&admin.form("put", &key_action, &[]).await, "http://campfire.test/account/bots");
     assert!(!admin.get("/account/bots").await.text().contains(&test.label("bot_keys.bender")));
 
-    let token = admin.get(&format!("/account/bots/{bender}/edit")).await.button_token(&action, "delete");
-    assert_redirect(&admin.form("delete", &action, &token, &[]).await, "http://campfire.test/account/bots");
+    admin.get(&format!("/account/bots/{bender}/edit")).await.assert_button(&action, "delete");
+    assert_redirect(&admin.form("delete", &action, &[]).await, "http://campfire.test/account/bots");
     assert_eq!(admin.get(&format!("/account/bots/{bender}/edit")).await.status, StatusCode::NOT_FOUND);
 }
 
@@ -465,8 +449,8 @@ async fn profile_sidebar_and_user_pages() {
 
     let profile = browser.get("/users/me/profile").await;
     assert_eq!(profile.status, StatusCode::OK);
-    let token = profile.form_token("/users/me/profile");
-    let reply = browser.form("patch", "/users/me/profile", &token, &[("user[name]", "Kev"), ("user[bio]", "Hi")]).await;
+    profile.assert_form("/users/me/profile");
+    let reply = browser.form("patch", "/users/me/profile", &[("user[name]", "Kev"), ("user[bio]", "Hi")]).await;
     assert_redirect(&reply, "http://campfire.test/users/me/profile");
     assert!(browser.get("/users/me/profile").await.text().contains("Kev"));
 
@@ -483,9 +467,8 @@ async fn profile_sidebar_and_user_pages() {
     let subscriptions = browser.get("/users/me/push_subscriptions").await;
     assert_eq!(subscriptions.status, StatusCode::OK);
     let body = r#"{"push_subscription":{"endpoint":"http://example.com/push","p256dh_key":"a","auth_key":"b"}}"#;
-    let global = subscriptions.csrf_meta_token();
     let reply = browser
-        .request(Method::POST, "/users/me/push_subscriptions", &[("x-csrf-token", &global)], Some(("application/json", body.into())))
+        .request(Method::POST, "/users/me/push_subscriptions", &[], Some(("application/json", body.into())))
         .await;
     assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY, "an http endpoint fails validation");
 }
@@ -498,11 +481,11 @@ async fn bans_and_unbans() {
     let jz = test.label("users.jz");
     let page = admin.get(&format!("/users/{jz}")).await;
     let action = format!("/users/{jz}/ban");
-    let token = page.form_token(&action);
-    assert_redirect(&admin.form("post", &action, &token, &[]).await, &format!("http://campfire.test/users/{jz}"));
+    page.assert_form(&action);
+    assert_redirect(&admin.form("post", &action, &[]).await, &format!("http://campfire.test/users/{jz}"));
     let page = admin.get(&format!("/users/{jz}")).await;
-    let token = page.button_token(&action, "delete");
-    assert_redirect(&admin.form("delete", &action, &token, &[]).await, &format!("http://campfire.test/users/{jz}"));
+    page.assert_button(&action, "delete");
+    assert_redirect(&admin.form("delete", &action, &[]).await, &format!("http://campfire.test/users/{jz}"));
 }
 
 #[tokio::test]

@@ -25,7 +25,7 @@ test("a token for another record still differs", () => {
   assert.notEqual(a, b)
 })
 
-test("normalizes attributes, whitespace, csrf and timestamps", () => {
+test("normalizes attributes, whitespace and timestamps, and drops csrf tags", () => {
   const html = `<!DOCTYPE html><html><head><meta name="csrf-token" content="abc"></head><body>
     <div  id="x"   class="b a" data-message-timestamp="1772463600000">  hello
       world </div><time datetime="2026-03-02T15:00:00Z"></time><pre>  keep\n me</pre></body></html>`
@@ -33,7 +33,6 @@ test("normalizes attributes, whitespace, csrf and timestamps", () => {
     "<!DOCTYPE html>",
     "<html>",
     "  <head>",
-    `    <meta content="«csrf»" name="csrf-token">`,
     "  </head>",
     "  <body>",
     `    <div class="b a" data-message-timestamp="«epochms-3600s»" id="x">`,

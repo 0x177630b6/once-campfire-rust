@@ -1,6 +1,7 @@
-//! Old-browser-tab continuity: a session cookie, CSRF tokens and a signed cookie issued by the
-//! reference Rails app (`vectors/rails_compat.json`) are accepted by the kit with real
-//! `RailsCrypto`, and what the kit writes back decodes to the same session.
+//! Old-browser-tab continuity: a session cookie and a signed cookie issued by the reference Rails
+//! app (`vectors/rails_compat.json`) are accepted by the kit with real `RailsCrypto`, and what the
+//! kit writes back decodes to the same session. Forgery protection is by `Sec-Fetch-Site` rather
+//! than Rails' tokens, so a tab opened before an upgrade keeps working without one.
 
 use std::sync::Arc;
 
@@ -39,19 +40,16 @@ fn action_post() -> axum::routing::MethodRouter<Kit> {
     axum::routing::post(action(create_session))
 }
 
-async fn post_session(app: &Router, cookie: &str, token: Option<(&str, &str)>, origin: Option<&str>) -> axum::response::Response {
-    let mut request = Request::post("/session").header(header::HOST, "localhost:3000").header(header::COOKIE, cookie);
+async fn post_session(app: &Router, cookie: &str, site: &str, token: Option<&str>, origin: Option<&str>) -> axum::response::Response {
+    let mut request =
+        Request::post("/session").header(header::HOST, "localhost:3000").header(header::COOKIE, cookie).header("sec-fetch-site", site);
     if let Some(origin) = origin {
         request = request.header(header::ORIGIN, origin);
     }
     let body = match token {
-        Some(("param", token)) => {
+        Some(token) => {
             request = request.header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
             format!("authenticity_token={}", campfire_kit::cookies::escape(token))
-        }
-        Some((_, token)) => {
-            request = request.header("x-csrf-token", token);
-            String::new()
         }
         None => String::new(),
     };
@@ -59,19 +57,21 @@ async fn post_session(app: &Router, cookie: &str, token: Option<(&str, &str)>, o
 }
 
 #[tokio::test]
-async fn rails_session_and_csrf_tokens_are_accepted() {
+async fn rails_sessions_carry_over() {
     let vectors = vectors();
     let session = &vectors["session"];
     let (app, secrets) = app(&vectors);
     let cookie = format!("_campfire_session={}", campfire_kit::cookies::escape(session["session_cookie_raw"].as_str().unwrap()));
+    let form_token = session["session_form_token"].as_str().unwrap();
 
-    let with_form_token = post_session(&app, &cookie, Some(("param", session["session_form_token"].as_str().unwrap())), None).await;
-    assert_eq!(with_form_token.status(), StatusCode::OK);
-    let set_cookie = with_form_token.headers().get(header::SET_COOKIE).unwrap().to_str().unwrap().to_string();
-    let body = axum::body::to_bytes(with_form_token.into_body(), usize::MAX).await.unwrap();
+    // A form from a page Rails rendered still posts its token; it's ignored, not required.
+    let from_old_tab = post_session(&app, &cookie, "same-origin", Some(form_token), None).await;
+    assert_eq!(from_old_tab.status(), StatusCode::OK);
+    let set_cookie = from_old_tab.headers().get(header::SET_COOKIE).unwrap().to_str().unwrap().to_string();
+    let body = axum::body::to_bytes(from_old_tab.into_body(), usize::MAX).await.unwrap();
     let body: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(body["id"], session["session"]["session_id"]);
-    assert_eq!(body["csrf"], session["session"]["_csrf_token"]);
+    assert_eq!(body["csrf"], session["session"]["_csrf_token"], "Rails' token stays in the session, unused");
 
     // What we write back is the same session, readable by Rails' cookie format.
     let raw = set_cookie.strip_prefix("_campfire_session=").unwrap().split(';').next().unwrap();
@@ -81,14 +81,13 @@ async fn rails_session_and_csrf_tokens_are_accepted() {
     assert_eq!(decoded, session["session"]);
     assert!(set_cookie.ends_with("; path=/; expires=Mon, 01 Jan 2046 12:00:00 GMT; httponly; samesite=lax"));
 
-    let with_meta_header = post_session(&app, &cookie, Some(("header", session["csrf_meta_token"].as_str().unwrap())), None).await;
-    assert_eq!(with_meta_header.status(), StatusCode::OK);
+    assert_eq!(post_session(&app, &cookie, "same-origin", None, None).await.status(), StatusCode::OK);
 
-    let bad = post_session(&app, &cookie, Some(("param", "bogus")), None).await;
-    assert_eq!(bad.status().as_u16(), session["post_with_bad_token_status"].as_u64().unwrap() as u16);
+    // A valid Rails token doesn't make a cross-site request acceptable.
+    let cross_site = post_session(&app, &cookie, "cross-site", Some(form_token), None).await;
+    assert_eq!(cross_site.status(), StatusCode::UNPROCESSABLE_ENTITY);
 
-    let cross_origin =
-        post_session(&app, &cookie, Some(("param", session["session_form_token"].as_str().unwrap())), Some("https://evil.example")).await;
+    let cross_origin = post_session(&app, &cookie, "same-origin", None, Some("https://evil.example")).await;
     assert_eq!(cross_origin.status().as_u16(), session["post_with_cross_origin_status"].as_u64().unwrap() as u16);
 }
 

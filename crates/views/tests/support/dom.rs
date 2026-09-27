@@ -1,7 +1,7 @@
 //! DOM normalization for parity tests: two documents are the same page when their token
 //! streams match after sorting attributes, merging adjacent text, collapsing whitespace runs to
-//! one space, and masking per-request secrets (CSRF tokens). Whitespace-only text is kept (as a
-//! single space) because it can affect inline layout.
+//! one space, and dropping the forgery tokens Rails renders and this app doesn't. Whitespace-only
+//! text is kept (as a single space) because it can affect inline layout.
 
 use std::cell::RefCell;
 
@@ -53,13 +53,16 @@ impl TokenSink for Sink {
             CharacterTokens(text) => self.text.borrow_mut().push_str(&text),
             NullCharacterToken => self.text.borrow_mut().push('\0'),
             TagToken(tag) => {
-                self.flush_text();
                 let name = tag.name.to_string();
+                let mut attrs: Vec<(String, String)> =
+                    tag.attrs.iter().map(|attr| (attr.name.local.to_string(), attr.value.to_string())).collect();
+                // Dropped before flushing, so the text on either side merges as if it weren't there.
+                if tag.kind == StartTag && is_forgery_token(&name, &attrs) {
+                    return TokenSinkResult::Continue;
+                }
+                self.flush_text();
                 match tag.kind {
                     StartTag => {
-                        let mut attrs: Vec<(String, String)> =
-                            tag.attrs.iter().map(|attr| (attr.name.local.to_string(), attr.value.to_string())).collect();
-                        mask_secrets(&name, &mut attrs);
                         attrs.sort();
                         let attrs: String = attrs.iter().map(|(k, v)| format!(" {k}={v:?}")).collect();
                         self.lines.borrow_mut().push(format!("<{name}{attrs}>"));
@@ -78,23 +81,11 @@ impl TokenSink for Sink {
     }
 }
 
-/// CSRF tokens are random per request (and per form): compare them as present, not by value.
-fn mask_secrets(tag: &str, attrs: &mut [(String, String)]) {
+/// The CSRF meta tags and hidden token fields Rails renders. This app protects against forgery by
+/// `Sec-Fetch-Site` instead, so its pages have none (all are void elements: no end tag to drop).
+fn is_forgery_token(tag: &str, attrs: &[(String, String)]) -> bool {
     let named = |name: &str| attrs.iter().any(|(k, v)| k == "name" && v == name);
-    let mask_attr = if tag == "input" && named("authenticity_token") {
-        Some("value")
-    } else if tag == "meta" && named("csrf-token") {
-        Some("content")
-    } else {
-        None
-    };
-    if let Some(mask_attr) = mask_attr {
-        for (k, v) in attrs.iter_mut() {
-            if k == mask_attr {
-                *v = "[MASKED]".into();
-            }
-        }
-    }
+    (tag == "input" && named("authenticity_token")) || (tag == "meta" && (named("csrf-token") || named("csrf-param")))
 }
 
 /// The normalized token lines of an HTML document or fragment.

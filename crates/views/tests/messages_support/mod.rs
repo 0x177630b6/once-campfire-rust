@@ -26,12 +26,6 @@ pub fn golden(name: &str) -> Golden {
     Golden { name: name.to_string(), kind: json["kind"].as_str().unwrap().to_string(), json, assets }
 }
 
-pub const CSRF: &str = "«csrf»";
-
-fn mask_token(_: &str, _: &str) -> String {
-    CSRF.to_string()
-}
-
 impl Golden {
     pub fn input<T: DeserializeOwned>(&self) -> T {
         serde_json::from_value(self.json["input"].clone()).unwrap_or_else(|e| panic!("{}: input: {e}", self.name))
@@ -78,8 +72,6 @@ impl Golden {
                 logo_url: context["account"]["logo_url"].as_str().unwrap().to_string(),
                 has_logo: context["account"]["has_logo"].as_bool().unwrap(),
             },
-            csrf_token: CSRF.to_string(),
-            form_authenticity_token: &mask_token,
             flash_notice: None,
             flash_alert: None,
             platform,
@@ -104,7 +96,7 @@ impl Golden {
     /// Asserts DOM parity for a template rendered without a layout against a reference page:
     /// the page's main content (or a frame layout's body) is compared with the whole render.
     pub fn assert_content(&self, actual_html: &str) {
-        let expected: Vec<String> = serde_json::from_value(self.json["expected"].clone()).unwrap();
+        let expected = without_forgery_tokens(serde_json::from_value(self.json["expected"].clone()).unwrap());
         let expected = if self.kind == "page" {
             let regions = regions_named(&expected, &["main"]);
             regions.into_iter().next().map(|(_, tokens)| tokens).unwrap_or_default()
@@ -115,7 +107,7 @@ impl Golden {
     }
 
     pub fn assert_dom(&self, actual_html: &str) {
-        let expected: Vec<String> = serde_json::from_value(self.json["expected"].clone()).unwrap();
+        let expected = without_forgery_tokens(serde_json::from_value(self.json["expected"].clone()).unwrap());
         let actual = tokens(actual_html);
         if self.kind == "page" {
             let regions = regions(&expected);
@@ -128,6 +120,23 @@ impl Golden {
             assert_same(&self.name, &trim_whitespace(expected), &trim_whitespace(actual));
         }
     }
+}
+
+/// The reference's token stream without the CSRF tags and fields Rails renders (this app has none),
+/// with the text around a dropped tag merged as the tokenizer would have merged it.
+fn without_forgery_tokens(expected: Vec<String>) -> Vec<String> {
+    let is_token = |t: &str| {
+        (t.starts_with("<input ") && t.contains(r#"name="authenticity_token""#))
+            || (t.starts_with("<meta ") && (t.contains(r#"name="csrf-token""#) || t.contains(r#"name="csrf-param""#)))
+    };
+    let mut out = Vec::with_capacity(expected.len());
+    for token in expected.into_iter().filter(|t| !is_token(t)) {
+        match token.strip_prefix('#') {
+            Some(text) => push_text(&mut out, text),
+            None => out.push(token),
+        }
+    }
+    out
 }
 
 fn assert_same(label: &str, expected: &[String], actual: &[String]) {
@@ -271,7 +280,9 @@ pub fn tokens(html: &str) -> Vec<String> {
             if bytes.get(i + 1).is_some_and(|b| b.is_ascii_alphabetic()) {
                 flush(&mut text, &mut out);
                 let (token, name, end) = start_tag(html, i);
-                out.push(token);
+                if !token.is_empty() {
+                    out.push(token);
+                }
                 i = end;
                 if !VOID.contains(&name.as_str()) {
                     open.push(name.clone());
@@ -374,14 +385,14 @@ fn start_tag(html: &str, start: usize) -> (String, String, usize) {
             attrs.push((key, value));
         }
     }
-    let masked = |key: &str, value: &str| -> String {
-        let is_token = name == "input" && attrs.iter().any(|(k, v)| k == "name" && v == "authenticity_token") && key == "value";
-        let is_meta = name == "meta" && attrs.iter().any(|(k, v)| k == "name" && v == "csrf-token") && key == "content";
-        if is_token || is_meta { CSRF.to_string() } else { value.to_string() }
-    };
+    // Rails renders forgery tokens; this app doesn't (forgery protection is by `Sec-Fetch-Site`).
+    let named = |value: &str| attrs.iter().any(|(k, v)| k == "name" && v == value);
+    if (name == "input" && named("authenticity_token")) || (name == "meta" && (named("csrf-token") || named("csrf-param"))) {
+        return (String::new(), name, i);
+    }
     let rendered: String = attrs
         .iter()
-        .map(|(k, v)| format!(" {k}=\"{}\"", masked(k, v).replace('&', "&amp;").replace('"', "&quot;").replace('<', "&lt;")))
+        .map(|(k, v)| format!(" {k}=\"{}\"", v.replace('&', "&amp;").replace('"', "&quot;").replace('<', "&lt;")))
         .collect();
     (format!("<{name}{rendered}>"), name, i)
 }

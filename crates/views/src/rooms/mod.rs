@@ -308,7 +308,7 @@ pub fn button_to_delete_room(ctx: &ViewContext, room_id: i64, display_name: &str
         .class("btn btn--negative max-width")
         .aria("label", format!("Delete {display_name}"))
         .data("turbo_confirm", "Are you sure you want to delete this room and all messages in it? This can’t be undone.");
-    h::button_to(ctx, &url, options, &content)
+    h::button_to(&url, options, &content)
 }
 
 /// `rooms/layouts/_form`, the form wrapped around the open and closed room forms' fields.

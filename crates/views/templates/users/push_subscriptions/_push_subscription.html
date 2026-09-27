@@ -7,11 +7,11 @@
     <span>{{ push_subscription.endpoint }}</span>
 
     <span class="flex align-center gap">
-      {% filter button_to(ctx, h::routes::user_push_subscription_test_notifications(push_subscription.id), h::attrs().class("btn btn--reversed")) %}
+      {% filter button_to(h::routes::user_push_subscription_test_notifications(push_subscription.id), h::attrs().class("btn btn--reversed")) %}
         {{ h::image_tag(ctx, "notification-bell-everything.svg", h::attrs().aria_hidden().size(20)) }}
         <span class="for-screen-reader">Send test notification</span>
 {% endfilter %}
-      {% filter button_to(ctx, h::routes::user_push_subscription(push_subscription.id), h::attrs().method("delete").class("btn btn--negative")) %}
+      {% filter button_to(h::routes::user_push_subscription(push_subscription.id), h::attrs().method("delete").class("btn btn--negative")) %}
         {{ h::image_tag(ctx, "minus.svg", h::attrs().aria_hidden().size(20)) }}
         <span class="for-screen-reader">Delete subscription</span>
 {% endfilter %}    </span>

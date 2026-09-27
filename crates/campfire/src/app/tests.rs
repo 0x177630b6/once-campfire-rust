@@ -394,25 +394,14 @@ async fn concurrent_message_posts_all_complete() {
 
     let page = send(&router, get_with_cookie(&format!("/rooms/{room_id}"), &session.cookie_header)).await;
     assert_eq!(page.status, StatusCode::OK);
-    let html = page.text();
-    let token = html.split(r#"<meta name="csrf-token" content=""#).nth(1).and_then(|rest| rest.split('"').next()).unwrap().to_string();
-    let rails_session = page
-        .headers
-        .get_all(header::SET_COOKIE)
-        .iter()
-        .filter_map(|v| v.to_str().ok())
-        .find(|c| c.starts_with("_campfire_session="))
-        .and_then(|c| c.split(';').next())
-        .unwrap()
-        .to_string();
-    let cookie = format!("{}; {rails_session}", session.cookie_header);
+    let cookie = session.cookie_header.clone();
 
     let posts = (0..32).map(|n| {
         let router = router.clone();
         let request = Request::post(format!("/rooms/{room_id}/messages"))
             .header(header::HOST, "campfire.test")
             .header(header::COOKIE, &cookie)
-            .header("x-csrf-token", &token)
+            .header("sec-fetch-site", "same-origin")
             .header(header::ACCEPT, "text/vnd.turbo-stream.html, text/html, application/xhtml+xml")
             .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
             .body(Body::from(format!("message%5Bbody%5D=%3Cp%3EHello+{n}%3C%2Fp%3E&message%5Bclient_message_id%5D=concurrent-{n}")))

@@ -17,20 +17,6 @@ use std::rc::Rc;
 
 use super::html::{Html, Safe, escape};
 use super::tag::{Attrs, Value, attrs, content_tag, legacy_tag};
-use super::url::normalize_action_path;
-use crate::ViewContext;
-
-/// The hidden `authenticity_token` field for a form posting to `action` with `method`
-/// (`token_tag` with per-form tokens).
-pub fn token_tag(ctx: &ViewContext, action: &str, method: &str) -> Html {
-    let token = (ctx.form_authenticity_token)(&normalize_action_path(action), method);
-    if token.is_empty() {
-        // Outside a request (broadcasts, ApplicationController.renderer) there's no forgery
-        // protection and Rails renders no token field.
-        return Safe(String::new());
-    }
-    legacy_tag("input", attrs().type_("hidden").name("authenticity_token").value(token))
-}
 
 /// The hidden `_method` field (`method_tag`).
 pub fn method_tag(method: &str) -> Html {
@@ -39,8 +25,7 @@ pub fn method_tag(method: &str) -> Html {
 
 /// `form_with(url:, model:, method:, id:, class:, data:)`.
 #[derive(Clone)]
-pub struct FormWith<'a> {
-    ctx: &'a ViewContext<'a>,
+pub struct FormWith {
     action: String,
     method: String,
     object_name: Option<String>,
@@ -50,9 +35,8 @@ pub struct FormWith<'a> {
     multipart: Rc<Cell<bool>>,
 }
 
-pub fn form_with<'a>(ctx: &'a ViewContext<'a>, url: impl std::fmt::Display) -> FormWith<'a> {
+pub fn form_with(url: impl std::fmt::Display) -> FormWith {
     FormWith {
-        ctx,
         action: url.to_string(),
         method: "post".to_string(),
         object_name: None,
@@ -63,7 +47,7 @@ pub fn form_with<'a>(ctx: &'a ViewContext<'a>, url: impl std::fmt::Display) -> F
     }
 }
 
-impl<'a> FormWith<'a> {
+impl FormWith {
     /// `model:` — the param key fields are scoped under ("user", "account").
     pub fn model(mut self, param_key: &str) -> Self {
         self.object_name = Some(param_key.to_string());
@@ -113,8 +97,9 @@ impl<'a> FormWith<'a> {
         }
     }
 
-    /// `<form ...>` plus `_method` and `authenticity_token` hidden fields
-    /// (`html_options_for_form_with` + `extra_tags_for_form`).
+    /// `<form ...>` plus the `_method` hidden field (`html_options_for_form_with` +
+    /// `extra_tags_for_form`). No `authenticity_token`: forgery protection is by `Sec-Fetch-Site`.
+    /// (See `campfire_kit::Ctx::verify_authenticity_token`.)
     pub fn open(&self) -> Html {
         let mut html = attrs().attr_opt("id", self.id.as_deref()).attr_opt("class", self.class.as_deref());
         html = html.merge(self.data.clone());
@@ -131,11 +116,11 @@ impl<'a> FormWith<'a> {
             }
             "post" | "" => {
                 html = html.method("post");
-                token_tag(self.ctx, &self.action, "post").0
+                String::new()
             }
             other => {
                 html = html.method("post");
-                format!("{}{}", method_tag(other).0, token_tag(self.ctx, &self.action, other).0)
+                method_tag(other).0
             }
         };
         Safe(format!("<form{}>{extra}", html.render()))
@@ -185,7 +170,7 @@ impl<'a> FormWith<'a> {
     }
 
     /// `form.fields_for(:settings)`: a builder for `object_name[settings]`.
-    pub fn fields_for(&self, name: &str) -> FormWith<'a> {
+    pub fn fields_for(&self, name: &str) -> FormWith {
         let mut nested = self.clone();
         nested.object_name = Some(format!("{}[{name}]", self.object_name.clone().unwrap_or_default()));
         nested
@@ -304,19 +289,18 @@ fn sanitize_to_id(name: &str) -> String {
 
 /// `button_to(url, options) { content }`. `options` may carry `method` ("delete", "put",
 /// "patch", "post" or "get"), `form_class`, and the button's own attributes.
-pub fn button_to(ctx: &ViewContext, url: &str, mut options: Attrs, content: &str) -> Html {
+pub fn button_to(url: &str, mut options: Attrs, content: &str) -> Html {
     let method = options.remove("method").map(|value| value_string(&value)).unwrap_or_else(|| "post".into());
     let form_class = options.remove("form_class").map(|value| value_string(&value)).unwrap_or_else(|| "button_to".into());
 
     let method_field = if matches!(method.as_str(), "delete" | "patch" | "put") { method_tag(&method).0 } else { String::new() };
     let form_method = if method == "get" { "get" } else { "post" };
-    let token = if form_method == "post" { token_tag(ctx, url, &method).0 } else { String::new() };
 
     options.set("type", Some("submit".into()));
     let button = content_tag("button", &options, content).0;
 
     let form = attrs().class(form_class).method(form_method).attr("action", url);
-    Safe(format!("<form{}>{method_field}{button}{token}</form>", form.render()))
+    Safe(format!("<form{}>{method_field}{button}</form>", form.render()))
 }
 
 #[cfg(test)]

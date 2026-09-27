@@ -10,12 +10,11 @@ use askama::Values;
 use super::forms::{self, FormWith};
 use super::html::Html;
 use super::tag::{self, Attrs};
-use crate::ViewContext;
 
 type Result = askama::Result<Html>;
 
 /// `form_with(...) do |form| ... end`.
-pub fn form_with<'a>(content: impl Display, _: &dyn Values, form: impl std::borrow::Borrow<FormWith<'a>>) -> Result {
+pub fn form_with(content: impl Display, _: &dyn Values, form: impl std::borrow::Borrow<FormWith>) -> Result {
     Ok(form.borrow().wrap(&content.to_string()))
 }
 
@@ -25,8 +24,8 @@ pub fn link_to(content: impl Display, _: &dyn Values, url: impl Display, options
 }
 
 /// `button_to(url, options) do ... end`; `options` may include `method`.
-pub fn button_to(content: impl Display, _: &dyn Values, ctx: &ViewContext, url: impl Display, options: impl std::borrow::Borrow<Attrs>) -> Result {
-    Ok(forms::button_to(ctx, &url.to_string(), options.borrow().clone(), &content.to_string()))
+pub fn button_to(content: impl Display, _: &dyn Values, url: impl Display, options: impl std::borrow::Borrow<Attrs>) -> Result {
+    Ok(forms::button_to(&url.to_string(), options.borrow().clone(), &content.to_string()))
 }
 
 /// `form.button(options) do ... end`.

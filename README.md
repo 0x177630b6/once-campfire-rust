@@ -1,10 +1,12 @@
 # Campfire in Rust
 
-A port of [ONCE Campfire](https://github.com/basecamp/once-campfire) from Rails to Rust. The two
-apps can't be told apart: they render the same screens pixel for pixel and speak the same
-protocols, and the Rust app runs on the Rails app's existing SQLite database and storage
-directory. Everything moved to Rust except the frontend, which ships byte-identical: the CSS,
-Stimulus controllers, Turbo, Lexxy and the other vendored JavaScript.
+A port of [ONCE Campfire](https://github.com/basecamp/once-campfire) from Rails to Rust. It was
+built to be impossible to tell apart from the Rails app: the same screens pixel for pixel, the same
+protocols, and the Rails app's existing SQLite database and storage directory. With that parity
+reached, it now diverges from Rails where that makes it faster or better; each divergence is listed
+under [Known differences](#known-differences). Everything moved to Rust except the frontend: the CSS,
+Stimulus controllers, Turbo, Lexxy and the other vendored JavaScript ship as they are, apart from
+the few files in [`crates/assets/overrides/`](crates/assets/OVERRIDES.md).
 
 The port ships as a single `campfire` executable (plus libvips and ffmpeg). It replaces Ruby, Puma,
 Redis, Resque and Thruster, and it is 9–26× faster than the Rails app it replaces.
@@ -67,9 +69,19 @@ the same 4 pinned hardware threads, host networking, a quiet machine, and 5 inte
 app. The medians are below; the full tables with spreads are in
 [`bench/results/final-20260927/report.md`](bench/results/final-20260927/report.md).
 
-These tables predate spliced gzip (see [below](#spliced-gzip)), which since made the room page
-2.2×, the messages page 4.5× and search 2.6× faster again. The comparison with Rails hasn't been
-rerun since then, so the page rows below understate the Rust app.
+These tables predate two later changes, [spliced gzip](#spliced-gzip) and forgery protection by
+`Sec-Fetch-Site` (see [Known differences](#known-differences)). Together they made the Rust app's
+own pages faster again, measured natively the same way before and after:
+
+| Route (16 clients) | Before both | After both | Change |
+|---|---|---|---|
+| Room page | 2,527 req/s | 5,886 req/s | **2.3×** |
+| Messages page (`?before=`) | 3,709 req/s | 17,336 req/s | **4.7×** |
+| Search | 2,123 req/s | 6,088 req/s | **2.9×** |
+
+The comparison with Rails hasn't been rerun since, so the page rows below understate the Rust app
+by about that much. Details: [`bench/results/splice-20260927`](bench/results/splice-20260927/report.md)
+and [`bench/results/header-csrf-20260927`](bench/results/header-csrf-20260927/report.md).
 
 ### Throughput (16 concurrent clients)
 
@@ -136,6 +148,7 @@ test suite and the parity gate green.
 | Cable: 4 KiB read buffers instead of zero-filling 128 KiB per read; encode each broadcast once and share it across subscribers; batch socket writes | 4.7× less CPU per delivery; half the latency and memory under fan-out |
 | Fat LTO, one codegen unit, jemalloc | A further 5–14% per route |
 | Splice precompressed messages into gzipped pages ([below](#spliced-gzip)) | Room page 2,527 → 5,461 req/s; messages page 3,709 → 16,523 req/s; search 2,123 → 5,526 req/s |
+| Forgery protection by `Sec-Fetch-Site` instead of CSRF tokens ([Known differences](#known-differences)) | Room page +9%, messages page +6%, search +10%; pages render the same until their content changes, so revalidation gets a 304 |
 
 Measured the same way as the preliminary run, the room page went from 4.4× to 10.9× Rails, and cable
 fan-out at 1,000 clients from 4.8× to 19.5×.
@@ -215,6 +228,16 @@ bench/run                                                  # benchmark both apps
 
 Deliberate:
 
+- **No CSRF tokens.** Forgery protection checks the `Sec-Fetch-Site` header browsers send, as Rails
+  main's `protect_from_forgery using: :header_only` does, instead of per-request tokens. Writes are
+  accepted from `same-origin` and `same-site` requests; `cross-site` ones, and HTTPS requests
+  without the header, get a 422. The `Origin` check still applies. On plain HTTP, where browsers
+  don't send the header, a missing one is accepted, and the `SameSite=Lax` session cookie and the
+  `Origin` check protect writes. Pages have no `csrf-token` meta tag or `authenticity_token` fields,
+  so they render byte for byte the same until what they show changes: ETags now match on
+  revalidation, and a page's markup can be cached. Browsers from before 2023 that don't send the
+  header (e.g. Safari before 16.4) can't submit forms over HTTPS. Tabs opened before an upgrade keep
+  working: their tokens are ignored, and the header does the job.
 - **Redis and Resque are gone.** Jobs run in-process and are best-effort: a crash loses queued
   webhooks and pushes, as a Redis restart would under Rails.
 - **Not ported:** the duplicate `session_token` cookie Rails' Active Storage streaming sends; responses
