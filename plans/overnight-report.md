@@ -8,8 +8,9 @@
 |---|---|
 | Ruby vs Ruby, lean | 970/970, 0 flaky |
 | Rust vs Rails, lean | 970/970, 1 flaky (a one-gray-level antialiasing arc), 0 allowlisted |
-| Rust vs Rails, full matrix | 3,133 of 5,018 cells compared. It found 2 Rust-side bugs, only visible on Firefox and WebKit, and both are fixed (c2b253c, f2a1a8f). Every cell compared on the fixed build passes. Laptop and tablet on the default seed are still being run. |
-| Rust vs Rails, lean, after those fixes (f2a1a8f) | 969/970. The one failure is the known sidebar-toggle arc, which Ruby vs Ruby shows too. |
+| Rust vs Rails, full matrix | All 5,018 cells compared. It found 2 Rust-side bugs, only visible on Firefox and WebKit, and both are fixed (c2b253c, f2a1a8f). Every cell compared on the fixed builds passes. The last part, laptop and tablet on the default seed (3881a02), passed 2,174/2,174 with 0 flaky. |
+| Rust vs Rails, lean, after those fixes (f2a1a8f) | 969/970. The one failure was the sidebar-toggle arc, which Ruby vs Ruby shows too. |
+| Rust vs Rails, lean, with the arc fixed in the harness (2a6df22) | 970/970, 0 flaky. |
 
 - **What the gates check:**
   - server output for every state: HTML, live DOM, accessibility tree, every subresource and the
@@ -30,7 +31,8 @@
   - The fragment cache is now bounded by bytes, like Rails' `MemoryStore`: 32 MB by default, set
     with `CAMPFIRE_FRAGMENT_CACHE_MB` (1d6ac20). After 60k message POSTs the process holds 129 MB,
     down from 1.28 GB, with no throughput change. The reference's Redis cache has no bound at all.
-  - Harness: HTTP-01 ACME is unit-tested only. The sidebar-toggle arc flake is not root-caused.
+  - Harness: HTTP-01 ACME is unit-tested only. The sidebar-toggle arc flake is root-caused and
+    fixed (2a6df22): it was stale Chromium raster, set by a race in the page, not either server.
   - Reference bugs the port reproduces faithfully, worth fixing upstream in Campfire:
     - Edge user agents get a 500 on profile and room pages, because `install-edge.svg` is missing.
     - `/searches?q=NOT` raises.
@@ -206,11 +208,14 @@ Captures ran at 8 workers or fewer. Every container was pinned with `docker upda
 0-7,16-23`, away from the benchmark cores 8–15 and their SMT siblings 24–31. Nothing was masked or
 allowlisted. Output is in `parity/out/rust-full-final/` and `parity/out/rust-lean-fixed/`.
 
-**The run didn't finish.** The whole matrix is 5,018 cells. **3,133 were compared (62%)**, and the
-default seed's desktop and phone cells were compared first. Not covered:
-
-- default at laptop: 831 of 1,106 cells;
-- default at tablet: all 1,082 cells.
+**All 5,018 cells were compared.** The first pass covered 3,133 and was stopped partway through the
+default seed's laptop cells. A second pass ran the default seed's laptop and tablet cells in full,
+on a candidate built the same way from a clean archive of 3881a02 (`campfire-rust:head-3881a02`,
+`campfire` compiled from scratch in 1m54s), at 6 workers. No benchmark was running, so its
+containers weren't cpuset-pinned. Output is in `parity/out/rust-full-lt/`.
+That pass is 2,174 cells: 1,092 laptop and 1,068 tablet page cells, plus the 14 fragment cells,
+which don't depend on the viewport and were already covered with desktop. (The 1,106 and 1,082 in
+the earlier count each included those 14.)
 
 Results by run. P = pass, F = fail, Fl = flaky (passed on a pixel-only retry), E = error:
 
@@ -219,20 +224,21 @@ Results by run. P = pass, F = fail, Fl = flaky (passed on a pixel-only retry), E
 | default, desktop + phone | beb4114 | 2,222 | 2,212 | 10 | 0 | 0 | 750/750 | 734/736 | 728/736 |
 | default, breakpoint sweep | f2a1a8f | 154 | 154 | 0 | 0 | 0 | 66/66 | 44/44 | 44/44 |
 | default, laptop (stopped at 275 of 1,106) | f2a1a8f | 275 | 275 | 0 | 1 | 0 | ~94 | ~91 | ~91 |
-| default, tablet | — | 0 of 1,082 | | | | | | | |
+| **default, laptop + tablet, complete** | 3881a02 | 2,174 | 2,174 | 0 | 0 | 0 | 734/734 | 720/720 | 720/720 |
 | first_run | beb4114 | 96 | 96 | 0 | 0 | 0 | 32/32 | 32/32 | 32/32 |
 | restricted | beb4114 | 48 | 48 | 0 | 0 | 0 | 16/16 | 16/16 | 16/16 |
 | crowd | beb4114 | 145 | 145 | 0 | 0 | 0 | 49/49 | 48/48 | 48/48 |
 | custom_styles | beb4114 | 193 | 193 | 0 | 0 | 0 | 65/65 | 64/64 | 64/64 |
 | rerun: both `auth/incompatible_browser` states, full matrix | f2a1a8f | 48 | 48 | 0 | 0 | 0 | 16/16 | 16/16 | 16/16 |
 
-- The flaky laptop cell is `search/submitted @ webkit-laptop-light`: pixels only, and it matched on
-  a retry.
+- The flaky laptop cell in the stopped run is `search/submitted @ webkit-laptop-light`: pixels
+  only, and it matched on a retry. The complete laptop + tablet pass had no flaky cells. Its
+  chromium count includes the 14 fragment cells.
 - The laptop run was stopped mid-run, so it wrote no report. Its counts come from its log, which
   prints every failing and flaky cell, and its per-engine split from the capture files.
 
 **Genuine Rust-side differences: 2, both fixed.** Both only show on engines the lean matrix doesn't
-run for these states.
+run for these states. The complete laptop + tablet pass found no others.
 
 1. **The blocked-browser page answered 406 for non-HTML formats** (c2b253c). States:
    `auth/incompatible_browser` (webkit, 4 cells) and `auth/incompatible_browser/apple_messages`
@@ -267,26 +273,47 @@ bound 1d6ac20):
 | restricted | 8 | 8 | 0 | 0 |
 | **all** | **970** | **969** | **1** | **0** |
 
-**The one lean failure is the known sidebar-toggle arc pixel flake, left failing under the flake
-policy.** The cell is `auth/join/completed @ chromium-phone-light`:
+The one lean failure was the sidebar-toggle arc, `auth/join/completed @ chromium-phone-light`.
+All five text layers were identical, and the pixels differed only along the top of the phone
+sidebar toggle's arc (an 83×18 box).
 
-- All five text layers are identical. The pixels differ only in an 83×18 box at the top of the
-  phone sidebar toggle's arc.
-- Rerunning the state's 4 lean cells passed phone-light, then failed phone-dark in the same way
-  (80×16 box, same place).
+**The arc flake is root-caused and fixed in the harness (2a6df22).** It wasn't the worker or the
+browser process. Within one browser process, captures alternated between the two variants. The
+cause was stale raster in Chromium's layer tiles, and a race in the page decided which variant you
+got:
 
-It is harness nondeterminism, not a Rust difference:
+- After the redirect, the room's sidebar turbo-frame loads once or twice.
+  `rooms_list_controller.js` reloads the frame when `UnreadRoomsChannel` confirms, and whether that
+  becomes a second load depends on when the confirmation lands relative to the first one.
+- The DOM ends up identical either way. The network layer already collapses the repeated request.
+- The pixels followed the number of loads in 20 of 20 probe captures. With two loads the toggle
+  is rastered again. With one, it keeps tiles rastered earlier, a gray level off.
+- Which way the race goes depends on how fast each server answers, so within one run each side
+  tended to keep its variant, even across retries on fresh servers.
 
-- Each scheme has exactly two raster variants of this screen, and each app has produced both.
-- In the Ruby-vs-Ruby gate (`lean-final-self`), both reference instances rendered phone-dark as
-  `3c6f3d15`, the variant the reference shows here. In the earlier Rust gate (`rust-lean-final`),
-  both sides rendered `35b40c31`, the variant Rust shows here.
+The fix: before the screenshot, Chromium captures promote the root to its own layer and back,
+giving each change 150ms to be drawn (`rasterAfresh` in `parity/capture/capture.ts`). That throws
+every tile away, so the screenshot is always a fresh raster of the final page. The page and its
+outputs are untouched, and nothing is masked or allowlisted.
 
-The retries can't rescue it: within one run, each side kept the same variant across all 3
-attempts, even though every attempt used fresh servers. So a retry isn't an independent sample.
-It looks like per-run state in Chromium's rasterization, not anything either server sent.
+Checking the fix:
 
-Recommended harness follow-up: find where the variant sticks (worker or browser process). The cell
-isn't masked.
+- 42 of 42 probe captures (light and dark, one load or two) were identical.
+- Without the 150ms waits, the revert sometimes landed in the same frame, and `errors/500` came out
+  two ways. That was caught in a lean run and fixed. With the waits, `errors/500` was 20 of 20
+  identical.
+- Rust vs Rails, `auth/join/completed` at phone, 6 runs: all 12 cells identical on both sides.
+
+**Lean gate on 2a6df22** (candidate `head-3881a02`; the app code is unchanged since f2a1a8f).
+Output is in `parity/out/rust-lean-afresh/`.
+
+| Seed | Cells | P | F | Fl |
+|---|---|---|---|---|
+| default | 888 | 888 | 0 | 0 |
+| first_run | 16 | 16 | 0 | 0 |
+| custom_styles | 33 | 33 | 0 | 0 |
+| crowd | 25 | 25 | 0 | 0 |
+| restricted | 8 | 8 | 0 | 0 |
+| **all** | **970** | **970** | **0** | **0** |
 
 All instances are torn down, and no parity containers are left running.
