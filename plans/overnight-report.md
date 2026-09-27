@@ -26,7 +26,9 @@
   rendering, WAL checkpoints off the writer, cached statements, cable frames shared across
   subscribers, and LTO plus jemalloc.
 - **Still open or worth a look:**
-  - The fragment cache needs a byte bound. A fix is in progress (see below).
+  - The fragment cache is now bounded by bytes, like Rails' `MemoryStore`: 32 MB by default, set
+    with `CAMPFIRE_FRAGMENT_CACHE_MB` (1d6ac20). After 60k message POSTs the process holds 129 MB,
+    down from 1.28 GB, with no throughput change. The reference's Redis cache has no bound at all.
   - Harness: HTTP-01 ACME is unit-tested only. The sidebar-toggle arc flake is not root-caused.
   - Reference bugs the port reproduces faithfully, worth fixing upstream in Campfire:
     - Edge user agents get a 500 on profile and room pages, because `install-edge.svg` is missing.
