@@ -73,3 +73,12 @@ instant-acme = { version = "0.8", default-features = false, features = ["ring", 
 rcgen        = { version = "0.14", default-features = false, features = ["ring", "pem", "crypto"] }
 x509-parser  = "0.18"
 zstd         = "0.13"
+# The global allocator (crates/campfire/src/main.rs)
+tikv-jemallocator = "0.6"
+
+# One codegen unit with fat LTO: ~5-10% less CPU on app-bound routes (plans/perf-attribution.md §4)
+# for about twice the build time. Not `panic = "abort"`: the DB writer and the Web Push pool catch
+# panics so one bad job can't take them down, and a panicking request answers 500.
+[profile.release]
+lto = "fat"
+codegen-units = 1
