@@ -69,9 +69,19 @@ the same 4 pinned hardware threads, host networking, a quiet machine, and 5 inte
 app. The medians are below; the full tables with spreads are in
 [`bench/results/final-20260927/report.md`](bench/results/final-20260927/report.md).
 
-These tables predate spliced gzip (see [below](#spliced-gzip)), which since made the room page
-2.2×, the messages page 4.5× and search 2.6× faster again. The comparison with Rails hasn't been
-rerun since then, so the page rows below understate the Rust app.
+These tables predate two later changes, [spliced gzip](#spliced-gzip) and forgery protection by
+`Sec-Fetch-Site` (see [Known differences](#known-differences)). Together they made the Rust app's
+own pages faster again, measured natively the same way before and after:
+
+| Route (16 clients) | Before both | After both | Change |
+|---|---|---|---|
+| Room page | 2,527 req/s | 5,886 req/s | **2.3×** |
+| Messages page (`?before=`) | 3,709 req/s | 17,336 req/s | **4.7×** |
+| Search | 2,123 req/s | 6,088 req/s | **2.9×** |
+
+The comparison with Rails hasn't been rerun since, so the page rows below understate the Rust app
+by about that much. Details: [`bench/results/splice-20260927`](bench/results/splice-20260927/report.md)
+and [`bench/results/header-csrf-20260927`](bench/results/header-csrf-20260927/report.md).
 
 ### Throughput (16 concurrent clients)
 
