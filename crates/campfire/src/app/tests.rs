@@ -236,6 +236,10 @@ async fn the_application_chain_blocks_banned_ips_forgeries_and_old_browsers() {
         let blocked = send(&test.booted.router, request.body(Body::empty()).unwrap()).await;
         assert_eq!((blocked.status, blocked.header("content-type")), (StatusCode::OK, Some("text/html; charset=utf-8")), "{path} {accept}");
     }
+    // In a Live controller (`include ActiveStorage::Streaming`) Rack::ETag can't digest the body.
+    let request = Request::get("/account/logo").header(header::HOST, "campfire.test").header(header::USER_AGENT, outdated);
+    let blocked = send(&test.booted.router, request.body(Body::empty()).unwrap()).await;
+    assert_eq!((blocked.status, blocked.header("cache-control"), blocked.header("etag")), (StatusCode::OK, Some("no-cache"), None));
 }
 
 #[tokio::test]

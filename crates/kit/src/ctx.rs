@@ -622,7 +622,7 @@ impl Ctx {
         {
             response.headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(response::HTML_UTF8));
         }
-        rack_etag(&mut response);
+        rack_etag(&mut response, !self.live);
         self.conditional_get(&mut response);
         response
     }
@@ -725,10 +725,12 @@ impl Ctx {
 }
 
 /// `Rack::ETag` (installed as `Rack::ETag, "no-cache"`): weak SHA-256 ETags for 200/201 bodies
-/// without validators, and a default `Cache-Control`.
-fn rack_etag(response: &mut Response) {
+/// without validators, and a default `Cache-Control`. A Live response's body is a
+/// `Live::Buffer`, which doesn't respond to `to_ary`, so it's never digested: whatever such a
+/// controller renders goes out with `no-cache` and no ETag.
+fn rack_etag(response: &mut Response, digestible: bool) {
     let mut digested = false;
-    let skip = response.headers.contains_key(header::ETAG) || response.headers.contains_key(header::LAST_MODIFIED);
+    let skip = !digestible || response.headers.contains_key(header::ETAG) || response.headers.contains_key(header::LAST_MODIFIED);
     if matches!(response.status.as_u16(), 200 | 201) && !skip
         && let Body::Bytes(bytes) = &response.body
             && !bytes.is_empty() {
