@@ -92,7 +92,7 @@ pub fn renderer_base_url(c: &Ctx) -> String {
 pub fn render_detached_at<T>(app: &App, account: Option<&Account>, base_url: &str, render: impl FnOnce(&ViewContext) -> T) -> T {
     let no_token = |_: &str, _: &str| String::new();
     let asset_path = |path: &str| campfire_assets::asset_path(path);
-    let stylesheets = campfire_assets::stylesheet_link_tag_all(&[("data-turbo-track", "reload")]);
+    let stylesheets = crate::controllers::presenters_a::view_context::stylesheet_tags();
     let ctx = ViewContext {
         current_user: None,
         account: account_summary(account, false),

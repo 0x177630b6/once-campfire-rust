@@ -13,6 +13,7 @@
 //! ```
 
 use std::cell::RefCell;
+use std::sync::LazyLock;
 
 use campfire_db::{Account, User};
 use campfire_kit::{Ctx, Error, Response, Result, StatusCode, format};
@@ -106,7 +107,7 @@ impl Layout {
     /// A page rendered in the application layout: `text/html`, plus the `Link` preload header
     /// `stylesheet_link_tag` adds (`config.action_view.preload_links_header`).
     pub fn page(&self, c: &mut Ctx, status: StatusCode, html: String) -> Response {
-        let links = stylesheet_tags().preload_links;
+        let links = &stylesheet_tags().preload_links;
         let existing = c.headers.get("link").and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
         c.set_header("link", &campfire_assets::append_preload_links(&existing, &links));
         c.render(status, &format::HTML, html)
@@ -118,8 +119,12 @@ impl Layout {
     }
 }
 
-fn stylesheet_tags() -> campfire_assets::StylesheetTags {
-    campfire_assets::stylesheet_link_tag_all(&[("data-turbo-track", "reload")])
+/// The layout's `stylesheet_link_tag :all, "data-turbo-track": "reload"`: the assets are fixed at
+/// build time, so it renders once per process.
+pub fn stylesheet_tags() -> &'static campfire_assets::StylesheetTags {
+    static TAGS: LazyLock<campfire_assets::StylesheetTags> =
+        LazyLock::new(|| campfire_assets::stylesheet_link_tag_all(&[("data-turbo-track", "reload")]));
+    &TAGS
 }
 
 /// `Current.user` as the layout's meta tags and helpers see it.
