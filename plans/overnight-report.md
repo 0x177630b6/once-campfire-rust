@@ -99,3 +99,37 @@ Running log; the final summary gets written at the end.
 
   Measured natively on 4 pinned cores; see the commits for conditions. What's left on hot pages is
   gzip level 6 (55–70% of CPU) and Rack's SHA-256 ETag, both required for parity with Rails.
+- **Final lean gate** (candidate `campfire-candidate:head-5181aa4`, built from a clean `git archive`
+  of HEAD plus the pinned `reference` submodule, with the cargo build stage uncached so the cached
+  target dir couldn't stand in for the sources):
+
+  | Gate | Result |
+  |---|---|
+  | Ruby vs Ruby, lean, all seeds (out/lean-final-self) | 970/970 pass, 0 flaky |
+  | Rust vs Rails, lean, all seeds (out/rust-lean-final) | 970/970 pass, 1 flaky, 0 allowlisted |
+
+  The flaky cell is the known sidebar-toggle arc (`auth/join/completed @ chromium-phone-light`).
+  Before the gate ran, the benchmark's no-gzip runs turned up one real difference, and it was fixed
+  first (fa1deb9). The front server's response cache never stored a streamed body of declared
+  length: hyper stops polling after the last `Content-Length` byte, so the end of stream never
+  arrived. As a result, avatars (`send_file`) requested with `Accept-Encoding: identity` always
+  answered `X-Cache: miss`, where Thruster answers `hit`, and always went back to the app.
+  Browsers always send gzip, so no parity cell could see it, and the header-shape sweep ignores
+  `x-cache`.
+- **Final benchmark** (`bench/results/final-20260927/report.md`). Production images, `5181aa4`
+  against the reference, host networking, a quiet host, 5 interleaved reps. Rust vs Rails:
+
+  | Measurement | Rust vs Rails |
+  |---|---|
+  | Pages, throughput at c=16 | 9–19× |
+  | Message POSTs, throughput | 19× |
+  | Cable deliveries/s | 22–26× |
+  | Cold start | 10.6× faster |
+  | Idle memory | 6.3× less |
+  | App process at 1,000 cable clients | 2.6–3.0× less |
+
+  Without gzip, Rust's pages serve 1.8–4.2× more requests again.
+
+  One surprise: after the HTTP suite the Rust process holds 1.37 GB. That is the fragment store
+  filled to its 50,000-entry cap by the ~100k messages the POST suite creates (Rails creates ~5.8k
+  in the same time). It needs a byte bound.

@@ -25,7 +25,7 @@
 # The apps run with --network host: PORT and PORT+1 (and 6379, for the reference's Redis) must be
 # free on the host. NETWORK=bridge measures as the preliminary run did instead: the container on
 # Docker's bridge, reached through a published port (docker-proxy), with no DNS resolver.
-#   LOAD_MAX=1.5 LOAD_WAIT_SECS=900 PROCMEM_CPUS=0
+#   LOAD_MAX=1.5 LOAD_WAIT_SECS=900 PROCMEM_CPUS=0 SUITES="http cable upload"
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -49,6 +49,8 @@ NETWORK=${NETWORK:-host}
 LOAD_MAX=${LOAD_MAX:-1.5}
 LOAD_WAIT_SECS=${LOAD_WAIT_SECS:-900}
 PROCMEM_CPUS=${PROCMEM_CPUS:-0}
+SUITES=${SUITES:-http cable upload}
+suite() { [[ " $SUITES " = *" $1 "* ]]; }
 # Extra environment for the Rust container only (space-separated K=V). The preliminary run
 # (results/prelim-20260926) used RAILS_MAX_THREADS=128 to dodge a writer/reader-pool deadlock that
 # 1c22a94 fixed; the app now runs as configured.
@@ -202,6 +204,7 @@ run_rep() {
   )
   local http_json="[]" r name path args enc=()
   [ "$app" = rust-identity ] && enc=(--gzip 0)
+  suite http || routes=()
   for r in "${routes[@]}"; do
     name=${r%%|*}; path=${r#*|}
     if [ "$path" = POST ]; then args=(--post-room "$WRITE_ROOM" --csrf "$csrf"); else args=(--path "$path"); fi
@@ -215,7 +218,7 @@ run_rep() {
   done
 
   local cable_json="[]" n upload_json='{}'
-  [ "$app" = rust-identity ] && CABLE_CLIENTS_RUN="" || CABLE_CLIENTS_RUN=$CABLE_CLIENTS
+  if [ "$app" = rust-identity ] || ! suite cable; then CABLE_CLIENTS_RUN=""; else CABLE_CLIENTS_RUN=$CABLE_CLIENTS; fi
   for n in $CABLE_CLIENTS_RUN; do
     local pm=$OUT/.$app-$rep-cable$n
     taskset -c "$PROCMEM_CPUS" python3 "$BENCH/lib/procmem.py" sample "$cg" "$pm.jsonl" & PROCMEM=$!
@@ -229,7 +232,7 @@ run_rep() {
     sleep 2
   done
 
-  if [ "$app" != rust-identity ]; then
+  if [ "$app" != rust-identity ] && suite upload; then
     upload_json=$(lg upload --base "$BASE" --cookie "$cookie" --room "$WRITE_ROOM" --csrf "$csrf" \
       --file "$ROOT/reference/test/fixtures/files/black_hole.jpg" --reps "$UPLOAD_REPS")
     log "$app rep $rep: upload median $(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["median_total_ms"])' "$upload_json")ms"
