@@ -29,6 +29,38 @@ export interface CellComparison {
   expected: { base: string; meta?: CellMeta }
   actual: { base: string; meta?: CellMeta }
   diffImage?: string
+  // Pixel flake policy (run.ts): the earlier captures of a cell whose server output matched but
+  // whose pixels didn't, and whether a later capture then matched.
+  flaky?: boolean
+  attempts?: Attempt[]
+  masks?: string[] // the state's masks, as the report lists them
+}
+
+export interface Attempt {
+  attempt: number
+  status: Status
+  differentPixels?: number
+  sizeMismatch?: string
+  images?: { expected: string; actual: string; diff?: string }
+}
+
+export const SERVER_OUTPUT_LAYERS: Layer[] = ["server", "live", "aria", "network", "cable"]
+
+// A failure that re-capturing may clear: only the pixels differ (not allowed), and every
+// server-output layer is identical. Anything else the servers sent differently is never retried.
+export function pixelOnlyFailure(result: CellComparison): boolean {
+  if (result.status !== "fail") return false
+  const failing = result.layers.filter((l) => !l.equal && !l.allowed)
+  return failing.length > 0 && failing.every((l) => l.layer === "pixels") && result.layers.filter((l) => SERVER_OUTPUT_LAYERS.includes(l.layer)).every((l) => l.equal)
+}
+
+export function describeMasks(masks: Job["state"]["masks"]): string[] | undefined {
+  if (!masks) return undefined
+  const out = [
+    ...Object.entries(masks.values ?? {}).map(([name, m]) => `«${name}»: ${m.selector}${m.attribute ? ` [${m.attribute}]` : ""}${m.match ? ` ~ /${m.match}/` : ""}`),
+    ...(masks.pixels ?? []).map((selector) => `pixels: ${selector}`),
+  ]
+  return out.length ? out : undefined
 }
 
 const TEXT_LAYERS: [Layer, string][] = [
@@ -46,6 +78,7 @@ export function compareJob(job: Job, runDir: string, expectedName: string, actua
     layers: [],
     expected: { base: expectedBase, meta: readMeta(expectedBase) },
     actual: { base: actualBase, meta: readMeta(actualBase) },
+    masks: describeMasks(job.state.masks),
   }
   const errors = [
     !result.expected.meta && `${expectedName}: not captured`,

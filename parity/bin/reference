@@ -3,9 +3,9 @@
 #
 #   parity/bin/reference build                      build the campfire-reference image (or native app)
 #   parity/bin/reference up   [--seed NAME] [--port N] [--time ISO8601 [--freeze]]
-#   parity/bin/reference down [--port N | --all]
+#   parity/bin/reference down [--port N | --all [--everyone]]
 #   parity/bin/reference logs [--port N] [-f]
-#   parity/bin/reference ps
+#   parity/bin/reference ps   [--everyone]
 #   parity/bin/reference exec   [OPTIONS] [--] CMD...        run a command in /rails
 #   parity/bin/reference runner [OPTIONS] SCRIPT.rb [ARGS]   bin/rails runner on a repo file
 #
@@ -13,6 +13,9 @@
 # 127.0.0.1:N (default 3100). Instances are independent, so several can run side by side on
 # different ports. --time starts the server clock at that instant via libfaketime and lets it tick;
 # with --freeze it stays at that instant.
+# Instances are labelled with their owner, PARITY_OWNER (default: the Claude Code session,
+# CLAUDE_CODE_SESSION_ID, else the user), and `down --all` and `ps` only touch the caller's own;
+# --everyone takes them all. `down --port N` stops that port's instance whoever started it.
 # Containers are limited to PARITY_CPUS (default 2) CPUs and run one Puma worker and one Resque
 # worker.
 #
@@ -41,6 +44,7 @@ NATIVE=$PARITY/.native
 IMAGE=${PARITY_IMAGE:-campfire-reference}
 ENV_FILE=$PARITY/.env.reference
 DEFAULT_PORT=3100
+OWNER=${PARITY_OWNER:-${CLAUDE_CODE_SESSION_ID:-$(id -un)}}
 
 die() { echo "reference: $*" >&2; exit 1; }
 log() { echo "reference: $*" >&2; }
@@ -60,7 +64,7 @@ case "$RUNTIME" in docker|native) ;; *) die "unknown PARITY_RUNTIME=$RUNTIME" ;;
 # ---------------------------------------------------------------------------------------------
 # Options
 
-SEED="" PORT="" TIME="" FREEZE="" STORAGE="" FOLLOW="" ALL="" EXTRA_ENV=()
+SEED="" PORT="" TIME="" FREEZE="" STORAGE="" FOLLOW="" ALL="" EVERYONE="" EXTRA_ENV=()
 
 parse_options() {
   REST=()
@@ -74,6 +78,7 @@ parse_options() {
       -e)        EXTRA_ENV+=("$2"); shift 2 ;;
       -f|--follow) FOLLOW=1; shift ;;
       --all)     ALL=1; shift ;;
+      --everyone) EVERYONE=1; shift ;;
       --)        shift; REST+=("$@"); break ;;
       *)         REST+=("$@"); break ;;
     esac
@@ -153,7 +158,7 @@ docker_up() {
   rm -rf "$dir"; copy_seed_into "$seed" "$dir"
   local args=(); mapfile -t args < <(docker_env_args)
   docker run -d --name "$(docker_name "$port")" \
-    --label parity.seed="$seed" --label parity.port="$port" \
+    --label parity.seed="$seed" --label parity.port="$port" --label parity.owner="$OWNER" \
     --cpus "${PARITY_CPUS:-2}" \
     --user "$(id -u):$(id -g)" \
     -p "127.0.0.1:$port:80" \
@@ -170,7 +175,11 @@ docker_down() {
   rm -rf "$(instance_dir "$port")"
 }
 
-docker_ports() { docker ps -a --filter label=parity.port --format '{{.Label "parity.port"}}'; }
+# The caller's instances (every instance with --everyone).
+docker_ports() {
+  local owner=(); [ -n "$EVERYONE" ] || owner=(--filter "label=parity.owner=$OWNER")
+  docker ps -a --filter label=parity.port "${owner[@]}" --format '{{.Label "parity.port"}}'
+}
 
 docker_logs() {
   if [ -n "$FOLLOW" ]; then docker logs -f "$(docker_name "$1")"; else docker logs "$(docker_name "$1")"; fi
@@ -300,6 +309,7 @@ EOF
   cp "$PARITY/docker/resque-pool.yml" "$dir/app/config/resque-pool.yml"
   cp "$PARITY/docker/parity_action_cable.rb" "$dir/app/config/initializers/parity_action_cable.rb"
   echo "$seed" > "$dir/seed"
+  echo "$OWNER" > "$dir/owner"
   (
     cd "$dir/app"
     native_env
@@ -323,7 +333,9 @@ native_down() {
 
 native_ports() {
   local d; for d in "$INSTANCES"/*/; do
-    [ -f "$d/pid" ] && basename "$d"
+    [ -f "$d/pid" ] || continue
+    [ -n "$EVERYONE" ] || [ "$(cat "$d/owner" 2>/dev/null)" = "$OWNER" ] || continue
+    basename "$d"
   done 2>/dev/null || true
 }
 

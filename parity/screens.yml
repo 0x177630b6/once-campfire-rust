@@ -22,6 +22,9 @@
 #                     (PresenceChannel#present), so states that open a room where their user has
 #                     unread messages are marked too: otherwise every sidebar showing that room
 #                     would depend on which captures ran first.
+#   masks: {values, pixels}  values a server makes up at random while the state runs (SCREENS.md,
+#                     "Masks"): each value is read from the page and becomes «name» in the text
+#                     layers; pixels lists elements painted over in the screenshot.
 #   Steps beyond SCREENS.md:
 #     type: {selector, text}     key presses (Playwright pressSequentially), for the Lexxy editor
 #     upload: {selector, files}  set files on an <input type=file>; paths are relative to the repo
@@ -130,6 +133,12 @@
     - fill: { selector: "#user_password", text: "secret123456" }
     - click: "button[type=submit]"
     - wait_for: "#message-area"
+  # Creating the account generates a random join code (Account::Joinable#generate_join_code), which
+  # the invitation shows as the join URL, its QR code link, copy and share buttons.
+  masks:
+    values:
+      join_code: { selector: "#invite_url", attribute: value, match: "/join/([^/?#]+)$" }
+    pixels: ["#invite_url", "a[href^='/qr_code/']"]
   covers: [rooms/show, rooms/show/_invitation, accounts/_invite]
 
 - id: auth/join

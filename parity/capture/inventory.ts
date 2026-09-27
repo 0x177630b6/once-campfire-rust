@@ -39,6 +39,22 @@ export interface State {
   breakpoints?: boolean // include in the breakpoint sweep (besides DEFAULT_BREAKPOINT_STATES)
   notifications?: "denied" | "granted" // the browser's notification state (default denied)
   clock?: "frozen" | "advancing" // the browser's Date: frozen at the seed instant (default), or advancing with fake time
+  masks?: Masks
+}
+
+// Values a server makes up at random while a state runs (parity/SCREENS.md, "Masks"), declared
+// per state. Each value is read from the captured page, on each server, and replaced by a typed
+// placeholder «name» in every text layer; pixel masks paint the listed elements' boxes over in
+// the screenshot.
+export interface Masks {
+  values?: Record<string, ValueMask>
+  pixels?: string[] // selectors
+}
+
+export interface ValueMask {
+  selector: string // the element that shows the value
+  attribute?: string // read this attribute (default: the text content)
+  match?: string // a regular expression with one group: the value is that group of what was read
 }
 
 export interface Cell {
@@ -102,7 +118,24 @@ function validateState(entry: any, where: string): State {
   if (entry.clock && !["frozen", "advancing"].includes(entry.clock)) throw new Error(`${entry.id}: clock must be frozen or advancing`)
   if (entry.notifications && !["denied", "granted"].includes(entry.notifications)) throw new Error(`${entry.id}: notifications must be denied or granted`)
   if (entry.kind && !["page", "fragment"].includes(entry.kind)) throw new Error(`${entry.id}: unknown kind ${entry.kind}`)
+  validateMasks(entry)
   return { seed: "default", ...entry, steps }
+}
+
+function validateMasks(entry: any) {
+  const masks = entry.masks
+  if (masks === undefined) return
+  if (!masks || typeof masks !== "object") throw new Error(`${entry.id}: masks must be a mapping`)
+  for (const [name, mask] of Object.entries<any>(masks.values ?? {})) {
+    if (!/^[a-z0-9_]+$/.test(name)) throw new Error(`${entry.id}: mask value name ${name} must be snake_case`)
+    if (typeof mask?.selector !== "string") throw new Error(`${entry.id}: masks.values.${name} needs a selector`)
+    if (mask.match !== undefined && !/\((?!\?)/.test(mask.match)) {
+      throw new Error(`${entry.id}: masks.values.${name}.match needs a capture group`)
+    }
+  }
+  if (masks.pixels !== undefined && (!Array.isArray(masks.pixels) || masks.pixels.some((s: any) => typeof s !== "string"))) {
+    throw new Error(`${entry.id}: masks.pixels must be a list of selectors`)
+  }
 }
 
 export interface MatrixFilter {

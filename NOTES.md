@@ -128,6 +128,14 @@ Add requests under the owning crate's heading. The owner removes an entry once i
   bundle installed from `reference/Gemfile.lock` into `target/views-b-bundle` (Ruby 3.4.10, no
   Redis: `reference-tools/views/b/prelude.rb` swaps in null job/cache/cable adapters).
 ## campfire
+- (from parity) Remaining Rust-side diffs, lean Ruby-vs-Rust on all seeds (`parity/bin/candidate
+  compare`, candidate image built from a clean snapshot of HEAD e89cc43, out/rust-lean-2):
+  **none**. 970/970 cells pass (default 888, first_run 16, crowd 25, custom_styles 33, restricted
+  8), 0 fail, 0 error; 2 flaky, both the Chromium sidebar-toggle arc (not server output: server
+  HTML, live DOM, aria, network and cable identical), `auth/first_run/completed @
+  chromium-phone-light` and `@ chromium-phone-dark`, each passing on the second capture. The
+  earlier groups (broadcast URLs with the port, the edge_windows 502 instead of 500, the empty
+  autocomplete body, the sign-in readiness stalls, the composer focus ring) no longer show.
 - (from richtext) Rich text entry points, all taking `&RenderContext { resolver, request_host:
   Current.request_host }`: `present_message(body)` → `Presentation::Html(html)` (the text branch of
   `message_presentation`, "" when it raised) or `Presentation::Unrenderable` (render
@@ -317,7 +325,21 @@ Add requests under the owning crate's heading. The owner removes an entry once i
   process a connection's cable commands in order; answer a plain `fetch` of
   `/autocompletable/users?query=…` (Accept `*/*`) with the HTML prompt items, not JSON (reference
   bug: the new-ping autocomplete never shows suggestions, `interactions/sidebar/new_ping/autocomplete`);
-  and close a user's cable connections with `reconnect: true` when they lose a membership. For
-  Ruby-vs-Rust runs, freeze the Rust server's clock at the seed instant too (`candidate compare`
-  should pass `--freeze` for the shared servers as well as the isolated ones), or pages that
-  derive values from the server clock (transfer links, QR codes) differ.
+  and close a user's cable connections with `reconnect: true` when they lose a membership.
+  (Done: `candidate compare` now freezes the shared servers' clocks too, reference and candidate.)
+- (from parity, lean gate follow-ups) `auth/first_run/completed` masks the random join code
+  (`masks:` in screens.yml: `«join_code»` read from `#invite_url` on each server, pixel masks on
+  the invite field and the QR link; SCREENS.md "Masks"). Pixel flake policy: a cell whose
+  server-output layers match but whose pixels differ is captured again up to 2 more times and
+  passes as `flaky` if a retry matches (SCREENS.md "Pixel flakes"). Root-caused and fixed in the
+  harness: the composer focus ring (every document's fake clock started at a real-time-dependent
+  offset from Playwright's install→pauseAt replay, which moved Lexxy's rAF mount relative to
+  composer_controller.js's zero-delay focus(); capture.ts `freezeClock` now dates the pause at the
+  install: 0 of 240 room captures focused, vs 2 of 240 before) and the Firefox hover in
+  `interactions/message_deleted` (the pointer is moved to where it already is before the
+  screenshot, so :hover reflects the settled page). Not root-caused, left to the flake policy:
+  Chromium's sidebar-toggle arc, 40–60 px one gray level apart on phone after the sign-up
+  redirects. `reference down --all`/`candidate down --all` (and `ps`) only touch the caller's
+  instances now (owner label, PARITY_OWNER or CLAUDE_CODE_SESSION_ID; `--everyone` for all).
+  Lean self-parity (out/lean-7): 970/970 pass, 1 flaky (`auth/join/completed @
+  chromium-phone-dark`, the arc).

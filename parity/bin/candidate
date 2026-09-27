@@ -4,9 +4,9 @@
 #   parity/bin/candidate build                      build campfire-rust:app (/Dockerfile) and the
 #                                                   campfire-candidate parity image on top of it
 #   parity/bin/candidate up   [--seed NAME] [--port N] [--time ISO8601 [--freeze]] [-e K=V]
-#   parity/bin/candidate down [--port N | --all]
+#   parity/bin/candidate down [--port N | --all [--everyone]]
 #   parity/bin/candidate logs [--port N] [-f]
-#   parity/bin/candidate ps
+#   parity/bin/candidate ps   [--everyone]
 #   parity/bin/candidate reset --port N [--app reference|candidate] [--seed NAME] [--time ISO8601]
 #   parity/bin/candidate compare [--seed NAME] [--ports REF,CAND] [--isolated N] [--time ISO8601] [OPTIONS]
 #
@@ -25,10 +25,16 @@
 # otherwise, so name the reference `reference` or `expected`.)
 #
 # `compare` does all of that: a reference on REF (default 4111) and a candidate on CAND (default
-# 4112) at the seed's clock, parity/bin/compare between them (reference = expected, candidate =
+# 4112), both with their clocks frozen at the seed's instant (as self-parity runs its servers:
+# anything a server derives from its clock, such as transfer link expiries and their QR codes, is
+# then the same on both), parity/bin/compare between them (reference = expected, candidate =
 # actual) with that reset hook and --isolated N (default 3) slots, then everything torn down.
 # OPTIONS pass through to parity/bin/compare (--only, --engines, --viewports, --schemes,
 # --breakpoints, --out (absolute: it resolves inside parity/), --workers, ...).
+#
+# Instances are labelled with their owner, PARITY_OWNER (default: the Claude Code session,
+# CLAUDE_CODE_SESSION_ID, else the user), and `down --all` and `ps` only touch the caller's own;
+# --everyone takes them all. `down --port N` stops that port's instance whoever started it.
 #
 # Docker only: the Rust app has no native runtime here.
 set -euo pipefail
@@ -41,11 +47,12 @@ APP_IMAGE=${PARITY_CANDIDATE_APP_IMAGE:-campfire-rust:app}
 IMAGE=${PARITY_CANDIDATE_IMAGE:-campfire-candidate}
 ENV_FILE=$PARITY/.env.reference
 DEFAULT_PORT=3200
+OWNER=${PARITY_OWNER:-${CLAUDE_CODE_SESSION_ID:-$(id -un)}}
 
 die() { echo "candidate: $*" >&2; exit 1; }
 log() { echo "candidate: $*" >&2; }
 
-SEED="" PORT="" TIME="" FREEZE="" FOLLOW="" ALL="" APP="" EXTRA_ENV=()
+SEED="" PORT="" TIME="" FREEZE="" FOLLOW="" ALL="" EVERYONE="" APP="" EXTRA_ENV=()
 
 parse_options() {
   REST=()
@@ -58,6 +65,7 @@ parse_options() {
       -e)        EXTRA_ENV+=("$2"); shift 2 ;;
       -f|--follow) FOLLOW=1; shift ;;
       --all)     ALL=1; shift ;;
+      --everyone) EVERYONE=1; shift ;;
       --app)     APP=$2; shift 2 ;;
       --)        shift; REST+=("$@"); break ;;
       *)         REST+=("$@"); break ;;
@@ -113,7 +121,7 @@ up() {
   local args=(); mapfile -t args < <(env_args)
   # Labelled parity.candidate.port (not parity.port) so `reference down --all` leaves it alone.
   docker run -d --name "$(container "$port")" \
-    --label parity.seed="$seed" --label parity.candidate.port="$port" \
+    --label parity.seed="$seed" --label parity.candidate.port="$port" --label parity.owner="$OWNER" \
     --cpus "${PARITY_CPUS:-2}" \
     --user "$(id -u):$(id -g)" \
     -p "127.0.0.1:$port:80" \
@@ -128,7 +136,11 @@ down() {
   rm -rf "$(instance_dir "$1")"
 }
 
-ports() { docker ps -a --filter label=parity.candidate.port --format '{{.Label "parity.candidate.port"}}'; }
+# The caller's instances (every instance with --everyone).
+ports() {
+  local owner=(); [ -n "$EVERYONE" ] || owner=(--filter "label=parity.owner=$OWNER")
+  docker ps -a --filter label=parity.candidate.port "${owner[@]}" --format '{{.Label "parity.candidate.port"}}'
+}
 
 build() {
   log "building $APP_IMAGE from /Dockerfile"
@@ -180,10 +192,10 @@ compare() {
     COMPARE_REF_PORTS+=($((ref_port + 1000 * k))); COMPARE_CAND_PORTS+=($((cand_port + 1000 * k)))
   done
   trap compare_teardown EXIT INT TERM
-  log "reference :$ref_port vs candidate :$cand_port (seed $seed, clock $time)"
-  "$PARITY/bin/reference" up --seed "$seed" --port "$ref_port" --time "$time" >/dev/null &
+  log "reference :$ref_port vs candidate :$cand_port (seed $seed, clock frozen at $time)"
+  "$PARITY/bin/reference" up --seed "$seed" --port "$ref_port" --time "$time" --freeze >/dev/null &
   local ref_pid=$!
-  TIME=$time up "$cand_port" "$seed"
+  TIME=$time FREEZE=1 up "$cand_port" "$seed"
   wait "$ref_pid" || die "reference didn't come up"
   local status=0
   "$PARITY/bin/compare" --seed "$seed" --time "$time" \

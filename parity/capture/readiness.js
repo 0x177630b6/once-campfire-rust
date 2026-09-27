@@ -146,6 +146,12 @@
     focusLog.push(`${describe(event.target)} <- ${frames.join(" < ")}`)
   }, true)
 
+  // Where the mouse last was in this document (the harness moves it back there before a capture).
+  let pointer = null
+  addEventListener("mousemove", (event) => {
+    if (event.isTrusted) pointer = [event.clientX, event.clientY]
+  }, true)
+
   // Tags with a custom-element name that nothing ever defines: Action Text's attachment markup,
   // which Lexxy keeps as-is inside the editor (a mention in the edit form).
   const NEVER_DEFINED = new Set(["action-text-attachment"])
@@ -171,6 +177,10 @@
     // finite ones just before their end, so no animationend fires (the flash removes itself on it).
     focusLog() {
       return focusLog.slice()
+    },
+
+    pointer() {
+      return pointer
     },
 
     pauseAnimations(at) {

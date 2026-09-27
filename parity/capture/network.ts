@@ -19,7 +19,7 @@ const VALUE_HEADERS = new Set(["content-type", "location", "cache-control", "con
 // through (held requests) aren't the server's output and are left out.
 export class NetworkLog {
   // per request line (method, path): the latest response's description
-  private pending: { key: string; entry: Promise<string | undefined> }[] = []
+  private pending: { key: string; entry: Promise<Entry | undefined> }[] = []
   private origin: string
   private options: NormalizeOptions
   private page: Page
@@ -31,7 +31,7 @@ export class NetworkLog {
     page.on("response", (response) => this.pending.push({ key: `${response.request().method()} ${response.url()}`, entry: this.describe(response) }))
   }
 
-  private async describe(response: Response): Promise<string | undefined> {
+  private async describe(response: Response): Promise<Entry | undefined> {
     const request = response.request()
     const url = new URL(response.url())
     if (!/^https?:$/.test(url.protocol) || url.origin !== this.origin || request.resourceType() === "websocket") return
@@ -41,6 +41,7 @@ export class NetworkLog {
     const cookies = (await response.headersArray().catch(() => [])).filter((h) => h.name.toLowerCase() === "set-cookie").map((h) => cookieShape(h.value)).sort()
     const status = response.status()
     let body: string
+    let normalized: string | undefined
     if (status >= 300 && status < 400) {
       body = "no body (redirect)"
     } else if (status === 206 || request.resourceType() === "media") {
@@ -55,16 +56,16 @@ export class NetworkLog {
       body = "not compared (not a GET)"
     } else {
       const buffer = await this.bodyOf(response)
-      const normalized = normalizeResponse(buffer, headers["content-type"] ?? "", this.options)
-      body = `${buffer.length ? "" : "empty "}sha256:${createHash("sha256").update(normalized).digest("hex").slice(0, 16)}`
+      normalized = normalizeResponse(buffer, headers["content-type"] ?? "", this.options)
+      body = buffer.length ? "" : "empty "
     }
-    return [
+    const head = [
       `${describeRequest(request, this.origin, this.options)} → ${status}`,
       `  headers: ${shape.join(" ")}`,
       ...values.map((v) => `  ${v}`),
       ...cookies.map((c) => `  set-cookie: ${c}`),
-      `  body: ${body}`,
     ].join("\n")
+    return { head, body, normalized }
   }
 
   // The browser drops a response's body when its document goes away, sometimes before it could be
@@ -78,17 +79,28 @@ export class NetworkLog {
     }
   }
 
-  // The log as sorted text: requests run in parallel, so arrival order isn't the server's.
-  async text(): Promise<string> {
+  // The log as sorted text: requests run in parallel, so arrival order isn't the server's. `mask`
+  // replaces a state's page-derived values (masks.values in screens.yml) before bodies are hashed.
+  async text(mask: (text: string) => string = (t) => t): Promise<string> {
     // Whether a resource is requested once or twice (the memory cache, a preload) is the browser's
     // business, and so is what an earlier request for it got: a frame loaded while the page was
     // still marking the room read on another connection (the sidebar) may come back either way.
     // The latest response to each request counts.
-    const latest = new Map<string, Promise<string | undefined>>()
+    const latest = new Map<string, Promise<Entry | undefined>>()
     for (const { key, entry } of this.pending) latest.set(key, entry)
-    const lines = new Set((await Promise.all(latest.values())).filter((l): l is string => !!l).map(maskBlobKeys))
+    const render = ({ head, body, normalized }: Entry) =>
+      `${mask(head)}\n  body: ${normalized === undefined ? body : `${body}sha256:${createHash("sha256").update(mask(normalized)).digest("hex").slice(0, 16)}`}`
+    const lines = new Set((await Promise.all(latest.values())).filter((e): e is Entry => !!e).map(render).map(maskBlobKeys))
     return [...lines].sort().join("\n") + "\n"
   }
+}
+
+// A response's description: the request line and header shape, and the body as a note (redirect,
+// media range, digest-named asset) or as normalized text, hashed when the log is written.
+interface Entry {
+  head: string
+  body: string
+  normalized?: string
 }
 
 // Active Storage names a blob's file with a random key (ActiveStorage::Blob.generate_unique_secure_token),
@@ -186,10 +198,12 @@ export class CableLog {
     return maskText(text, this.options)
   }
 
-  text(): string {
-    const out = [`(connection)`, ...[...this.connection].sort().map((l) => `  ${l}`)]
-    for (const [id, s] of [...this.subscriptions.entries()].sort(([a], [b]) => a.localeCompare(b))) {
-      out.push(`${id}: ${s.outcome}`, ...[...s.sent].sort().map((l) => `  > ${l}`), ...[...s.received].sort().map((l) => `  < ${l}`))
+  text(mask: (text: string) => string = (t) => t): string {
+    const sorted = (lines: Iterable<string>) => [...new Set([...lines].map(mask))].sort()
+    const out = [`(connection)`, ...sorted(this.connection).map((l) => `  ${l}`)]
+    const subscriptions = [...this.subscriptions.entries()].map(([id, s]) => [mask(id), s] as const).sort(([a], [b]) => a.localeCompare(b))
+    for (const [id, s] of subscriptions) {
+      out.push(`${id}: ${s.outcome}`, ...sorted(s.sent).map((l) => `  > ${l}`), ...sorted(s.received).map((l) => `  < ${l}`))
     }
     return out.join("\n") + "\n"
   }

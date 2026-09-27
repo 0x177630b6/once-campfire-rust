@@ -3,13 +3,13 @@
 import fs from "node:fs"
 import path from "node:path"
 import YAML from "yaml"
-import type { BrowserContext, BrowserContextOptions, Frame, Page, Request, Response } from "playwright"
+import type { BrowserContext, BrowserContextOptions, Frame, Locator, Page, Request, Response } from "playwright"
 import { freezeAnimatedImages } from "./animated_images.ts"
 import { contextOptions } from "./browsers.ts"
 import type { BrowserPool } from "./browsers.ts"
 import { PARITY_DIR, REPO_DIR } from "./config.ts"
 import { cellId, interpolate, interpolateStep, isFragment, loadLabels } from "./inventory.ts"
-import type { Job, Labels, State } from "./inventory.ts"
+import type { Job, Labels, Masks, State } from "./inventory.ts"
 import { maskText, normalizeResponse, normalizeDocument } from "./normalize.ts"
 import { CableLog, NetworkLog } from "./network.ts"
 import { DETERMINISM_SCRIPT, PageTracker, READINESS_SCRIPT, waitForReady } from "./readiness.ts"
@@ -48,6 +48,7 @@ export interface CellMeta {
   focus?: string
   trace?: string[] // after each step: the step, then scroll positions and the focused element
   retriedAfter?: string
+  masks?: { values: Record<string, string>; pixels: Record<string, number> } // what masks.* found
   cable?: Record<string, string[]>
   pageErrors: string[]
   console: string[]
@@ -165,10 +166,11 @@ async function capturePage(
   meta.status = response?.status()
   meta.finalUrl = capturePage.url()
   const seedTime = Date.parse(env.time)
+  const mask = await valueMasks(capturePage, state.masks, meta)
   if (response) {
     const html = await response.text().catch(() => "")
     fs.writeFileSync(base + ".server.html", html)
-    fs.writeFileSync(base + ".server.norm.html", normalizeDocument(html, { seedTime }))
+    fs.writeFileSync(base + ".server.norm.html", mask(normalizeDocument(html, { seedTime })))
   }
 
   if (Object.keys(pages).length > 1) {
@@ -176,6 +178,7 @@ async function capturePage(
     await capturePage.bringToFront()
     await waitForReady([trackers[captureActor]], env.timeoutMs, clockTime)
   }
+  if (!touch && (await rehover(capturePage))) await waitForReady([trackers[captureActor]], env.timeoutMs, clockTime)
   meta.animations = await capturePage.evaluate((at) => (window as any).__parity.pauseAnimations(at), stepContext.pauseAnimationsAt ?? null)
   meta.trace.push(`capture -> ${await pageTrace(capturePage)}`)
   meta.trace.push(...(await capturePage.evaluate(() => (window as any).__parity.focusLog()).catch(() => [])).map((l: string) => `focus: ${l}`))
@@ -183,24 +186,74 @@ async function capturePage(
     const el = document.activeElement
     return `${document.hasFocus() ? "window focused" : "window blurred"}; active ${el ? el.tagName.toLowerCase() + (el.id ? "#" + el.id : "") + (el.className && typeof el.className === "string" ? "." + el.className.trim().split(/\s+/).join(".") : "") : "none"}`
   })
-  const shot = await stableScreenshot(capturePage, env.timeoutMs)
+  const shot = await stableScreenshot(capturePage, env.timeoutMs, await pixelMasks(capturePage, state.masks, meta))
   fs.writeFileSync(base + ".png", shot.png)
   if (!shot.stable) meta.console.push("screenshot never stabilized (two consecutive frames always differed)")
   const live = await capturePage.evaluate(() => document.body?.outerHTML ?? "")
-  fs.writeFileSync(base + ".live.norm.html", normalizeDocument(`<!DOCTYPE html><html><head></head>${live}</html>`, { seedTime }))
+  fs.writeFileSync(base + ".live.norm.html", mask(normalizeDocument(`<!DOCTYPE html><html><head></head>${live}</html>`, { seedTime })))
   const aria = await capturePage.locator("body").ariaSnapshot({ timeout: env.timeoutMs })
-  fs.writeFileSync(base + ".aria.yml", maskText(aria, { seedTime }) + "\n")
+  fs.writeFileSync(base + ".aria.yml", mask(maskText(aria, { seedTime })) + "\n")
 
   meta.cable = Object.fromEntries(Object.entries(trackers).map(([actor, t]) => [actor, t.cableLog]))
   // Server output beyond the document: every response and every cable frame, per actor.
   const multi = Object.keys(pages).length > 1
   const perActor = async (text: (actor: string) => Promise<string> | string) =>
     (await Promise.all(Object.keys(pages).map(async (actor) => (multi ? `## ${actor}\n` : "") + (await text(actor))))).join("\n")
-  fs.writeFileSync(base + ".network.txt", await perActor((actor) => networks[actor].text()))
-  fs.writeFileSync(base + ".cable.txt", await perActor((actor) => trackers[actor].cable!.text()))
+  fs.writeFileSync(base + ".network.txt", await perActor((actor) => networks[actor].text(mask)))
+  fs.writeFileSync(base + ".cable.txt", await perActor((actor) => trackers[actor].cable!.text(mask)))
   meta.pageErrors = Object.values(trackers).flatMap((t) => t.errors)
   meta.console.push(...Object.values(trackers).flatMap((t) => t.console))
   checkStatus(state, meta)
+}
+
+// The mouse stays where the last step left it, and when the page changes under it (the message it
+// deleted is gone, and the next one moved up) an engine updates :hover whenever it next
+// synthesizes a mouse move, which Firefox does on a later refresh tick: the next message's actions
+// button showed in some captures and not in others. Moving the mouse to where it already is makes
+// every engine hit-test the settled page now.
+async function rehover(page: Page): Promise<boolean> {
+  const at = await page.evaluate(() => (window as any).__parity?.pointer() ?? null).catch(() => null)
+  if (!at) return false
+  await page.mouse.move(at[0], at[1])
+  return true
+}
+
+// masks.values (parity/SCREENS.md, "Masks"): a value the server made up at random, such as the
+// join code Account::Joinable generates when the first run creates the account, is read from this
+// server's page and replaced by «name» wherever it appears in a text layer. The value comes from
+// the element that shows it, never from a pattern over arbitrary text, so a wrong value elsewhere
+// still differs. A mask whose element is missing fails the capture rather than masking nothing.
+async function valueMasks(page: Page, masks: Masks | undefined, meta: CellMeta): Promise<(text: string) => string> {
+  const entries = Object.entries(masks?.values ?? {})
+  if (!entries.length) return (text) => text
+  const found: [string, string][] = []
+  for (const [name, spec] of entries) {
+    const raw = await page.evaluate(({ selector, attribute }) => {
+      const el = document.querySelector(selector)
+      if (!el) return null
+      return attribute ? el.getAttribute(attribute) : el.textContent
+    }, { selector: spec.selector, attribute: spec.attribute ?? null })
+    if (raw === null) throw new Error(`masks.values.${name}: nothing matches ${spec.selector}${spec.attribute ? ` [${spec.attribute}]` : ""}`)
+    const value = spec.match ? new RegExp(spec.match).exec(raw)?.[1] : raw.trim()
+    if (!value) throw new Error(`masks.values.${name}: ${JSON.stringify(raw)} doesn't match ${spec.match}`)
+    found.push([name, value])
+  }
+  meta.masks = { values: Object.fromEntries(found), pixels: meta.masks?.pixels ?? {} }
+  found.sort(([, a], [, b]) => b.length - a.length)
+  return (text) => found.reduce((out, [name, value]) => out.replaceAll(value, `«${name}»`), text)
+}
+
+// masks.pixels: the listed elements' boxes are painted over in the screenshot (Playwright's
+// screenshot mask), on both servers alike. Each selector must match something.
+async function pixelMasks(page: Page, masks: Masks | undefined, meta: CellMeta) {
+  const selectors = masks?.pixels ?? []
+  const counts: Record<string, number> = {}
+  for (const selector of selectors) {
+    counts[selector] = await page.locator(selector).count()
+    if (!counts[selector]) throw new Error(`masks.pixels: nothing matches ${selector}`)
+  }
+  if (selectors.length) meta.masks = { values: meta.masks?.values ?? {}, pixels: counts }
+  return selectors.map((selector) => page.locator(selector))
 }
 
 // Where the captured page is scrolled and what has focus, for diagnosing differences.
@@ -260,11 +313,33 @@ const NOTIFICATIONS_GRANTED = `(() => {
 // however fast modules and responses arrived. With real timers, composer_controller.js's
 // setTimeout(0) focus() raced Lexxy's requestAnimationFrame mount of the editor root, and the
 // composer had its focus ring in some captures and not in others.
+//
+// Every document starts its fake monotonic clock (performance.now, the base of every timer) at 0.
+// Playwright replays a context's clock calls in each new document, and between the install and
+// the pauseAt it advances that clock by the *real* milliseconds that passed between the two calls
+// in this process: 0 to 30 of them, depending on load. requestAnimationFrame is due at the next
+// multiple of 16 of that clock, so the offset decided whether Lexxy's rAF mount of the editor root
+// (lexxy.js connectedCallback) ran before composer_controller.js's onNextEventLoopTick focus(): at
+// an offset of 15 or 31 the frame was 1ms away, due together with the timeout (which the fake
+// clock delays by 1ms when it's set from inside a timer), and ran first because it was created
+// first, so a room's composer had its focus ring in about one capture in 120. CLOCK_EPOCH_SCRIPT
+// dates the pauseAt at the install's instant before the replay, so no real time passes between
+// them. (Installing is what zeroes the clock; a bare pauseAt lets it follow real time until the
+// replay.)
 async function freezeClock(context: BrowserContext, time: string) {
   const instant = new Date(time)
   await context.clock.install({ time: new Date(instant.getTime() - 1000) })
   await context.clock.pauseAt(instant)
+  await context.addInitScript(CLOCK_EPOCH_SCRIPT)
 }
+
+const CLOCK_EPOCH_SCRIPT = `(() => {
+  const log = globalThis.__pwClock && globalThis.__pwClock.controller && globalThis.__pwClock.controller._log
+  if (!log || !log.length) return
+  const install = log.find((entry) => entry.type === "install")
+  const pause = log.find((entry) => entry.type === "pauseAt")
+  if (install && pause) pause.time = install.time
+})()`
 
 // What the Web Animations API can't pause (UA shadow DOM like Chromium's media-controls loading
 // spinner, Chromium re-rasterizing a large downscaled image a few hundred ms after it appears in
@@ -272,8 +347,8 @@ async function freezeClock(context: BrowserContext, time: string) {
 const STABLE_FOR_MS = 1000
 const FRAME_INTERVAL_MS = 250
 
-async function stableScreenshot(page: Page, timeoutMs: number): Promise<{ png: Buffer; stable: boolean }> {
-  const shoot = () => page.screenshot({ animations: "allow", caret: "hide", scale: "device", timeout: timeoutMs })
+async function stableScreenshot(page: Page, timeoutMs: number, mask: Locator[] = []): Promise<{ png: Buffer; stable: boolean }> {
+  const shoot = () => page.screenshot({ animations: "allow", caret: "hide", scale: "device", timeout: timeoutMs, mask, maskColor: "#FF00FF" })
   const deadline = Date.now() + Math.min(timeoutMs, 15_000)
   let previous = await shoot()
   let since = Date.now()

@@ -9,8 +9,8 @@ import { BrowserPool } from "./browsers.ts"
 import { resolveBreakpointWidths, scanWidthConditions } from "./breakpoints.ts"
 import { artifactBase, captureCell } from "./capture.ts"
 import type { CaptureEnv, CellMeta, Target } from "./capture.ts"
-import { compareJob } from "./compare.ts"
-import type { CellComparison } from "./compare.ts"
+import { compareJob, pixelOnlyFailure } from "./compare.ts"
+import type { Attempt, CellComparison } from "./compare.ts"
 import { ENGINES } from "./config.ts"
 import type { Engine } from "./config.ts"
 import { cellId, expandJobs, jobId } from "./inventory.ts"
@@ -118,7 +118,7 @@ export async function run(options: RunOptions): Promise<RunResult> {
       return captureCell(job, target, env)
     }
 
-    const runJob = async (job: Job, slot?: number) => {
+    const captureAll = async (job: Job, slot?: number): Promise<CellMeta[]> => {
       const fresh = slot !== undefined
       const targets = fresh ? isolated[slot] : options.targets
       const captured: CellMeta[] = []
@@ -134,14 +134,34 @@ export async function run(options: RunOptions): Promise<RunResult> {
         }
         captured.push(meta)
       }
-      metas.push(...captured)
-      const error = captured.find((m) => m.error)?.error
+      return captured
+    }
+
+    const runJob = async (job: Job, slot?: number) => {
+      let captured = await captureAll(job, slot)
+      let error = captured.find((m) => m.error)?.error
       let status = error ? "error" : "captured"
       if (options.targets.length === 2 && options.allowlist) {
-        const comparison = compareJob(job, options.outDir, options.targets[0].name, options.targets[1].name, options.allowlist)
+        const compare = () => compareJob(job, options.outDir, options.targets[0].name, options.targets[1].name, options.allowlist!)
+        let comparison = compare()
+        // Pixel flake policy (parity/SCREENS.md, "Pixel flakes"): when every server-output layer
+        // is identical and only the pixels differ, the cell is captured again on both sides, up to
+        // PIXEL_RETRIES more times. A later match passes the cell, marked flaky with its attempts.
+        const attempts: Attempt[] = []
+        while (pixelOnlyFailure(comparison) && attempts.length < PIXEL_RETRIES) {
+          attempts.push(keepAttempt(options.outDir, options.targets, job, comparison, attempts.length + 1))
+          captured = await captureAll(job, slot)
+          error = captured.find((m) => m.error)?.error
+          comparison = compare()
+        }
+        if (attempts.length) {
+          comparison.attempts = [...attempts, attemptOf(comparison, attempts.length + 1)]
+          comparison.flaky = comparison.status === "pass"
+        }
         comparisons.push(comparison)
-        status = comparison.status
+        status = comparison.flaky ? "pass (flaky)" : comparison.status
       }
+      metas.push(...captured)
       done++
       if (!options.quiet && (status !== "pass" || done % 25 === 0 || done === jobs.length)) {
         console.log(`[${done}/${jobs.length}] ${jobId(job)} ${status}${error ? `: ${error.split("\n")[0]}` : ""}`)
@@ -176,6 +196,27 @@ export async function run(options: RunOptions): Promise<RunResult> {
     await pool.close()
     await Promise.all(proxies.map((p) => p.close()))
   }
+}
+
+export const PIXEL_RETRIES = 2
+
+function attemptOf(comparison: CellComparison, attempt: number): Attempt {
+  const pixels = comparison.layers.find((l) => l.layer === "pixels")?.pixels
+  return { attempt, status: comparison.status, differentPixels: pixels?.differentPixels, sizeMismatch: pixels?.sizeMismatch }
+}
+
+// Keeps a failed attempt's screenshots and diff beside the cell's artifacts (<cell>.attempt-N.png),
+// since the next capture overwrites them.
+function keepAttempt(outDir: string, targets: Target[], job: Job, comparison: CellComparison, attempt: number): Attempt {
+  const record = attemptOf(comparison, attempt)
+  const keep = (file: string) => {
+    const kept = file.replace(/\.png$/, `.attempt-${attempt}.png`)
+    fs.copyFileSync(file, kept)
+    return kept
+  }
+  const [expected, actual] = targets.map((t) => artifactBase(outDir, t.name, job) + ".png")
+  record.images = { expected: keep(expected), actual: keep(actual), diff: comparison.diffImage && fs.existsSync(comparison.diffImage) ? keep(comparison.diffImage) : undefined }
+  return record
 }
 
 export const DEFAULT_ISOLATED_SLOTS = 3
@@ -233,7 +274,8 @@ export function summaryLine(result: RunResult): string {
     return `${result.metas.length} captures, ${errors} errors in ${(result.durationMs / 1000).toFixed(1)}s`
   }
   const c = summarize(result.comparisons)
-  return `${result.comparisons.length} cells: ${c.pass} pass, ${c.fail} fail, ${c.allowed} allowed, ${c.error} error in ${(result.durationMs / 1000).toFixed(1)}s`
+  const flaky = result.comparisons.filter((r) => r.flaky).length
+  return `${result.comparisons.length} cells: ${c.pass} pass (${flaky} flaky), ${c.fail} fail, ${c.allowed} allowed, ${c.error} error in ${(result.durationMs / 1000).toFixed(1)}s`
 }
 
 export function shell(command: string) {

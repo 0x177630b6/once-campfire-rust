@@ -35,10 +35,23 @@ export function writeReport(runDir: string, name: string, results: CellCompariso
     return worst(ra) - worst(rb) || a.localeCompare(b)
   })
 
+  const flaky = results.filter((r) => r.flaky)
+  const masked = [...new Map(results.filter((r) => r.masks).map((r) => [r.state, r.masks!])).entries()]
+  const attemptsHtml = (r: CellComparison) => {
+    if (!r.attempts) return ""
+    const rows = r.attempts.map((a) => {
+      const pixels = a.sizeMismatch ? `size ${a.sizeMismatch}` : a.differentPixels ? `${a.differentPixels} px differ` : "identical"
+      const images = a.images ? ` · <a href="${rel(a.images.expected)}">expected</a> <a href="${rel(a.images.actual)}">actual</a>${a.images.diff ? ` <a href="${rel(a.images.diff)}">diff</a>` : ""}` : ""
+      return `<li>attempt ${a.attempt}: ${a.status} (${esc(pixels)})${images}</li>`
+    })
+    return `<p class="muted">Server output identical, pixels differed: captured again (pixel flake policy).</p><ol class="attempts">${rows.join("")}</ol>`
+  }
+
   const cellHtml = (r: CellComparison) => {
-    const head = `<summary><span class="badge ${r.status}">${r.status}</span> <code>${esc(r.cell)}</code> ${r.layers.filter((l) => !l.equal).map((l) => `<span class="layer">${l.layer}${l.allowed ? " (allowed)" : ""}</span>`).join(" ")}</summary>`
-    if (r.status === "pass") return `<details class="cell">${head}<p class="muted">identical (${r.layers.map((l) => l.layer).join(", ")})</p></details>`
-    const body: string[] = []
+    const badge = r.flaky ? `<span class="badge pass">pass</span> <span class="badge flaky">flaky</span>` : `<span class="badge ${r.status}">${r.status}</span>`
+    const head = `<summary>${badge} <code>${esc(r.cell)}</code> ${r.layers.filter((l) => !l.equal).map((l) => `<span class="layer">${l.layer}${l.allowed ? " (allowed)" : ""}</span>`).join(" ")}${r.attempts ? ` <span class="muted">${r.attempts.length} attempts</span>` : ""}</summary>`
+    if (r.status === "pass") return `<details class="cell">${head}${attemptsHtml(r)}<p class="muted">identical (${r.layers.map((l) => l.layer).join(", ")})</p></details>`
+    const body: string[] = [attemptsHtml(r)]
     if (r.error) body.push(`<pre class="error">${esc(r.error)}</pre>`)
     const pixels = r.layers.find((l) => l.layer === "pixels")
     if (pixels && !pixels.equal) {
@@ -70,7 +83,7 @@ export function writeReport(runDir: string, name: string, results: CellCompariso
   h1 { font-size: 20px; } h2 { font-size: 16px; margin: 24px 0 6px; border-top: 1px solid var(--line); padding-top: 12px; } h4 { margin: 12px 0 4px; }
   .summary span { margin-right: 12px; } .muted { color: var(--muted); }
   .badge { display: inline-block; min-width: 56px; text-align: center; border-radius: 4px; color: #fff; font-size: 12px; padding: 0 6px; }
-  .badge.pass { background: var(--pass); } .badge.fail { background: var(--fail); } .badge.allowed { background: var(--allowed); } .badge.error { background: var(--error); }
+  .badge.pass { background: var(--pass); } .badge.flaky { background: var(--allowed); } .badge.fail { background: var(--fail); } .badge.allowed { background: var(--allowed); } .badge.error { background: var(--error); }
   .layer { font-size: 12px; border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
   details.cell { margin: 2px 0 2px 12px; } summary { cursor: pointer; }
   .images { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 8px; }
@@ -82,7 +95,9 @@ export function writeReport(runDir: string, name: string, results: CellCompariso
 </style></head><body>
 <h1>${esc(info.title)}</h1>
 <p class="muted">expected <code>${esc(info.expected)}</code> · actual <code>${esc(info.actual)}</code> · ${esc(info.startedAt)} · ${(info.durationMs / 1000).toFixed(1)}s</p>
-<p class="summary">${(Object.keys(counts) as Status[]).map((s) => `<span><span class="badge ${s}">${s}</span> ${counts[s]}</span>`).join("")} <span class="muted">${results.length} cells in ${byState.size} states</span></p>
+<p class="summary">${(Object.keys(counts) as Status[]).map((s) => `<span><span class="badge ${s}">${s}</span> ${counts[s]}</span>`).join("")} <span><span class="badge flaky">flaky</span> ${flaky.length}</span> <span class="muted">${results.length} cells in ${byState.size} states</span></p>
+${flaky.length ? `<p class="muted">Flaky (passed on a later capture, pixels only): ${flaky.map((r) => `<a href="#${esc(r.state)}"><code>${esc(r.state)} @ ${esc(r.cell)}</code></a> (${r.attempts!.length} attempts)`).join(", ")}</p>` : ""}
+${masked.length ? `<h3>Masks</h3><ul>${masked.map(([state, masks]) => `<li><code>${esc(state)}</code>: ${masks.map((m) => `<code>${esc(m)}</code>`).join(", ")}</li>`).join("")}</ul>` : ""}
 ${info.unusedAllowlist.length ? `<p class="muted">Unused allowlist entries: ${info.unusedAllowlist.map((e) => `<code>${esc(e.state)}</code> (${esc(e.owner)})`).join(", ")}</p>` : ""}
 ${states.map(([state, rs]) => {
     const c = summarize(rs)
@@ -91,7 +106,7 @@ ${states.map(([state, rs]) => {
 </body></html>
 `
   fs.writeFileSync(file, html)
-  fs.writeFileSync(path.join(runDir, `${name}.json`), JSON.stringify({ info: { ...info, counts }, results: results.map(({ expected, actual, ...r }) => ({ ...r, layers: r.layers.map(({ text, ...l }) => ({ ...l, added: text?.added, removed: text?.removed })) })) }, null, 2))
+  fs.writeFileSync(path.join(runDir, `${name}.json`), JSON.stringify({ info: { ...info, counts, flaky: flaky.length, masks: Object.fromEntries(masked) }, results: results.map(({ expected, actual, ...r }) => ({ ...r, layers: r.layers.map(({ text, ...l }) => ({ ...l, added: text?.added, removed: text?.removed })) })) }, null, 2))
   return file
 }
 
