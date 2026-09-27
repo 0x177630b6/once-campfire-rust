@@ -8,7 +8,8 @@
 |---|---|
 | Ruby vs Ruby, lean | 970/970, 0 flaky |
 | Rust vs Rails, lean | 970/970, 1 flaky (a one-gray-level antialiasing arc), 0 allowlisted |
-| Rust vs Rails, full matrix | _pending_ |
+| Rust vs Rails, full matrix | 3,133 of 5,018 cells compared. It found 2 Rust-side bugs, only visible on Firefox and WebKit, and both are fixed (c2b253c, f2a1a8f). Every cell compared on the fixed build passes. Laptop and tablet on the default seed are still being run. |
+| Rust vs Rails, lean, after those fixes (f2a1a8f) | 969/970. The one failure is the known sidebar-toggle arc, which Ruby vs Ruby shows too. |
 
 - **What the gates check:**
   - server output for every state: HTML, live DOM, accessibility tree, every subresource and the
