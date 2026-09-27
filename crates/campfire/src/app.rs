@@ -94,6 +94,7 @@ pub async fn boot(config: Config) -> anyhow::Result<Booted> {
     let mut kit_config = KitConfig::production(config.disable_ssl);
     kit_config.public_path = Some(public_pages.path().to_path_buf());
 
+    let fragment_cache = FragmentCache::new(config.fragment_cache_bytes);
     let app = Arc::new(AppState {
         config,
         secrets,
@@ -104,7 +105,7 @@ pub async fn boot(config: Config) -> anyhow::Result<Booted> {
         broadcasts: channels::Broadcasts::new(cable.clone()),
         cable,
         jobs,
-        fragment_cache: FragmentCache::new(campfire_views::fragment_cache::DEFAULT_CAPACITY),
+        fragment_cache,
         _public_pages: public_pages,
     });
 

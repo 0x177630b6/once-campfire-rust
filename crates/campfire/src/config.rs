@@ -18,6 +18,10 @@
 //! - Thruster's (`TLS_DOMAIN`, `HTTP_PORT`, `HTTP_*_TIMEOUT`, `TARGET_PORT`, ...): read by
 //!   `campfire_kit::front::FrontConfig`, which does Thruster's job in this binary.
 //! - `REDIS_URL`, `WEB_CONCURRENCY`: not applicable (no Redis, one process).
+//! - `CAMPFIRE_FRAGMENT_CACHE_MB`: the fragment store's limit in megabytes (default 32). The
+//!   reference caches fragments in Redis (`redis_cache_store`) with no `maxmemory`; this store is
+//!   in the process, so it's bounded like Rails' `MemoryStore` (default `size` 32 MB), evicting the
+//!   least recently used fragments. See `campfire_views::fragment_cache`.
 //!
 //! Storage paths mirror `Rails.root.join("storage")`: the database under `db/`, blobs under
 //! `files/` (`config/storage.yml`), backups under `backups/` (`script/admin/prepare-backup`).
@@ -46,6 +50,8 @@ pub struct Config {
     pub job_concurrency: usize,
     pub log_level: String,
     pub sentry_dsn: Option<String>,
+    /// The fragment store's limit in bytes (`CAMPFIRE_FRAGMENT_CACHE_MB`).
+    pub fragment_cache_bytes: usize,
 }
 
 #[allow(dead_code)]
@@ -138,6 +144,8 @@ impl Config {
             job_concurrency: number("JOB_CONCURRENCY", 2)?.max(1),
             log_level: present("RAILS_LOG_LEVEL").unwrap_or_else(|| "info".into()),
             sentry_dsn: present("SENTRY_DSN"),
+            fragment_cache_bytes: number("CAMPFIRE_FRAGMENT_CACHE_MB", campfire_views::fragment_cache::DEFAULT_MAX_BYTES >> 20)?
+                .saturating_mul(1 << 20),
         })
     }
 }
@@ -174,6 +182,14 @@ mod tests {
         assert_eq!(config.storage.database, PathBuf::from("storage/db/production.sqlite3"));
         assert_eq!(config.storage.files, PathBuf::from("storage/files"));
         assert_eq!(config.storage.backup_file(), PathBuf::from("storage/backups/production.sqlite3"));
+        assert_eq!(config.fragment_cache_bytes, 32 * 1024 * 1024);
+    }
+
+    #[test]
+    fn fragment_cache_size_in_megabytes() {
+        let bytes = config(&[("SECRET_KEY_BASE", "abc"), ("CAMPFIRE_FRAGMENT_CACHE_MB", "64")]).unwrap().fragment_cache_bytes;
+        assert_eq!(bytes, 64 * 1024 * 1024);
+        assert!(config(&[("SECRET_KEY_BASE", "abc"), ("CAMPFIRE_FRAGMENT_CACHE_MB", "lots")]).is_err());
     }
 
     #[test]

@@ -73,3 +73,22 @@ pub fn by_bots_show(message: &MessageJson) -> String {
 pub fn boosts_by_bots_show(boost: &BoostJson) -> String {
     super::support::rails_json(boost)
 }
+
+// A Jbuilder fragment's payload is its JSON.
+impl crate::fragment_cache::CacheSize for UserJson {
+    fn cache_size(&self) -> usize {
+        crate::fragment_cache::serialized_size(self)
+    }
+}
+
+impl crate::fragment_cache::CacheSize for MessageJson {
+    fn cache_size(&self) -> usize {
+        crate::fragment_cache::serialized_size(self)
+    }
+}
+
+impl crate::fragment_cache::CacheSize for BoostJson {
+    fn cache_size(&self) -> usize {
+        crate::fragment_cache::serialized_size(self)
+    }
+}
