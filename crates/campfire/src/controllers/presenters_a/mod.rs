@@ -16,7 +16,7 @@ use campfire_db::{Account, Connection, Membership, PushSubscription, Room, RoomT
 use campfire_kit::Ctx;
 use campfire_views::accounts::{Bot, BotForm, BotRoom, HelpContact};
 use campfire_views::users::{
-    MentionUser, ProfileMembership, PushSubscription as PushSubscriptionView, SidebarDirect, SidebarRoom, UserSummary,
+    MentionUser, ProfileMembership, PushSubscription as PushSubscriptionView, SidebarDirect, SidebarDirectItem, SidebarRoom, UserSummary,
 };
 use campfire_views::Platform;
 use rails_compat::Secrets;
@@ -137,7 +137,7 @@ pub const DIRECT_PLACEHOLDERS: i64 = 20;
 
 #[derive(Debug, Clone)]
 pub struct Sidebar {
-    pub direct_memberships: Vec<SidebarDirect>,
+    pub direct_memberships: Vec<SidebarDirectItem>,
     pub other_memberships: Vec<SidebarRoom>,
     pub direct_placeholder_users: Vec<UserSummary>,
 }
@@ -151,7 +151,16 @@ pub fn sidebar(conn: &Connection, secrets: &Secrets, user: &User) -> campfire_db
     direct.sort_by_key(|(_, room)| room.updated_at);
     direct.reverse();
 
-    let direct_memberships = direct.iter().map(|(membership, room)| sidebar_direct(conn, secrets, membership, room)).collect::<campfire_db::Result<_>>()?;
+    let direct_memberships = direct
+        .iter()
+        .map(|(membership, room)| {
+            // `cache membership` wraps the whole partial: on a hit Rails loads none of its members.
+            Ok(match campfire_views::users::cached_direct_room_fragment(membership.id, membership.updated_at.jiff()) {
+                Some(html) => SidebarDirectItem::Fragment(html),
+                None => SidebarDirectItem::View(sidebar_direct(conn, secrets, membership, room)?),
+            })
+        })
+        .collect::<campfire_db::Result<_>>()?;
     let other_memberships = all_memberships
         .iter()
         .filter(|(membership, _)| !direct.iter().any(|(direct, _)| direct.id == membership.id))

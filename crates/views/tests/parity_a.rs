@@ -341,6 +341,7 @@ fn sidebar<'a>(name: &str, ctx: &'a campfire_views::ViewContext<'a>) -> users::S
                 membership_id: d["room_id"].as_i64().unwrap(),
                 membership_updated_at: jiff::Timestamp::UNIX_EPOCH,
             })
+            .map(users::SidebarDirectItem::from)
             .collect(),
         direct_placeholder_users: sidebar["placeholders"].as_array().unwrap().iter().map(|n| named(name, n.as_str().unwrap())).collect(),
         other_memberships: sidebar["shared"]

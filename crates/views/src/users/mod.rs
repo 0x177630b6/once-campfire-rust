@@ -171,25 +171,51 @@ pub struct SidebarDirect {
     pub membership_updated_at: jiff::Timestamp,
 }
 
+/// A direct room on its way into the sidebar: the `users/sidebars/rooms/_direct` fragment when
+/// the cache already holds this membership version (`cache membership` wraps the whole partial,
+/// so Rails evaluates none of it then), else the view to render it from.
+#[derive(Clone, Debug)]
+pub enum SidebarDirectItem {
+    Fragment(String),
+    View(SidebarDirect),
+}
+
+impl From<SidebarDirect> for SidebarDirectItem {
+    fn from(direct: SidebarDirect) -> Self {
+        SidebarDirectItem::View(direct)
+    }
+}
+
 /// `users/sidebars/rooms/_direct` for `membership`, whose body is `cache membership` (and which
 /// `users/sidebars/show` renders with `cached: true`): the first rendering of a membership
 /// version is what later renders reuse.
 pub fn direct_room(ctx: &ViewContext, membership: &SidebarDirect) -> String {
     crate::fragment_cache::fetch(
-        || {
-            format!(
-                "views/users/sidebars/rooms/_direct:{}/{}",
-                direct_room_digest(),
-                crate::fragment_cache::cache_key_with_version("memberships", membership.membership_id, membership.membership_updated_at)
-            )
-        },
+        || direct_room_fragment_key(membership.membership_id, membership.membership_updated_at),
         || SidebarDirectPartial { ctx, membership: membership.clone() }.render().expect("users/sidebars/rooms/_direct renders"),
     )
 }
 
 /// [`direct_room`] where a template renders the partial.
-pub fn cached_direct_room(ctx: &ViewContext, membership: &SidebarDirect) -> h::Html {
-    h::raw(direct_room(ctx, membership))
+pub fn cached_direct_room(ctx: &ViewContext, item: &SidebarDirectItem) -> h::Html {
+    match item {
+        SidebarDirectItem::Fragment(html) => h::raw(html.clone()),
+        SidebarDirectItem::View(membership) => h::raw(direct_room(ctx, membership)),
+    }
+}
+
+/// The `users/sidebars/rooms/_direct` fragment for this membership version, if the current store
+/// holds it.
+pub fn cached_direct_room_fragment(membership_id: i64, updated_at: jiff::Timestamp) -> Option<String> {
+    crate::fragment_cache::read(&direct_room_fragment_key(membership_id, updated_at))
+}
+
+fn direct_room_fragment_key(membership_id: i64, updated_at: jiff::Timestamp) -> String {
+    format!(
+        "views/users/sidebars/rooms/_direct:{}/{}",
+        direct_room_digest(),
+        crate::fragment_cache::cache_key_with_version("memberships", membership_id, updated_at)
+    )
 }
 
 fn direct_room_digest() -> &'static str {
@@ -240,7 +266,7 @@ pub struct SidebarShow<'a> {
     pub rooms_stream: String,
     /// `Turbo::StreamsChannel.signed_stream_name([ Current.user, :rooms ])`.
     pub user_rooms_stream: String,
-    pub direct_memberships: Vec<SidebarDirect>,
+    pub direct_memberships: Vec<SidebarDirectItem>,
     pub direct_placeholder_users: Vec<UserSummary>,
     pub other_memberships: Vec<SidebarRoom>,
     /// `Current.user.administrator? || !Current.account.settings.restrict_room_creation_to_administrators?`.
