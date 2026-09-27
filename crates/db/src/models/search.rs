@@ -4,7 +4,7 @@ use rusqlite::{Connection, Row, params};
 
 use crate::database::Tx;
 use crate::error::Result;
-use crate::sql::{self, placeholders, query_all, query_one};
+use crate::sql::{self, CachedStatements, placeholders, query_all, query_one};
 use crate::time::Timestamp;
 
 /// How many recent searches `trim_recent_searches` keeps.
@@ -66,7 +66,7 @@ impl Search {
             None => Self::create(tx, user_id, query)?,
         };
         let now = tx.now();
-        tx.conn().execute(
+        tx.conn().execute_cached(
             r#"UPDATE "searches" SET "updated_at" = ? WHERE "searches"."id" = ?"#,
             params![now, search.id],
         )?;
@@ -76,7 +76,7 @@ impl Search {
 
     fn create(tx: &mut Tx<'_>, user_id: i64, query: &str) -> Result<Self> {
         let now = tx.now();
-        let id: i64 = tx.conn().query_row(
+        let id: i64 = tx.conn().query_row_cached(
             r#"INSERT INTO "searches" ("created_at", "query", "updated_at", "user_id") VALUES (?, ?, ?, ?) RETURNING "id""#,
             params![now, query, now, user_id],
             |r| r.get(0),
@@ -101,7 +101,7 @@ impl Search {
         )?;
         for id in ids {
             tx.conn()
-                .execute(r#"DELETE FROM "searches" WHERE "searches"."id" = ?"#, [id])?;
+                .execute_cached(r#"DELETE FROM "searches" WHERE "searches"."id" = ?"#, [id])?;
         }
         Ok(())
     }
@@ -130,7 +130,7 @@ fn trim_recent_searches(tx: &Tx<'_>, user_id: i64) -> Result<()> {
     })?;
     for id in doomed {
         tx.conn()
-            .execute(r#"DELETE FROM "searches" WHERE "searches"."id" = ?"#, [id])?;
+            .execute_cached(r#"DELETE FROM "searches" WHERE "searches"."id" = ?"#, [id])?;
     }
     Ok(())
 }

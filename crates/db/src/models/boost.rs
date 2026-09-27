@@ -5,7 +5,7 @@ use rusqlite::{Connection, Row, params};
 use crate::database::Tx;
 use crate::error::{OptionalExt, Result};
 use crate::models::Message;
-use crate::sql::{query_all, query_one};
+use crate::sql::{CachedStatements, query_all, query_one};
 use crate::time::Timestamp;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -83,7 +83,7 @@ impl Boost {
         content: &str,
     ) -> Result<Self> {
         let now = tx.now();
-        let id: i64 = tx.conn().query_row(
+        let id: i64 = tx.conn().query_row_cached(
             r#"INSERT INTO "boosts" ("booster_id", "content", "created_at", "message_id", "updated_at") VALUES (?, ?, ?, ?, ?) RETURNING "id""#,
             params![booster_id, content, now, message_id, now],
             |r| r.get(0),
@@ -108,7 +108,7 @@ impl Boost {
     /// The delete alone, for a message being destroyed (its touch is moot).
     pub(crate) fn delete_row(&self, tx: &Tx<'_>) -> Result<()> {
         tx.conn()
-            .execute(r#"DELETE FROM "boosts" WHERE "boosts"."id" = ?"#, [self.id])?;
+            .execute_cached(r#"DELETE FROM "boosts" WHERE "boosts"."id" = ?"#, [self.id])?;
         Ok(())
     }
 }

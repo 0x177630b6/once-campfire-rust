@@ -7,7 +7,7 @@ use rusqlite::{Connection, Row, params};
 use crate::database::Tx;
 use crate::error::{OptionalExt, Result};
 use crate::models::{Room, User};
-use crate::sql::{self, query_all, query_one};
+use crate::sql::{self, CachedStatements, query_all, query_one};
 use crate::time::Timestamp;
 
 /// `enum :involvement, %w[ invisible nothing mentions everything ].index_by(&:itself)`
@@ -214,7 +214,7 @@ impl Membership {
             return Ok(());
         }
         let now = tx.now();
-        tx.conn().execute(
+        tx.conn().execute_cached(
             r#"UPDATE "memberships" SET "involvement" = ?, "updated_at" = ? WHERE "memberships"."id" = ?"#,
             params![involvement, now, self.id],
         )?;
@@ -229,7 +229,7 @@ impl Membership {
             return Ok(());
         }
         let now = tx.now();
-        tx.conn().execute(r#"UPDATE "memberships" SET "unread_at" = ?, "updated_at" = ? WHERE "memberships"."id" = ?"#, params![None::<Timestamp>, now, self.id])?;
+        tx.conn().execute_cached(r#"UPDATE "memberships" SET "unread_at" = ?, "updated_at" = ? WHERE "memberships"."id" = ?"#, params![None::<Timestamp>, now, self.id])?;
         self.unread_at = None;
         self.updated_at = now;
         Ok(())
@@ -242,7 +242,7 @@ impl Membership {
     /// `destroy`: the user's sockets reconnect after commit, so their subscriptions to this
     /// room are dropped.
     pub fn destroy(&self, tx: &mut Tx<'_>) -> Result<()> {
-        tx.conn().execute(
+        tx.conn().execute_cached(
             r#"DELETE FROM "memberships" WHERE "memberships"."id" = ?"#,
             [self.id],
         )?;
@@ -259,7 +259,7 @@ impl Membership {
     /// `Membership.disconnect_all`
     pub fn disconnect_all(tx: &mut Tx<'_>) -> Result<usize> {
         let now = tx.now();
-        Ok(tx.conn().execute(
+        Ok(tx.conn().execute_cached(
             r#"UPDATE "memberships" SET "connected_at" = ?, "connections" = ?, "updated_at" = ? WHERE "memberships"."connected_at" >= ?"#,
             params![None::<Timestamp>, 0, now, Self::connection_cutoff(now)],
         )?)
@@ -267,7 +267,7 @@ impl Membership {
 
     /// `Membership.connect(membership, connections)`: no `updated_at`.
     pub fn connect(tx: &mut Tx<'_>, id: i64, connections: i64) -> Result<()> {
-        tx.conn().execute(
+        tx.conn().execute_cached(
             r#"UPDATE "memberships" SET "connections" = ?, "connected_at" = ?, "unread_at" = ? WHERE "memberships"."id" = ?"#,
             params![connections, tx.now(), None::<Timestamp>, id],
         )?;
@@ -301,7 +301,7 @@ impl Membership {
         self.decrement_connections(tx)?;
         if self.connections < 1 && self.connected_at.is_some() {
             let now = tx.now();
-            tx.conn().execute(
+            tx.conn().execute_cached(
                 r#"UPDATE "memberships" SET "connected_at" = ?, "updated_at" = ? WHERE "memberships"."id" = ?"#,
                 params![None::<Timestamp>, now, self.id],
             )?;
@@ -343,7 +343,7 @@ impl Membership {
         } else {
             r#"UPDATE "memberships" SET "connections" = COALESCE("memberships"."connections", 0) - ?, "updated_at" = ? WHERE "memberships"."id" = ?"#
         };
-        tx.conn().execute(sql, params![by.abs(), now, self.id])?;
+        tx.conn().execute_cached(sql, params![by.abs(), now, self.id])?;
         self.connections += by;
         self.updated_at = now;
         Ok(())
@@ -355,7 +355,7 @@ impl Membership {
             return Ok(());
         }
         let now = tx.now();
-        tx.conn().execute(
+        tx.conn().execute_cached(
             r#"UPDATE "memberships" SET "connections" = ?, "updated_at" = ? WHERE "memberships"."id" = ?"#,
             params![connections, now, self.id],
         )?;
@@ -367,7 +367,7 @@ impl Membership {
     /// `touch :connected_at`
     fn touch_connected_at(&mut self, tx: &mut Tx<'_>) -> Result<()> {
         let now = tx.now();
-        tx.conn().execute(
+        tx.conn().execute_cached(
             r#"UPDATE "memberships" SET "updated_at" = ?, "connected_at" = ? WHERE "memberships"."id" = ?"#,
             params![now, now, self.id],
         )?;

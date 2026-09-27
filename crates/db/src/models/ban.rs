@@ -6,7 +6,7 @@ use rusqlite::{Connection, Row, params};
 
 use crate::database::Tx;
 use crate::error::{Errors, Result};
-use crate::sql::{self, query_all};
+use crate::sql::{self, CachedStatements, query_all};
 use crate::time::Timestamp;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -51,7 +51,7 @@ impl Ban {
     pub fn create(tx: &Tx<'_>, user_id: i64, ip_address: &str) -> Result<Self> {
         Self::validate(ip_address).into_result()?;
         let now = tx.now();
-        let id: i64 = tx.conn().query_row(
+        let id: i64 = tx.conn().query_row_cached(
             r#"INSERT INTO "bans" ("created_at", "ip_address", "updated_at", "user_id") VALUES (?, ?, ?, ?) RETURNING "id""#,
             params![now, ip_address, now, user_id],
             |r| r.get(0),

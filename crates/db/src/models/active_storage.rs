@@ -5,7 +5,7 @@ use rusqlite::{Connection, Row, params};
 
 use crate::database::Tx;
 use crate::error::{OptionalExt, Result};
-use crate::sql::query_one;
+use crate::sql::{CachedStatements, query_one};
 use crate::time::Timestamp;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -50,7 +50,7 @@ impl Blob {
     /// Inserts a blob row; `self.id` and `created_at` are ignored and assigned.
     pub fn create(tx: &Tx<'_>, blob: &Blob) -> Result<Self> {
         let now = tx.now();
-        let id: i64 = tx.conn().query_row(
+        let id: i64 = tx.conn().query_row_cached(
             r#"INSERT INTO "active_storage_blobs" ("byte_size", "checksum", "content_type", "created_at", "filename", "key", "metadata", "service_name") VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING "id""#,
             params![blob.byte_size, blob.checksum, blob.content_type, now, blob.filename, blob.key, blob.metadata, blob.service_name],
             |r| r.get(0),
@@ -108,7 +108,7 @@ impl Attachment {
         blob_id: i64,
     ) -> Result<Self> {
         let now = tx.now();
-        let id: i64 = tx.conn().query_row(
+        let id: i64 = tx.conn().query_row_cached(
             r#"INSERT INTO "active_storage_attachments" ("blob_id", "created_at", "name", "record_id", "record_type") VALUES (?, ?, ?, ?, ?) RETURNING "id""#,
             params![blob_id, now, name, record_id, record_type],
             |r| r.get(0),
@@ -124,7 +124,7 @@ impl Attachment {
     }
 
     pub fn delete(&self, tx: &Tx<'_>) -> Result<()> {
-        tx.conn().execute(r#"DELETE FROM "active_storage_attachments" WHERE "active_storage_attachments"."id" = ?"#, [self.id])?;
+        tx.conn().execute_cached(r#"DELETE FROM "active_storage_attachments" WHERE "active_storage_attachments"."id" = ?"#, [self.id])?;
         Ok(())
     }
 

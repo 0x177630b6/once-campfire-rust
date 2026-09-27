@@ -5,7 +5,7 @@ use serde_json::{Map, Value};
 
 use crate::database::Tx;
 use crate::error::{Error, OptionalExt, Result};
-use crate::sql::{self, query_one};
+use crate::sql::{self, CachedStatements, query_one};
 use crate::time::Timestamp;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -143,7 +143,7 @@ impl Account {
         let now = tx.now();
         let join_code = generate_join_code();
         let settings = AccountSettings::from_column(None).to_json();
-        let id: i64 = tx.conn().query_row(
+        let id: i64 = tx.conn().query_row_cached(
             r#"INSERT INTO "accounts" ("created_at", "custom_styles", "join_code", "name", "settings", "singleton_guard", "updated_at") VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING "id""#,
             params![now, None::<String>, join_code, name, settings, 0, now],
             |r| r.get(0),
@@ -155,7 +155,7 @@ impl Account {
     pub fn reset_join_code(&mut self, tx: &mut Tx<'_>) -> Result<()> {
         let join_code = generate_join_code();
         let now = tx.now();
-        tx.conn().execute(
+        tx.conn().execute_cached(
             r#"UPDATE "accounts" SET "join_code" = ?, "updated_at" = ? WHERE "accounts"."id" = ?"#,
             params![join_code, now, self.id],
         )?;
@@ -208,7 +208,7 @@ impl Account {
         );
         let mut values: Vec<&dyn rusqlite::ToSql> = sets.iter().map(|(_, v)| v.as_ref()).collect();
         values.push(&self.id);
-        tx.conn().execute(&sql, values.as_slice())?;
+        tx.conn().execute_cached(&sql, values.as_slice())?;
         Ok(())
     }
 

@@ -5,7 +5,7 @@ use rusqlite::{Connection, Row, params};
 
 use crate::database::Tx;
 use crate::error::{OptionalExt, Result};
-use crate::sql::{self, query_all, query_one};
+use crate::sql::{self, CachedStatements, query_all, query_one};
 use crate::time::Timestamp;
 
 /// `Session::ACTIVITY_REFRESH_RATE`
@@ -85,7 +85,7 @@ impl Session {
         let now = tx.now();
         let last_active_at = tx.now();
         let token = sql::base58(24);
-        let id: i64 = tx.conn().query_row(
+        let id: i64 = tx.conn().query_row_cached(
             r#"INSERT INTO "sessions" ("created_at", "ip_address", "last_active_at", "token", "updated_at", "user_agent", "user_id") VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING "id""#,
             params![now, ip_address, last_active_at, token, now, user_agent, user_id],
             |r| r.get(0),
@@ -117,7 +117,7 @@ impl Session {
         self.ip_address = ip_address.map(Into::into);
         self.last_active_at = now;
         self.updated_at = tx.now();
-        tx.conn().execute(
+        tx.conn().execute_cached(
             r#"UPDATE "sessions" SET "ip_address" = ?, "last_active_at" = ?, "updated_at" = ?, "user_agent" = ? WHERE "sessions"."id" = ?"#,
             params![self.ip_address, self.last_active_at, self.updated_at, self.user_agent, self.id],
         )?;
@@ -126,7 +126,7 @@ impl Session {
 
     /// `destroy!`
     pub fn destroy(&self, tx: &mut Tx<'_>) -> Result<()> {
-        tx.conn().execute(
+        tx.conn().execute_cached(
             r#"DELETE FROM "sessions" WHERE "sessions"."id" = ?"#,
             [self.id],
         )?;

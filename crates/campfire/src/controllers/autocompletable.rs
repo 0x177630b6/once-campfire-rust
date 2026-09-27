@@ -69,7 +69,7 @@ pub mod users {
             values.push(Value::Text(format!("%{query}%")));
         }
         sql.push_str(" ORDER BY LOWER(name)");
-        let mut statement = conn.prepare(&sql)?;
+        let mut statement = conn.prepare_cached(&sql)?;
         let ids: Vec<i64> = statement.query_map(rusqlite::params_from_iter(values), |row| row.get(0))?.collect::<Result<_, _>>()?;
         ids.into_iter().map(|id| User::find(conn, id)).collect()
     }

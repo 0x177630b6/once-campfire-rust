@@ -8,7 +8,7 @@ use crate::database::Tx;
 use crate::error::{OptionalExt, Result};
 use crate::events::Event;
 use crate::models::{Ban, Membership, Message, Session, Webhook};
-use crate::sql::{self, placeholders, query_all, query_one};
+use crate::sql::{self, CachedStatements, placeholders, query_all, query_one};
 use crate::time::{SQLITE_NOW, Timestamp};
 
 /// `enum :role, %i[ member administrator bot ]`
@@ -314,7 +314,7 @@ impl User {
             .as_deref()
             .map(|p| password_digest(p, tx.env().bcrypt_cost))
             .transpose()?;
-        let id: i64 = tx.conn().query_row(
+        let id: i64 = tx.conn().query_row_cached(
             INSERT,
             params![
                 attributes.bio,
@@ -398,7 +398,7 @@ impl User {
         );
         let mut values: Vec<&dyn rusqlite::ToSql> = sets.iter().map(|(_, v)| v.as_ref()).collect();
         values.push(&self.id);
-        tx.conn().execute(&sql, values.as_slice())?;
+        tx.conn().execute_cached(&sql, values.as_slice())?;
         Ok(())
     }
 
@@ -437,19 +437,19 @@ impl User {
     pub fn deactivate(&mut self, tx: &mut Tx<'_>) -> Result<()> {
         self.close_remote_connections(tx, false);
         let conn = tx.conn();
-        conn.execute(
+        conn.execute_cached(
             r#"DELETE FROM "memberships" WHERE ("memberships"."id") IN (SELECT "memberships"."id" FROM "memberships" INNER JOIN "rooms" AS "room" ON "room"."id" = "memberships"."room_id" WHERE "memberships"."user_id" = ? AND "room"."type" != ?)"#,
             params![self.id, "Rooms::Direct"],
         )?;
-        conn.execute(
+        conn.execute_cached(
             r#"DELETE FROM "push_subscriptions" WHERE "push_subscriptions"."user_id" = ?"#,
             [self.id],
         )?;
-        conn.execute(
+        conn.execute_cached(
             r#"DELETE FROM "searches" WHERE "searches"."user_id" = ?"#,
             [self.id],
         )?;
-        conn.execute(
+        conn.execute_cached(
             r#"DELETE FROM "sessions" WHERE "sessions"."user_id" = ?"#,
             [self.id],
         )?;
@@ -489,7 +489,7 @@ impl User {
         }
         // apply_ban
         self.close_remote_connections(tx, false);
-        tx.conn().execute(
+        tx.conn().execute_cached(
             r#"DELETE FROM "sessions" WHERE "sessions"."user_id" = ?"#,
             [self.id],
         )?;
@@ -504,7 +504,7 @@ impl User {
     }
 
     pub fn unban(&mut self, tx: &mut Tx<'_>) -> Result<()> {
-        tx.conn().execute(
+        tx.conn().execute_cached(
             r#"DELETE FROM "bans" WHERE "bans"."user_id" = ?"#,
             [self.id],
         )?;

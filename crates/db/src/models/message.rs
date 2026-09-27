@@ -8,7 +8,7 @@ use crate::error::{OptionalExt, Result};
 use crate::events::Event;
 use crate::models::{Attachment, Blob, Boost, RichTextRecord, Room, Sound, User};
 use crate::rich_text::RichText;
-use crate::sql::{self, placeholders, query_all, query_one};
+use crate::sql::{self, CachedStatements, placeholders, query_all, query_one};
 use crate::time::Timestamp;
 
 /// `Message::Pagination::PAGE_SIZE`
@@ -286,7 +286,7 @@ impl Message {
     pub fn create(tx: &mut Tx<'_>, attributes: NewMessage) -> Result<Self> {
         let now = tx.now();
         let client_message_id = attributes.client_message_id.unwrap_or_else(sql::uuid);
-        let id: i64 = tx.conn().query_row(
+        let id: i64 = tx.conn().query_row_cached(
             r#"INSERT INTO "messages" ("client_message_id", "created_at", "creator_id", "room_id", "updated_at") VALUES (?, ?, ?, ?, ?) RETURNING "id""#,
             params![client_message_id, now, attributes.creator_id, attributes.room_id, now],
             |r| r.get(0),
@@ -347,7 +347,7 @@ impl Message {
 
     fn touch_row(tx: &Tx<'_>, id: i64) -> Result<Timestamp> {
         let now = tx.now();
-        tx.conn().execute(
+        tx.conn().execute_cached(
             r#"UPDATE "messages" SET "updated_at" = ? WHERE "messages"."id" = ?"#,
             params![now, id],
         )?;
@@ -391,7 +391,7 @@ impl Message {
         if let Some(body) = RichTextRecord::find_for(tx.conn(), RECORD_TYPE, self.id, "body")? {
             body.delete(tx)?;
         }
-        tx.conn().execute(
+        tx.conn().execute_cached(
             r#"DELETE FROM "messages" WHERE "messages"."id" = ?"#,
             [self.id],
         )?;
@@ -403,7 +403,7 @@ impl Message {
 
     fn create_in_index(&self, tx: &Tx<'_>) -> Result<()> {
         let body = self.plain_text_body(tx.conn(), tx.rich_text())?;
-        tx.conn().execute(
+        tx.conn().execute_cached(
             "insert into message_search_index(rowid, body) values (?, ?)",
             params![self.id, body],
         )?;
@@ -412,7 +412,7 @@ impl Message {
 
     fn update_in_index(&self, tx: &Tx<'_>) -> Result<()> {
         let body = self.plain_text_body(tx.conn(), tx.rich_text())?;
-        tx.conn().execute(
+        tx.conn().execute_cached(
             "update message_search_index set body = ? where rowid = ?",
             params![body, self.id],
         )?;
@@ -536,7 +536,7 @@ pub fn sound_in(plain_text: &str) -> Option<&'static Sound> {
 
 fn remove_from_index(tx: &Tx<'_>, id: i64) -> Result<()> {
     tx.conn()
-        .execute("delete from message_search_index where rowid = ?", [id])?;
+        .execute_cached("delete from message_search_index where rowid = ?", [id])?;
     Ok(())
 }
 

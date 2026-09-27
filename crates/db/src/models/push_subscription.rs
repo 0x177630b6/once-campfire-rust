@@ -7,7 +7,7 @@ use crate::database::Tx;
 use crate::error::{Errors, OptionalExt, Result};
 use crate::models::{Membership, Message, Room, User};
 use crate::rich_text::RichText;
-use crate::sql::{self, placeholders, query_all, query_one};
+use crate::sql::{self, CachedStatements, placeholders, query_all, query_one};
 use crate::time::Timestamp;
 
 /// `Push::Subscription::PERMITTED_ENDPOINT_HOSTS`
@@ -120,7 +120,7 @@ impl PushSubscription {
     ) -> Result<Self> {
         subscription.validate(resolve).into_result()?;
         let now = tx.now();
-        let id: i64 = tx.conn().query_row(
+        let id: i64 = tx.conn().query_row_cached(
             r#"INSERT INTO "push_subscriptions" ("auth_key", "created_at", "endpoint", "p256dh_key", "updated_at", "user_agent", "user_id") VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING "id""#,
             params![subscription.auth_key, now, subscription.endpoint, subscription.p256dh_key, now, subscription.user_agent, subscription.user_id],
             |r| r.get(0),
@@ -134,7 +134,7 @@ impl PushSubscription {
     }
 
     pub fn destroy(&self, tx: &mut Tx<'_>) -> Result<()> {
-        tx.conn().execute(
+        tx.conn().execute_cached(
             r#"DELETE FROM "push_subscriptions" WHERE "push_subscriptions"."id" = ?"#,
             [self.id],
         )?;
@@ -150,7 +150,7 @@ impl PushSubscription {
             |r| r.get(0),
         )?;
         for id in ids {
-            tx.conn().execute(
+            tx.conn().execute_cached(
                 r#"DELETE FROM "push_subscriptions" WHERE "push_subscriptions"."id" = ?"#,
                 [id],
             )?;

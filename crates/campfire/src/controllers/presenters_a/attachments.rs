@@ -9,7 +9,7 @@
 //! (`belongs_to :record, touch: true`). After commit the file is uploaded and, since a fresh blob
 //! isn't analyzed, `ActiveStorage::AnalyzeJob` runs later (analysis touches the record again).
 
-use campfire_db::{Connection, Event, Tx};
+use campfire_db::{CachedStatements, Connection, Event, Tx};
 use campfire_kit::{Error, Param, Result};
 use campfire_storage::{Blob, Filename, NewBlob, Variation};
 
@@ -126,7 +126,7 @@ pub fn attach(tx: &mut Tx<'_>, record: Record, name: &str, upload: &Upload) -> c
 pub fn destroy(tx: &mut Tx<'_>, record: Record, name: &str) -> campfire_db::Result<bool> {
     let attachment: Option<(i64, i64)> = tx
         .conn()
-        .query_row(
+        .query_row_cached(
             "SELECT id, blob_id FROM active_storage_attachments WHERE record_type = ?1 AND record_id = ?2 AND name = ?3 LIMIT 1",
             rusqlite::params![record.record_type, record.id, name],
             |row| Ok((row.get(0)?, row.get(1)?)),
@@ -134,7 +134,7 @@ pub fn destroy(tx: &mut Tx<'_>, record: Record, name: &str) -> campfire_db::Resu
         .map(Some)
         .or_else(|error| if error == rusqlite::Error::QueryReturnedNoRows { Ok(None) } else { Err(error) })?;
     let Some((attachment_id, blob_id)) = attachment else { return Ok(false) };
-    tx.conn().execute("DELETE FROM active_storage_attachments WHERE id = ?1", [attachment_id])?;
+    tx.conn().execute_cached("DELETE FROM active_storage_attachments WHERE id = ?1", [attachment_id])?;
     super::touch(tx.conn(), record.table, record.id, tx.now())?;
     tx.emit_after_commit(Event::PurgeBlob { blob_id });
     Ok(true)

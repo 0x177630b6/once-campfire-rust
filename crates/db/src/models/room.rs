@@ -7,7 +7,7 @@ use crate::database::Tx;
 use crate::error::{Errors, OptionalExt, Result};
 use crate::events::Event;
 use crate::models::{Membership, Message, User};
-use crate::sql::{self, placeholders, query_all, query_one};
+use crate::sql::{self, CachedStatements, placeholders, query_all, query_one};
 use crate::time::{SQLITE_NOW, Timestamp};
 
 /// The STI `type` column.
@@ -185,7 +185,7 @@ impl Room {
         creator_id: i64,
     ) -> Result<Self> {
         let now = tx.now();
-        let id: i64 = tx.conn().query_row(
+        let id: i64 = tx.conn().query_row_cached(
             r#"INSERT INTO "rooms" ("created_at", "creator_id", "name", "type", "updated_at") VALUES (?, ?, ?, ?, ?) RETURNING "id""#,
             params![now, creator_id, name, room_type, now],
             |r| r.get(0),
@@ -274,7 +274,7 @@ impl Room {
             self.room_type = room_type;
         }
         self.updated_at = now;
-        tx.conn().execute(
+        tx.conn().execute_cached(
             r#"UPDATE "rooms" SET "name" = ?, "type" = ?, "updated_at" = ? WHERE "rooms"."id" = ?"#,
             params![self.name, self.room_type, now, self.id],
         )?;
@@ -287,7 +287,7 @@ impl Room {
 
     /// `touch`: `belongs_to :room, touch: true` on messages.
     pub fn touch(tx: &Tx<'_>, room_id: i64) -> Result<()> {
-        tx.conn().execute(
+        tx.conn().execute_cached(
             r#"UPDATE "rooms" SET "updated_at" = ? WHERE "rooms"."id" = ?"#,
             params![tx.now(), room_id],
         )?;
@@ -296,7 +296,7 @@ impl Room {
 
     /// `room.destroy`: memberships are deleted without callbacks, messages are destroyed.
     pub fn destroy(&self, tx: &mut Tx<'_>) -> Result<()> {
-        tx.conn().execute(
+        tx.conn().execute_cached(
             r#"DELETE FROM "memberships" WHERE "memberships"."room_id" = ?"#,
             [self.id],
         )?;
@@ -304,7 +304,7 @@ impl Room {
             message.destroy(tx)?;
         }
         tx.conn()
-            .execute(r#"DELETE FROM "rooms" WHERE "rooms"."id" = ?"#, [self.id])?;
+            .execute_cached(r#"DELETE FROM "rooms" WHERE "rooms"."id" = ?"#, [self.id])?;
         Ok(())
     }
 
@@ -395,7 +395,7 @@ impl Room {
 
     fn unread_memberships(tx: &Tx<'_>, room_id: i64, message: &Message) -> Result<()> {
         let now = tx.now();
-        tx.conn().execute(
+        tx.conn().execute_cached(
             r#"UPDATE "memberships" SET "unread_at" = ?, "updated_at" = ? WHERE "memberships"."room_id" = ? AND "memberships"."involvement" != ? AND ("memberships"."connected_at" IS NULL OR "memberships"."connected_at" < ?) AND "memberships"."user_id" != ?"#,
             params![message.created_at, now, room_id, "invisible", Membership::connection_cutoff(now), message.creator_id],
         )?;

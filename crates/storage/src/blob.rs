@@ -3,6 +3,8 @@
 //! Every function takes a `rusqlite::Connection` (a `Transaction` derefs to one), so callers
 //! decide the transaction boundaries the way the Rails models' callbacks would.
 
+use std::sync::LazyLock;
+
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
 use crate::filename::Filename;
@@ -106,30 +108,25 @@ impl Blob {
     }
 
     pub fn find(conn: &Connection, id: i64) -> Result<Option<Blob>> {
-        Ok(conn
-            .query_row(&format!("SELECT {BLOB_COLUMNS} FROM active_storage_blobs WHERE id = ?1"), [id], Blob::from_row)
-            .optional()?)
+        static SQL: LazyLock<String> = LazyLock::new(|| format!("SELECT {BLOB_COLUMNS} FROM active_storage_blobs WHERE id = ?1"));
+        Ok(conn.prepare_cached(&SQL)?.query_row([id], Blob::from_row).optional()?)
     }
 
     pub fn find_by_key(conn: &Connection, key: &str) -> Result<Option<Blob>> {
-        Ok(conn
-            .query_row(&format!("SELECT {BLOB_COLUMNS} FROM active_storage_blobs WHERE key = ?1"), [key], Blob::from_row)
-            .optional()?)
+        static SQL: LazyLock<String> = LazyLock::new(|| format!("SELECT {BLOB_COLUMNS} FROM active_storage_blobs WHERE key = ?1"));
+        Ok(conn.prepare_cached(&SQL)?.query_row([key], Blob::from_row).optional()?)
     }
 
     /// The blob attached to `record` under `name` (`has_one_attached`).
     pub fn attached(conn: &Connection, record_type: &str, record_id: i64, name: &str) -> Result<Option<Blob>> {
-        Ok(conn
-            .query_row(
-                &format!(
-                    "SELECT {} FROM active_storage_blobs b JOIN active_storage_attachments a ON a.blob_id = b.id \
-                     WHERE a.record_type = ?1 AND a.record_id = ?2 AND a.name = ?3 ORDER BY a.id LIMIT 1",
-                    BLOB_COLUMNS.split(", ").map(|c| format!("b.{c}")).collect::<Vec<_>>().join(", ")
-                ),
-                params![record_type, record_id, name],
-                Blob::from_row,
+        static SQL: LazyLock<String> = LazyLock::new(|| {
+            format!(
+                "SELECT {} FROM active_storage_blobs b JOIN active_storage_attachments a ON a.blob_id = b.id \
+                 WHERE a.record_type = ?1 AND a.record_id = ?2 AND a.name = ?3 ORDER BY a.id LIMIT 1",
+                BLOB_COLUMNS.split(", ").map(|c| format!("b.{c}")).collect::<Vec<_>>().join(", ")
             )
-            .optional()?)
+        });
+        Ok(conn.prepare_cached(&SQL)?.query_row(params![record_type, record_id, name], Blob::from_row).optional()?)
     }
 
     pub fn content_type(&self) -> &str {
@@ -238,11 +235,8 @@ pub fn attachment_records(conn: &Connection, blob_id: i64) -> Result<Vec<(String
 /// `blob.variant_records.find_by(variation_digest:)`.
 pub fn find_variant_record(conn: &Connection, blob_id: i64, variation_digest: &str) -> Result<Option<i64>> {
     Ok(conn
-        .query_row(
-            "SELECT id FROM active_storage_variant_records WHERE blob_id = ?1 AND variation_digest = ?2",
-            params![blob_id, variation_digest],
-            |row| row.get(0),
-        )
+        .prepare_cached("SELECT id FROM active_storage_variant_records WHERE blob_id = ?1 AND variation_digest = ?2")?
+        .query_row(params![blob_id, variation_digest], |row| row.get(0))
         .optional()?)
 }
 

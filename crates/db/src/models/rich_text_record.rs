@@ -4,7 +4,7 @@ use rusqlite::{Connection, Row, params};
 
 use crate::database::Tx;
 use crate::error::Result;
-use crate::sql::query_one;
+use crate::sql::{CachedStatements, query_one};
 use crate::time::Timestamp;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -53,7 +53,7 @@ impl RichTextRecord {
         body: &str,
     ) -> Result<Self> {
         let now = tx.now();
-        let id: i64 = tx.conn().query_row(
+        let id: i64 = tx.conn().query_row_cached(
             r#"INSERT INTO "action_text_rich_texts" ("body", "created_at", "name", "record_id", "record_type", "updated_at") VALUES (?, ?, ?, ?, ?, ?) RETURNING "id""#,
             params![body, now, name, record_id, record_type, now],
             |r| r.get(0),
@@ -71,7 +71,7 @@ impl RichTextRecord {
 
     pub fn update_body(&mut self, tx: &Tx<'_>, body: &str) -> Result<()> {
         let now = tx.now();
-        tx.conn().execute(
+        tx.conn().execute_cached(
             r#"UPDATE "action_text_rich_texts" SET "body" = ?, "updated_at" = ? WHERE "action_text_rich_texts"."id" = ?"#,
             params![body, now, self.id],
         )?;
@@ -81,7 +81,7 @@ impl RichTextRecord {
     }
 
     pub fn delete(&self, tx: &Tx<'_>) -> Result<()> {
-        tx.conn().execute(
+        tx.conn().execute_cached(
             r#"DELETE FROM "action_text_rich_texts" WHERE "action_text_rich_texts"."id" = ?"#,
             [self.id],
         )?;

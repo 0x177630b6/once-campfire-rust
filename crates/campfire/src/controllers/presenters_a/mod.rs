@@ -12,7 +12,7 @@ pub mod view_context;
 #[cfg(test)]
 mod tests;
 
-use campfire_db::{Account, Connection, Membership, PushSubscription, Room, RoomType, User};
+use campfire_db::{Account, CachedStatements, Connection, Membership, PushSubscription, Room, RoomType, User};
 use campfire_kit::Ctx;
 use campfire_views::accounts::{Bot, BotForm, BotRoom, HelpContact};
 use campfire_views::users::{
@@ -62,7 +62,7 @@ pub fn platform(c: &Ctx) -> Platform {
 /// `User.administrator.first`, for `accounts/_help_contact`.
 pub fn help_contact(conn: &Connection) -> campfire_db::Result<Option<HelpContact>> {
     let owner: Option<(String, Option<String>)> = conn
-        .query_row(r#"SELECT "users"."name", "users"."email_address" FROM "users" WHERE "users"."role" = 1 ORDER BY "users"."id" ASC LIMIT 1"#, [], |row| {
+        .query_row_cached(r#"SELECT "users"."name", "users"."email_address" FROM "users" WHERE "users"."role" = 1 ORDER BY "users"."id" ASC LIMIT 1"#, [], |row| {
             Ok((row.get(0)?, row.get(1)?))
         })
         .map(Some)
@@ -78,7 +78,7 @@ pub fn no_users(conn: &Connection) -> campfire_db::Result<bool> {
 /// `record.touch`: bumps `updated_at` (what `belongs_to :record, touch: true` does to an
 /// attachment's record, and `Blob#touch_attachments` after analysis).
 pub fn touch(conn: &Connection, table: &str, id: i64, now: campfire_db::Timestamp) -> campfire_db::Result<()> {
-    conn.execute(&format!(r#"UPDATE "{table}" SET "updated_at" = ? WHERE "{table}"."id" = ?"#), params![now, id])?;
+    conn.execute_cached(&format!(r#"UPDATE "{table}" SET "updated_at" = ? WHERE "{table}"."id" = ?"#), params![now, id])?;
     Ok(())
 }
 
@@ -205,7 +205,7 @@ fn direct_placeholder_users(conn: &Connection, secrets: &Secrets, user: &User) -
             r#"SELECT "memberships"."user_id" FROM "memberships" WHERE "memberships"."room_id" IN ({})"#,
             placeholders(direct_room_ids.len())
         );
-        let mut statement = conn.prepare(&sql)?;
+        let mut statement = conn.prepare_cached(&sql)?;
         let ids = statement.query_map(rusqlite::params_from_iter(&direct_room_ids), |row| row.get::<_, i64>(0))?;
         for id in ids {
             let id = id?;
@@ -284,7 +284,7 @@ pub fn placeholders(count: usize) -> String {
 }
 
 pub fn query_users(conn: &Connection, sql: &str, values: &[i64]) -> campfire_db::Result<Vec<User>> {
-    let mut statement = conn.prepare(sql)?;
+    let mut statement = conn.prepare_cached(sql)?;
     let ids = statement.query_map(rusqlite::params_from_iter(values), |row| row.get::<_, i64>("id"))?;
     let ids: Vec<i64> = ids.collect::<Result<_, _>>()?;
     ids.into_iter().map(|id| User::find(conn, id)).collect()

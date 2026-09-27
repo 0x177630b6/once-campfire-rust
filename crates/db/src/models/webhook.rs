@@ -7,7 +7,7 @@ use crate::database::Tx;
 use crate::error::Result;
 use crate::models::{Message, Room, User};
 use crate::rich_text::RichText;
-use crate::sql::query_one;
+use crate::sql::{CachedStatements, query_one};
 use crate::time::Timestamp;
 
 /// `Webhook::ENDPOINT_TIMEOUT`
@@ -45,7 +45,7 @@ impl Webhook {
     /// `create_webhook!(url:)`
     pub fn create(tx: &Tx<'_>, user_id: i64, url: Option<&str>) -> Result<Self> {
         let now = tx.now();
-        let id: i64 = tx.conn().query_row(
+        let id: i64 = tx.conn().query_row_cached(
             r#"INSERT INTO "webhooks" ("created_at", "updated_at", "url", "user_id") VALUES (?, ?, ?, ?) RETURNING "id""#,
             params![now, now, url, user_id],
             |r| r.get(0),
@@ -65,7 +65,7 @@ impl Webhook {
             return Ok(());
         }
         let now = tx.now();
-        tx.conn().execute(
+        tx.conn().execute_cached(
             r#"UPDATE "webhooks" SET "updated_at" = ?, "url" = ? WHERE "webhooks"."id" = ?"#,
             params![now, url, self.id],
         )?;
@@ -75,7 +75,7 @@ impl Webhook {
     }
 
     pub fn destroy(&self, tx: &Tx<'_>) -> Result<()> {
-        tx.conn().execute(
+        tx.conn().execute_cached(
             r#"DELETE FROM "webhooks" WHERE "webhooks"."id" = ?"#,
             [self.id],
         )?;

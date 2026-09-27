@@ -10,6 +10,7 @@
 
 use std::sync::Arc;
 
+use campfire_db::CachedStatements;
 use campfire_kit::{Ctx, Error, ExpiresIn, Freshness, Response, Result, SendOptions, StatusCode, halt, http::header};
 use campfire_storage::file_server::{self, BodyPart};
 use campfire_storage::{Blob, Filename, Json, Storage, Variation, content_types, disk, paths};
@@ -418,11 +419,11 @@ pub async fn purge(app: &App, blob_id: i64) -> anyhow::Result<()> {
             let variant_records: Vec<i64> = query_ids(conn, "SELECT id FROM active_storage_variant_records WHERE blob_id = ?1", blob_id)?;
             for record_id in variant_records {
                 dependents.extend(destroy_attachment(conn, "ActiveStorage::VariantRecord", record_id, "image")?);
-                conn.execute("DELETE FROM active_storage_variant_records WHERE id = ?1", [record_id])?;
+                conn.execute_cached("DELETE FROM active_storage_variant_records WHERE id = ?1", [record_id])?;
             }
             // has_one_attached :preview_image (dependent: :destroy on the attachment)
             dependents.extend(destroy_attachment(conn, "ActiveStorage::Blob", blob_id, "preview_image")?);
-            conn.execute("DELETE FROM active_storage_blobs WHERE id = ?1", [blob_id])?;
+            conn.execute_cached("DELETE FROM active_storage_blobs WHERE id = ?1", [blob_id])?;
             // after_destroy_commit :purge_dependent_blob_later
             for dependent in &dependents {
                 tx.emit_after_commit(campfire_db::Event::PurgeBlob { blob_id: *dependent });
@@ -444,7 +445,7 @@ async fn delete_files(storage: Arc<Storage>, blob: Blob) -> anyhow::Result<()> {
 /// Deletes the attachment row, returning its blob id.
 fn destroy_attachment(conn: &rusqlite::Connection, record_type: &str, record_id: i64, name: &str) -> campfire_db::Result<Option<i64>> {
     let attachment: Option<(i64, i64)> = conn
-        .query_row(
+        .query_row_cached(
             "SELECT id, blob_id FROM active_storage_attachments WHERE record_type = ?1 AND record_id = ?2 AND name = ?3 LIMIT 1",
             params![record_type, record_id, name],
             |row| Ok((row.get(0)?, row.get(1)?)),
@@ -452,12 +453,12 @@ fn destroy_attachment(conn: &rusqlite::Connection, record_type: &str, record_id:
         .map(Some)
         .or_else(|error| if error == rusqlite::Error::QueryReturnedNoRows { Ok(None) } else { Err(error) })?;
     let Some((id, blob_id)) = attachment else { return Ok(None) };
-    conn.execute("DELETE FROM active_storage_attachments WHERE id = ?1", [id])?;
+    conn.execute_cached("DELETE FROM active_storage_attachments WHERE id = ?1", [id])?;
     Ok(Some(blob_id))
 }
 
 fn query_ids(conn: &rusqlite::Connection, sql: &str, id: i64) -> campfire_db::Result<Vec<i64>> {
-    let mut statement = conn.prepare(sql)?;
+    let mut statement = conn.prepare_cached(sql)?;
     let ids = statement.query_map([id], |row| row.get(0))?.collect::<rusqlite::Result<Vec<i64>>>()?;
     Ok(ids)
 }

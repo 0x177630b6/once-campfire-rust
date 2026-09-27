@@ -325,6 +325,9 @@ impl Database {
     }
 }
 
+/// Prepared statements each connection keeps.
+const STATEMENT_CACHE_CAPACITY: usize = 256;
+
 /// SQLite's default `wal_autocheckpoint`, which Rails keeps: a checkpoint per 1,000 WAL pages.
 const AUTOCHECKPOINT_PAGES: i32 = 1000;
 
@@ -396,6 +399,8 @@ fn open_connection(path: &Path, reader: bool) -> Result<Connection> {
         | OpenFlags::SQLITE_OPEN_NO_MUTEX
         | OpenFlags::SQLITE_OPEN_URI;
     let conn = Connection::open_with_flags(path, flags)?;
+    // rusqlite's default of 16 is fewer statements than a page like the room show runs.
+    conn.set_prepared_statement_cache_capacity(STATEMENT_CACHE_CAPACITY);
     schema::configure_connection(&conn)?;
     if reader {
         conn.pragma_update(None, "query_only", true)?;

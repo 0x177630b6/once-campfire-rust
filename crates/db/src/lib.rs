@@ -17,6 +17,8 @@ pub mod time;
 
 mod sql;
 
+pub use sql::CachedStatements;
+
 pub use database::{Config, Database, Env, Tx, run_write};
 pub use error::{Error, Errors, Result};
 pub use events::{Event, EventSink, NullSink, RecordingSink};

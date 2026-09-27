@@ -2,6 +2,25 @@ use rusqlite::{Connection, Params, Row};
 
 use crate::error::Result;
 
+/// `Connection::execute` and `Connection::query_row` through the connection's statement cache,
+/// so a query is compiled once per connection rather than on every call (Active Record keeps a
+/// prepared-statement cache per connection too).
+pub trait CachedStatements {
+    fn execute_cached(&self, sql: &str, params: impl Params) -> rusqlite::Result<usize>;
+
+    fn query_row_cached<T>(&self, sql: &str, params: impl Params, map: impl FnOnce(&Row<'_>) -> rusqlite::Result<T>) -> rusqlite::Result<T>;
+}
+
+impl CachedStatements for Connection {
+    fn execute_cached(&self, sql: &str, params: impl Params) -> rusqlite::Result<usize> {
+        self.prepare_cached(sql)?.execute(params)
+    }
+
+    fn query_row_cached<T>(&self, sql: &str, params: impl Params, map: impl FnOnce(&Row<'_>) -> rusqlite::Result<T>) -> rusqlite::Result<T> {
+        self.prepare_cached(sql)?.query_row(params, map)
+    }
+}
+
 /// `?, ?, ?`
 pub fn placeholders(n: usize) -> String {
     vec!["?"; n].join(", ")
