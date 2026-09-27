@@ -235,7 +235,12 @@ pub fn run() -> anyhow::Result<()> {
     let config = Config::from_env()?;
     init_logging(&config);
     match command.as_deref() {
-        None | Some("server") => tokio::runtime::Runtime::new()?.block_on(serve(config)),
+        None | Some("server") => {
+            if let Some(limit) = campfire_kit::server::raise_open_file_limit() {
+                tracing::info!(limit, "open files");
+            }
+            tokio::runtime::Runtime::new()?.block_on(serve(config))
+        }
         Some("backup") => backup(&config),
         Some("-h" | "--help") => {
             println!("{USAGE}");
