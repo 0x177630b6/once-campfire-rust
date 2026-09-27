@@ -125,6 +125,8 @@ the app.
 | App process, 1,000 idle cable clients (Pss) | 459 MB | 154 MB | **3.0×** |
 | App process, 1,000 cable clients under load (Pss) | 836 MB | 319 MB | **2.6×** |
 | Whole container, 1,000 cable clients under load | 1,188 MB | 319 MB | **3.7×** |
+| Image size, unpacked | 933 MB | 169 MB | **5.5×** |
+| Image size, compressed download | 359 MB | 67 MB | **5.4×** |
 
 These memory figures come from a build whose fragment cache was capped by entry count rather than
 bytes, so a write-heavy run could grow it past 1 GB. It's now bounded by bytes, like Rails'
@@ -201,6 +203,15 @@ docker run -d -p 80:80 -p 443:443 \
 - **Plain HTTP:** set `DISABLE_SSL` instead, for running behind another proxy.
 - **Storage:** everything lives under `/rails/storage`: the SQLite database, uploaded files and
   backups.
+- **Media:** the image builds libvips 8.16.1 (thumbnails and other variants) and ffmpeg 7.1.5
+  (video posters, and ffprobe for video and audio metadata) from the Debian trixie source packages
+  the Rails image installs, with the same flags and libraries, so thumbnails and posters are byte
+  for byte the ones Rails makes. Only what Campfire can reach goes in: libvips loads PNG, GIF,
+  JPEG, TIFF, WebP, AVIF and HEIC/HEIF (with EXIF orientation and ICC profiles) and saves PNG,
+  JPEG, GIF and WebP; ffmpeg keeps every built-in demuxer and decoder plus dav1d for AV1, and
+  drops encoders, hardware, network and external codec libraries. That took the image from
+  640 MB to 169 MB unpacked, and from 246 MB to 67 MB to download (see the
+  [`Dockerfile`](Dockerfile)).
 - **ONCE hooks:** `/hooks/pre-backup` runs `campfire backup`, which uses SQLite's online backup API.
 - **Other options:** see `crates/campfire/src/config.rs`.
 
@@ -249,6 +260,15 @@ Deliberate:
   schema if it's missing (a one-time 49 ms for 236k messages). Rails' schema pages a room's messages
   through `index_messages_on_room_id` alone, which sorts the room's whole history for every page.
   The index is additive, so the database still works with the Rails image.
+- **Leaner libvips and ffmpeg.** The image builds both from the same Debian sources as the Rails
+  image, leaving out what Campfire can't reach (see [Running it](#running-it)). Thumbnails, video
+  posters and metadata come out byte for byte the same for every image and video format either
+  image handles. libvips loses only loaders that `Vips.block_untrusted` already blocks
+  (ImageMagick, SVG, PDF, JPEG XL, JPEG 2000, OpenEXR, FITS, Matlab, OpenSlide). ffmpeg loses the
+  decoders and demuxers that come from external libraries with no built-in equivalent: tracker
+  modules (libopenmpt), game-console music (libgme), JPEG XL and SVG frames, codec2 speech,
+  teletext subtitles, and DASH/IMF manifests. Tracker modules and game-console music attached to
+  a message are now stored without duration or bit rate, which Campfire never shows.
 
 Not fully covered:
 
