@@ -3,7 +3,27 @@
 //! (`default_transaction_mode: immediate` in `reference/config/database.yml`), then its
 //! after-commit work runs in order, outside the transaction, the way Active Record runs
 //! `after_commit` callbacks.
+//!
+//! WAL checkpoints run on a checkpointer thread with a connection of its own, not on the writer.
+//! Rails keeps SQLite's auto-checkpoint: once a commit leaves the WAL at 1,000 pages or more,
+//! that commit checkpoints (PASSIVE) before returning, fsyncing the WAL and then the database
+//! (with the WAL header's fsync when the next write restarts the WAL, ~12 ms here, every ~64
+//! message posts), and every write queued behind it waits. Here the writer's commits only note
+//! the WAL's size, and every 1,000 pages it grows wake the checkpointer, which runs the same
+//! PASSIVE checkpoint while writes carry on appending to the WAL.
+//!
+//! Durability is the same as Rails': `journal_mode=wal` with `synchronous=normal`, so a commit
+//! doesn't fsync, and what was committed since the WAL was last synced can be lost to a power
+//! failure (never to a crash of the process); every checkpoint syncs the WAL, and one runs for
+//! every 1,000 pages written, as in Rails.
+//!
+//! The trade-off is WAL size. SQLite only restarts the WAL from its beginning once a checkpoint
+//! has caught up with it entirely, which a background checkpoint never does while writes keep
+//! coming. So the WAL grows past 1,000 pages under sustained writes (it restarts in the first
+//! lull), and at [`WAL_LIMIT_PAGES`] (~40 MB) the writer checkpoints it itself with RESTART,
+//! stalling writes as Rails' commits do, but once per 10,000 pages instead of per 1,000.
 
+use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
 
@@ -210,6 +230,9 @@ impl Database {
         if config.prepare {
             schema::prepare(&mut conn, &config.environment, &*env.clock)?;
         }
+        let mut checkpoints = Checkpoints::spawn(&config.path)?;
+        // In place of the auto-checkpoint, which is itself a WAL hook (`sqlite3_wal_autocheckpoint`).
+        conn.wal_hook(Some(note_wal_size));
 
         let (sender, mut receiver) = mpsc::channel::<Job>(config.write_queue.max(1));
         let writer_env = env.clone();
@@ -223,6 +246,11 @@ impl Database {
                     }));
                     if outcome.is_err() && !conn.is_autocommit() {
                         let _ = conn.execute_batch("ROLLBACK TRANSACTION");
+                    }
+                    match WAL_PAGES.replace(0) {
+                        0 => {}
+                        pages if pages >= WAL_LIMIT_PAGES => restart_wal(&conn),
+                        pages => checkpoints.wal_grew_to(pages),
                     }
                 }
             })
@@ -297,6 +325,71 @@ impl Database {
     }
 }
 
+/// SQLite's default `wal_autocheckpoint`, which Rails keeps: a checkpoint per 1,000 WAL pages.
+const AUTOCHECKPOINT_PAGES: i32 = 1000;
+
+/// The WAL size at which the writer checkpoints and restarts the WAL itself, because writes never
+/// paused long enough for a background checkpoint to catch up. Below `journal_size_limit`.
+const WAL_LIMIT_PAGES: i32 = 10_000;
+
+thread_local! {
+    /// The WAL's size in pages after the writer thread's latest commit.
+    static WAL_PAGES: Cell<i32> = const { Cell::new(0) };
+}
+
+/// The writer connection's WAL hook: runs on the writer thread after each commit.
+fn note_wal_size(_: &rusqlite::hooks::Wal, pages: std::os::raw::c_int) -> rusqlite::Result<()> {
+    WAL_PAGES.set(pages);
+    Ok(())
+}
+
+/// The writer's side of the checkpointer thread, which runs a PASSIVE checkpoint on its own
+/// connection each time it's woken. It stops with the writer (the sender's owner).
+struct Checkpoints {
+    wake: std::sync::mpsc::SyncSender<()>,
+    /// The WAL's size in pages when the checkpointer was last woken.
+    woken_at: i32,
+}
+
+impl Checkpoints {
+    fn spawn(path: &Path) -> Result<Self> {
+        let conn = open_connection(path, false)?;
+        let (wake, woken) = std::sync::mpsc::sync_channel::<()>(1);
+        std::thread::Builder::new()
+            .name("campfire-db-checkpointer".into())
+            .spawn(move || {
+                while woken.recv().is_ok() {
+                    checkpoint(&conn, "PASSIVE");
+                }
+            })
+            .map_err(|e| Error::Other(e.to_string()))?;
+        Ok(Self { wake, woken_at: 0 })
+    }
+
+    /// Wakes the checkpointer for every [`AUTOCHECKPOINT_PAGES`] the WAL grows.
+    fn wal_grew_to(&mut self, pages: i32) {
+        if pages < self.woken_at {
+            self.woken_at = 0; // the WAL restarted
+        }
+        // While a checkpoint is still due (the channel is full), the next commit tries again.
+        if pages - self.woken_at >= AUTOCHECKPOINT_PAGES && self.wake.try_send(()).is_ok() {
+            self.woken_at = pages;
+        }
+    }
+}
+
+/// A RESTART checkpoint on the writer connection, between writes: it copies what the
+/// checkpointer hasn't, and waits for readers so that the next write restarts the WAL.
+fn restart_wal(conn: &Connection) {
+    checkpoint(conn, "RESTART");
+}
+
+fn checkpoint(conn: &Connection, mode: &str) {
+    if let Err(error) = conn.query_row(&format!("PRAGMA wal_checkpoint({mode})"), [], |_| Ok(())) {
+        tracing::warn!(%error, mode, "WAL checkpoint failed");
+    }
+}
+
 fn open_connection(path: &Path, reader: bool) -> Result<Connection> {
     let flags = OpenFlags::SQLITE_OPEN_READ_WRITE
         | OpenFlags::SQLITE_OPEN_CREATE
@@ -337,5 +430,64 @@ impl ReaderPool {
         self.idle.lock().unwrap().push(conn);
         self.available.notify_one();
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn main_file_len(path: &Path) -> u64 {
+        std::fs::metadata(path).unwrap().len()
+    }
+
+    /// Commits never checkpoint on the writer: the WAL reaching the auto-checkpoint threshold
+    /// wakes the checkpointer, which copies it into the database file on its own.
+    #[test]
+    fn the_checkpointer_copies_the_wal_into_the_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.sqlite3");
+        let mut config = Config::new(&path);
+        config.readers = 1;
+        let db = Database::open(config, Env::default()).unwrap();
+        db.write_blocking(|tx| Ok(tx.conn().execute_batch("CREATE TABLE filler (data BLOB)")?)).unwrap();
+        let before = main_file_len(&path);
+
+        // ~1,200 pages of 4 KiB, over a few commits.
+        for _ in 0..6 {
+            db.write_blocking(|tx| {
+                Ok(tx.conn().execute_batch("WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 200) INSERT INTO filler SELECT randomblob(3900) FROM n")?)
+            })
+            .unwrap();
+        }
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while main_file_len(&path) < before + 1000 * 4096 {
+            assert!(std::time::Instant::now() < deadline, "the WAL was never checkpointed");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    /// Writes that never pause still get the WAL restarted, at WAL_LIMIT_PAGES.
+    #[test]
+    fn the_wal_stays_bounded_under_sustained_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.sqlite3");
+        let mut config = Config::new(&path);
+        config.readers = 1;
+        let db = Database::open(config, Env::default()).unwrap();
+        db.write_blocking(|tx| Ok(tx.conn().execute_batch("CREATE TABLE filler (data BLOB)")?)).unwrap();
+
+        // ~25,000 pages, 500 per commit.
+        for _ in 0..50 {
+            db.write_blocking(|tx| {
+                Ok(tx.conn().execute_batch(
+                    "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 500) INSERT INTO filler SELECT randomblob(3900) FROM n",
+                )?)
+            })
+            .unwrap();
+        }
+        let wal = std::fs::metadata(path.with_extension("sqlite3-wal")).unwrap().len();
+        assert!(wal < (WAL_LIMIT_PAGES as u64 + 1000) * 4200, "WAL of {wal} bytes");
     }
 }
