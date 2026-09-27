@@ -88,7 +88,7 @@ pub(crate) async fn destroy_boost(c: &Ctx, message: &Message, boost: Boost) -> R
 /// `broadcast_create`: `messages/boosts/_boost` appended to the message's boosts.
 pub(crate) async fn broadcast_create(c: &Ctx, message: &Message, boost: &Boost) -> Result<()> {
     let (app, message, boost) = (c.app().clone(), message.clone(), boost.clone());
-    let base_url = c.url_for("");
+    let base_url = page::renderer_base_url(c);
     c.app()
         .db
         .read(move |conn| {

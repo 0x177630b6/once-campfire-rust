@@ -39,7 +39,7 @@ pub async fn update(c: &mut Ctx) -> Result {
 
     // broadcast_visibility_changes
     let app = c.app().clone();
-    let base_url = c.url_for("");
+    let base_url = page::renderer_base_url(c);
     let broadcast_room = room.clone();
     let shared_room = c
         .app()

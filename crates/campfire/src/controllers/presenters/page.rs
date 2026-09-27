@@ -78,8 +78,17 @@ pub fn render_detached<T>(app: &App, account: Option<&Account>, render: impl FnO
     render_detached_at(app, account, "http://example.org", render)
 }
 
+/// The base of the URLs in a [`render_detached_at`] during a request. `SetCurrentRequest`'s
+/// `default_url_options` only carries `request.host` and `request.protocol`, so the port comes
+/// from the renderer's own env (`example.org:80`) and never shows: a request to
+/// `http://localhost:3999` broadcasts `http://localhost/...` links
+/// (`reference/app/controllers/concerns/set_current_request.rb`).
+pub fn renderer_base_url(c: &Ctx) -> String {
+    format!("{}{}", c.request.protocol(), c.request.host())
+}
+
 /// [`render_detached`] during a request: URLs get the request's host through
-/// `default_url_options` (`SetCurrentRequest`).
+/// `default_url_options` (`SetCurrentRequest`), see [`renderer_base_url`].
 pub fn render_detached_at<T>(app: &App, account: Option<&Account>, base_url: &str, render: impl FnOnce(&ViewContext) -> T) -> T {
     let no_token = |_: &str, _: &str| String::new();
     let asset_path = |path: &str| campfire_assets::asset_path(path);

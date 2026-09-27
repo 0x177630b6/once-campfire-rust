@@ -166,7 +166,7 @@ pub(crate) fn existing_user_ids(conn: &campfire_db::Connection, ids: &[i64]) -> 
 /// Renders `users/sidebars/rooms/_shared` for `room` outside a request.
 pub(crate) async fn render_shared_room(c: &Ctx, room: &Room) -> Result<Rendered> {
     let app = c.app().clone();
-    let base_url = c.url_for("");
+    let base_url = page::renderer_base_url(c);
     let room = room.clone();
     let html = c
         .app()

@@ -379,7 +379,7 @@ pub(crate) async fn destroy_message(c: &Ctx, room: &Room, message: &Message) -> 
 /// `@message.broadcast_create`: the message partial appended to the room, then the unread pings.
 pub(crate) async fn broadcast_create(c: &Ctx, room: &Room, message: &Message) -> Result<()> {
     let (app, room, message) = (c.app().clone(), room.clone(), message.clone());
-    let base_url = c.url_for("");
+    let base_url = page::renderer_base_url(c);
     c.app()
         .db
         .read(move |conn| {
@@ -398,7 +398,7 @@ pub(crate) async fn broadcast_create(c: &Ctx, room: &Room, message: &Message) ->
 /// "messages/presentation", attributes: { maintain_scroll: true }`
 pub(crate) async fn broadcast_replace(c: &Ctx, room: &Room, message: &Message) -> Result<()> {
     let (app, room, message) = (c.app().clone(), room.clone(), message.clone());
-    let base_url = c.url_for("");
+    let base_url = page::renderer_base_url(c);
     c.app()
         .db
         .read(move |conn| {
