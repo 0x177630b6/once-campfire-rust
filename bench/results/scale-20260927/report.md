@@ -1,3 +1,6 @@
+The Rust image benchmarked here is `main` at `898653e` (tagged `campfire-rust:bench-898653e`,
+built before this run); `rust HEAD` below is the checkout `bench/run` ran from, not the image.
+
 ```
 date: 2026-09-27T23:02:08+02:00
 host: 7.2.5-4-omarchy, AMD RYZEN AI MAX+ 395 w/ Radeon 8060S, 32 threads, 30GB
