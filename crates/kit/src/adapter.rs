@@ -15,6 +15,7 @@ use axum::http::header::{self, HeaderValue};
 use axum::http::{Method, StatusCode};
 use axum::middleware::Next;
 use axum::routing::MethodRouter;
+use futures_util::FutureExt;
 
 use crate::app::Kit;
 use crate::body::{self, ParsedBody};
@@ -137,10 +138,21 @@ where
         Some(error) => Err(error),
         None => {
             let future: Pin<Box<dyn Future<Output = Result<Response>> + Send + '_>> = Box::pin(action.call(&mut ctx));
-            future.await
+            // A panicking action is an exception like any other: Rails' `ShowExceptions` answers
+            // 500 with `public/500.html`, where an unwinding handler would drop the connection.
+            std::panic::AssertUnwindSafe(future).catch_unwind().await.unwrap_or_else(|panic| Err(panic_error(panic)))
         }
     };
     into_axum(ctx.finish(result), head).await
+}
+
+fn panic_error(panic: Box<dyn std::any::Any + Send>) -> Error {
+    let message = panic
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| panic.downcast_ref::<&str>().copied())
+        .unwrap_or("panic");
+    Error::internal(anyhow::anyhow!("action panicked: {message}"))
 }
 
 fn clone_error(error: &Error) -> Error {
