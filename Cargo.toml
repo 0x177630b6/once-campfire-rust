@@ -53,6 +53,7 @@ libc         = "0.2"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 tokio-tungstenite = "0.29"
 crc32fast    = "1"
+memchr       = "2"
 tempfile     = "3"
 md-5         = "0.10"
 multer       = "3"

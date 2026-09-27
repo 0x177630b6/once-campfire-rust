@@ -16,6 +16,8 @@ pub struct Response {
     pub status: StatusCode,
     pub headers: HeaderMap,
     pub body: Body,
+    /// Cached fragments in the body, for the deflater to splice in precompressed.
+    pub cached_fragments: Vec<std::sync::Arc<String>>,
 }
 
 pub enum Body {
@@ -47,11 +49,17 @@ pub struct FileBody {
 
 impl Response {
     pub fn new(status: StatusCode) -> Self {
-        Self { status, headers: HeaderMap::new(), body: Body::Empty }
+        Self { status, headers: HeaderMap::new(), body: Body::Empty, cached_fragments: Vec::new() }
     }
 
     pub fn with_body(status: StatusCode, content_type: &str, body: impl Into<Bytes>) -> Self {
         Self::new(status).content_type(content_type).body(body)
+    }
+
+    /// Marks `fragments` (cached HTML, in body order) as appearing in the body as they are.
+    pub fn with_cached_fragments(mut self, fragments: Vec<std::sync::Arc<String>>) -> Self {
+        self.cached_fragments = fragments;
+        self
     }
 
     pub fn body(mut self, body: impl Into<Bytes>) -> Self {
