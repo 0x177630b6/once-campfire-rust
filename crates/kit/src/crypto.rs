@@ -1,7 +1,7 @@
-//! The signing, encryption and CSRF-token math the HTTP layer needs, behind a trait.
+//! The cookie signing and encryption the HTTP layer needs, behind a trait.
 //!
 //! Production uses [`RailsCrypto`], which calls into `rails_compat` (verified against golden
-//! vectors from the reference app). Tests use [`crate::testing::TestCrypto`], a transparent,
+//! vectors from the reference app). Tests use `testing::TestCrypto`, a transparent,
 //! insecure stand-in with the same shape, so this crate can be exercised independently of the
 //! vectors.
 

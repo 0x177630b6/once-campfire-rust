@@ -65,6 +65,16 @@ impl Shutdown {
         Self { closing, active: Arc::new((AtomicUsize::new(0), Notify::new())) }
     }
 
+    /// Closes when `signal` resolves.
+    pub fn when(signal: impl Future<Output = ()> + Send + 'static) -> Self {
+        let (closing_tx, closing_rx) = watch::channel(false);
+        tokio::spawn(async move {
+            signal.await;
+            let _ = closing_tx.send(true);
+        });
+        Self::new(closing_rx)
+    }
+
     pub fn is_closing(&self) -> bool {
         *self.closing.borrow()
     }
@@ -216,12 +226,13 @@ where
     }
 }
 
-/// The `Date` Go's `http.Server` writes. Go reads the wall clock through the vDSO, never through
-/// libc, so a libfaketime-frozen clock (the parity harness runs the app under one) doesn't reach
-/// Thruster's `Date`: it stays the real time while Rails' clock is frozen. `std::time::SystemTime`
-/// goes through libc, so the real time is read with the raw system call here. (A frozen `Date`
-/// makes every asset stale on arrival — its age is the whole freeze — so browsers revalidate
-/// assets Thruster lets them keep.)
+/// The `Date` Go's `http.Server` writes, on the real clock.
+///
+/// The raw system call is only for the parity harness (`parity/docker/entrypoint`), which runs the
+/// app under libfaketime to freeze its clock. libfaketime intercepts libc's `clock_gettime`, which
+/// `std::time::SystemTime` uses; Thruster's Go reads the clock without libc, so its `Date` stayed
+/// real, and a frozen one would make every asset stale on arrival in the harness's browsers.
+/// Without libfaketime the two clocks are the same.
 fn http_date() -> HeaderValue {
     let printer = jiff::fmt::rfc2822::DateTimePrinter::new();
     let date = printer.timestamp_to_rfc9110_string(&wall_clock()).unwrap_or_default();

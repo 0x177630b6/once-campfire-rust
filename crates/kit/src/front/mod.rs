@@ -33,7 +33,6 @@ use std::time::Duration;
 use axum::Router;
 use axum::body::Body;
 use axum::extract::ConnectInfo;
-use tokio::sync::watch;
 use tower::ServiceExt;
 
 pub use acme::{AcmeOptions, CertManager};
@@ -56,12 +55,7 @@ pub async fn serve_with(
     acme: Option<AcmeOptions>,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> std::io::Result<()> {
-    let (closing_tx, closing_rx) = watch::channel(false);
-    let shutdown_state = Shutdown::new(closing_rx);
-    tokio::spawn(async move {
-        shutdown.await;
-        let _ = closing_tx.send(true);
-    });
+    let shutdown_state = Shutdown::when(shutdown);
 
     let options = Options {
         idle_timeout: nonzero(config.http_idle_timeout),
@@ -125,7 +119,7 @@ fn limited_app_service(app: Router, max_request_body: u64) -> Service {
         Box::pin(async move {
             match handler::within_limit(request, max_request_body).await {
                 Ok(request) => app(request, conn).await,
-                Err(too_large) => too_large,
+                Err(()) => handler::too_large(),
             }
         })
     })

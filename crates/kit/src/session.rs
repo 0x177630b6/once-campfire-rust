@@ -144,8 +144,7 @@ impl Session {
 
 /// `ActionDispatch::Session::Compatibility#generate_sid`: `SecureRandom.hex(16)`.
 pub fn generate_sid() -> String {
-    let bytes: [u8; 16] = rand::random();
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    hex::encode(rand::random::<[u8; 16]>())
 }
 
 /// `ActionDispatch::Flash::FlashHash`, stored in the session under `"flash"` as

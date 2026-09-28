@@ -135,10 +135,7 @@ impl Handler {
     /// `http.MaxBytesHandler` enforces (an oversized body never reaches the app and gets an empty
     /// 413), the `X-Forwarded-*` headers `httputil.ReverseProxy` sets, then the app.
     async fn proxy(&self, request: Request<Body>, conn: ConnInfo) -> Response<Body> {
-        let mut request = match within_limit(request, self.max_request_body).await {
-            Ok(request) => request,
-            Err(too_large) => return too_large,
-        };
+        let Ok(mut request) = within_limit(request, self.max_request_body).await else { return too_large() };
         as_proxied_http1(&mut request);
         set_forwarded_headers(&mut request, &conn, self.forward_headers);
         request.extensions_mut().insert(ConnectInfo(conn.remote));
@@ -308,16 +305,16 @@ fn set_forwarded_headers(request: &mut Request<Body>, conn: &ConnInfo, forward_h
     }
 }
 
-/// MAX_REQUEST_BODY (0 for none): the request, or the empty 413 for one over the limit.
-pub(super) async fn within_limit(request: Request<Body>, limit: u64) -> Result<Request<Body>, Response<Body>> {
-    if limit == 0 {
-        return Ok(request);
-    }
-    limit_body(request, limit).await.map_err(|()| {
-        let mut response = Response::new(Body::empty());
-        *response.status_mut() = StatusCode::PAYLOAD_TOO_LARGE;
-        response
-    })
+/// MAX_REQUEST_BODY, 0 for none.
+pub(super) async fn within_limit(request: Request<Body>, limit: u64) -> Result<Request<Body>, ()> {
+    if limit == 0 { Ok(request) } else { limit_body(request, limit).await }
+}
+
+/// The empty 413 for a body over MAX_REQUEST_BODY.
+pub(super) fn too_large() -> Response<Body> {
+    let mut response = Response::new(Body::empty());
+    *response.status_mut() = StatusCode::PAYLOAD_TOO_LARGE;
+    response
 }
 
 /// `http.MaxBytesHandler`: a body over the limit fails the proxied request with 413 before the
