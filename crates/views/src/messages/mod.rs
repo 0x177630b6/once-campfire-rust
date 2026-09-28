@@ -180,13 +180,15 @@ impl MessageItem {
         }
     }
 
-    /// The cached fragments among `items`, in order: they go into the page as they are.
-    pub fn cached_fragments(items: &[MessageItem]) -> Vec<fragment_cache::Fragment> {
+    /// The cached fragments of a rendered page's `items`, in order, including those this render
+    /// just stored in `cache`: they're in the page as they are. Call it after rendering, so the
+    /// page's parts (and its ETag) don't depend on which messages happened to be cached before.
+    pub fn cached_fragments(cache: &fragment_cache::FragmentCache, items: &[MessageItem]) -> Vec<fragment_cache::Fragment> {
         items
             .iter()
             .filter_map(|item| match item {
                 MessageItem::Fragment { html, .. } => Some(html.clone()),
-                MessageItem::View(_) => None,
+                MessageItem::View(message) => cache.get(&message_fragment_key(message.id, message.updated_at)),
             })
             .collect()
     }

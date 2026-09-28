@@ -465,6 +465,11 @@ async fn session_cookie_is_written_only_when_the_session_changes() {
     assert_eq!(id.len(), 32);
     let noop = send(&app, get("/noop").header(header::COOKIE, &cookie).body(AxumBody::empty()).unwrap()).await;
     assert!(noop.cookies().is_empty());
+    let same = form_post("/session", "value=%2Frooms%2F1");
+    let (mut parts, body) = same.into_parts();
+    parts.headers.insert(header::COOKIE, cookie.parse().unwrap());
+    let same = send(&app, HttpRequest::from_parts(parts, body)).await;
+    assert!(same.cookies().is_empty(), "writing the value it already holds changes nothing");
     let again = send(&app, get("/session").header(header::COOKIE, &cookie).body(AxumBody::empty()).unwrap()).await;
     assert_eq!(again.json()["id"], id.as_str());
 

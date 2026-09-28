@@ -97,8 +97,12 @@ impl Session {
 
     pub fn insert(&mut self, key: impl Into<String>, value: impl Into<Value>) {
         self.assert_loaded();
-        self.data.insert(key.into(), value.into());
-        self.changed = true;
+        let value = value.into();
+        let key = key.into();
+        if self.data.get(&key) != Some(&value) {
+            self.data.insert(key, value);
+            self.changed = true;
+        }
     }
 
     pub fn remove(&mut self, key: &str) -> Option<Value> {

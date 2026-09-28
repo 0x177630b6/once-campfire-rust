@@ -214,3 +214,16 @@ async fn the_last_room_cookie_is_set_only_when_it_changes() {
     assert!(!last_room(&david.get(&format!("/rooms/{HQ}")).await), "the same room again");
     assert!(last_room(&david.get(&format!("/rooms/{ALL_TALK}")).await));
 }
+
+#[tokio::test]
+async fn a_room_page_has_the_same_etag_cold_and_warm() {
+    let Some(app) = TestApp::boot().await else { return };
+    let mut david = app.david();
+    let etag = |reply: &Reply| reply.header("etag").map(str::to_string);
+    // The first render stores the page's messages in the fragment cache; the second reads them.
+    let cold = david.get(&format!("/rooms/{HQ}")).await;
+    let warm = david.get(&format!("/rooms/{HQ}")).await;
+    assert_eq!(cold.text(), warm.text());
+    assert!(etag(&cold).is_some());
+    assert_eq!(etag(&cold), etag(&warm));
+}

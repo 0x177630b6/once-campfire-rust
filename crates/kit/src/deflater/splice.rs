@@ -32,6 +32,9 @@ const MAX_GLUE: usize = 256;
 const WINDOW: usize = 32 * 1024;
 /// A bound on remembered fragments (a 32 MB fragment cache holds a few thousand messages).
 const MAX_FRAGMENTS: usize = 8 * 1024;
+/// Pieces kept per fragment, for the predecessors it's seen with: a message follows the same one in
+/// its room and on a page of older messages, and other ones in search results.
+const PIECES_PER_FRAGMENT: usize = 4;
 /// A bound on the bytes of stored text pieces (a room page's layout is ~10 KB compressed).
 const MAX_TEXT_PIECE_BYTES: usize = 16 << 20;
 
@@ -206,7 +209,7 @@ impl PageParts {
             let mut fragments = lock(&FRAGMENTS);
             for (fragment, piece) in new_fragments {
                 if let Some(known) = fragments.get_mut(&fragment_key(&fragment)) {
-                    known.piece = Some(Arc::new(piece));
+                    known.store(piece);
                 }
             }
         }
@@ -275,11 +278,12 @@ fn compress(dictionary: &[u8], text: &[u8]) -> Bytes {
 
 // --- What's remembered -------------------------------------------------------------------------
 
-/// A fragment seen in a page: its SHA-256, and its piece for the predecessor it last followed.
+/// A fragment seen in a page: its SHA-256, and its pieces for the predecessors it's followed, most
+/// recently stored last.
 struct KnownFragment {
     fragment: Weak<String>,
     sha: Sha,
-    piece: Option<Arc<FragmentPiece>>,
+    pieces: Vec<Arc<FragmentPiece>>,
 }
 
 struct FragmentPiece {
@@ -292,7 +296,16 @@ struct FragmentPiece {
 
 impl KnownFragment {
     fn piece_after(&self, before: Before, glue: &[u8]) -> Option<Bytes> {
-        self.piece.as_ref().filter(|piece| piece.before == before && *piece.glue == *glue).map(|piece| piece.deflated.clone())
+        self.pieces.iter().find(|piece| piece.before == before && *piece.glue == *glue).map(|piece| piece.deflated.clone())
+    }
+
+    /// Stores `piece`, dropping the oldest when there are already [`PIECES_PER_FRAGMENT`].
+    fn store(&mut self, piece: FragmentPiece) {
+        self.pieces.retain(|stored| stored.before != piece.before || stored.glue != piece.glue);
+        if self.pieces.len() == PIECES_PER_FRAGMENT {
+            self.pieces.remove(0);
+        }
+        self.pieces.push(Arc::new(piece));
     }
 }
 
@@ -361,7 +374,7 @@ fn fragment_shas<'a>(fragments: impl Iterator<Item = &'a Arc<String>> + Clone) -
                 .or_insert_with(|| KnownFragment {
                     fragment: Arc::downgrade(fragment),
                     sha: Sha256::digest(fragment.as_bytes()).into(),
-                    piece: None,
+                    pieces: Vec::new(),
                 })
                 .sha
         })
@@ -406,9 +419,9 @@ mod tests {
         assert_eq!(gunzip(&gz), body.as_bytes());
         assert_eq!(&gz[4..8], &1234u32.to_le_bytes());
         assert_eq!(gz[9], 3);
-        let piece = lock(&FRAGMENTS)[&fragment_key(&messages[5])].piece.clone().unwrap();
+        let piece = lock(&FRAGMENTS)[&fragment_key(&messages[5])].pieces[0].clone();
         assert_eq!(PageParts::new(body.as_bytes(), &messages).unwrap().gzip(body.as_bytes(), 1234), gz, "the same page is the same stored pieces");
-        assert!(Arc::ptr_eq(&piece, lock(&FRAGMENTS)[&fragment_key(&messages[5])].piece.as_ref().unwrap()));
+        assert!(Arc::ptr_eq(&piece, &lock(&FRAGMENTS)[&fragment_key(&messages[5])].pieces[0]));
     }
 
     #[test]
@@ -445,6 +458,25 @@ mod tests {
         for _ in 0..2 {
             assert_eq!(gunzip(&gzip(&body, &listed)), body.as_bytes());
         }
+    }
+
+    #[test]
+    fn a_fragment_keeps_a_piece_for_each_predecessor() {
+        let messages: Vec<_> = (600..606).map(message).collect();
+        let room = page("<p>", &messages, "</p>");
+        // The same last message after a different one, as in search results.
+        let search_hits = vec![messages[1].clone(), messages[5].clone()];
+        let search = page("<q>", &search_hits, "</q>");
+        for body in [&room, &search] {
+            gzip(body, if std::ptr::eq(body, &room) { &messages } else { &search_hits });
+        }
+        let pieces = |fragment: &Arc<String>| lock(&FRAGMENTS)[&fragment_key(fragment)].pieces.clone();
+        let before = pieces(&messages[5]);
+        assert_eq!(before.len(), 2, "one after message 604, one after 601");
+        gzip(&room, &messages);
+        gzip(&search, &search_hits);
+        let after = pieces(&messages[5]);
+        assert!(before.iter().zip(&after).all(|(a, b)| Arc::ptr_eq(a, b)), "both pages reuse theirs");
     }
 
     #[test]
