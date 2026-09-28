@@ -22,14 +22,14 @@ protocol recordings all come from running the real Rails app.
 
 | Crate | What it replaces |
 |---|---|
-| `rails_compat` | Rails' signed and encrypted cookies, CSRF tokens, signed IDs, signed global IDs, Turbo stream names and bcrypt, byte-compatible with Rails so sessions carry over |
-| `kit` | Rack, Action Dispatch and Thruster, on Axum: Rails-style nested params, sessions, flash, format negotiation, `Rack::ETag`, `Rack::Deflater`, plus an in-process front server with TLS and ACME, HTTP/2 and Thruster's response cache |
+| `rails_compat` | Rails' signed and encrypted cookies, signed IDs, signed global IDs, Turbo stream names and bcrypt, byte-compatible with Rails so sessions carry over |
+| `kit` | Rack, Action Dispatch and Thruster, on Axum: Rails-style nested params, sessions, flash, format negotiation, forgery protection by `Sec-Fetch-Site`, ETags and gzip built from a page's cached parts, plus an in-process front server with TLS and ACME, HTTP/2 and Thruster's response cache |
 | `db` | Active Record over the existing schema (rusqlite), with the same callbacks, timestamps and STI values, and a Rails-compatible fixture loader |
 | `richtext` | The Action Text pipeline: sanitizing, mentions, opengraph embeds and autolinking, byte-identical to Rails on a 647-case corpus |
 | `storage` | Active Storage: the same blob keys, disk layout, variants (libvips) and video previews (ffmpeg), with byte-identical thumbnails |
-| `cable` | The Action Cable protocol server and pub/sub, frame-for-frame with Rails |
+| `cable` | The Action Cable protocol server and pub/sub, frame-for-frame with Rails, on a WebSocket implementation of its own that shares and compresses broadcasts |
 | `assets` | Propshaft and importmap-rails, with identical fingerprinted filenames and tags |
-| `views` | Every ERB template as an Askama template at the same path, DOM-identical |
+| `views` | Every ERB template as an Askama template at the same path, DOM-identical apart from the CSRF tags it no longer needs |
 | `routes` | Path helpers from `config/routes.rb` |
 | `campfire` | Every controller, the channels, the jobs, Web Push, opengraph unfurling, bot webhooks and search |
 
@@ -52,7 +52,7 @@ The plan behind it, including why it uses Axum and why pixel parity is tested th
 - Before any Rust code existed, the harness had to show the Rails app matching itself, so that
   nondeterminism couldn't hide real differences.
 
-Results on the final build:
+Results when the port was finished, before it started to diverge:
 
 | Check | Result |
 |---|---|
@@ -61,7 +61,11 @@ Results on the final build:
 | Response header shape, about 70 request types | 0 differences |
 | Rollback | Rails boots on, reads, searches and edits a database the Rust app wrote |
 
-The only thing masked is the random join code on the first-run screen.
+The only thing masked then was the random join code on the first-run screen. Since the port began
+to diverge, the harness also leaves out the CSRF tags Rails renders and masks the digests of the
+files in `crates/assets/overrides/`; everything else still has to match. The latest full lean gate,
+run on the new WebSocket layer, passed 888/888 in Chromium, Firefox and WebKit, with Action Cable
+frames compressed.
 
 ## Performance
 
@@ -70,8 +74,10 @@ These numbers come from benchmarking `main` at `898653e` (spliced gzip, forgery 
 seed data, the same 4 pinned hardware threads, host networking, a quiet machine, and 3 interleaved
 runs per app. The medians are below; the full tables with spreads are in
 [`bench/results/scale-20260927/report.md`](bench/results/scale-20260927/report.md).
-[Cached page parts](#cached-page-parts) came after this run and make the room page and search
-about 2.9× faster again, so those rows understate the Rust app.
+Two changes came after this run: [cached page parts](#gzip-and-etags-from-cached-page-parts) make the
+room page and search about 2.9× faster again, and [the new WebSocket
+layer](#100000-clients-and-a-raspberry-pi-5) changes the real-time and memory rows, so those rows
+understate the Rust app.
 
 ### Throughput (16 concurrent clients)
 
@@ -150,9 +156,9 @@ raises its own open-file limit, which in Docker would otherwise stop it at 65,53
 ### Where the speed came from
 
 A straight translation was already 3–10× faster than Rails. Profiling (in
-[`plans/perf-attribution.md`](plans/perf-attribution.md)) then showed where the time went, and two
-optimization passes roughly tripled the Rust app's own throughput. Every change had to keep the full
-test suite and the parity gate green.
+[`plans/perf-attribution.md`](plans/perf-attribution.md)) then showed where the time went, and each
+change since has been measured before and after, keeping the test suite and the parity gate green.
+In the order they landed:
 
 | Change | Effect |
 |---|---|
@@ -163,63 +169,52 @@ test suite and the parity gate green.
 | Share cached fragments instead of copying them; build stylesheet tags once per process | 6–20% less CPU per page |
 | Cable: 4 KiB read buffers instead of zero-filling 128 KiB per read; encode each broadcast once and share it across subscribers; batch socket writes | 4.7× less CPU per delivery; half the latency and memory under fan-out |
 | Fat LTO, one codegen unit, jemalloc | A further 5–14% per route |
-| Splice precompressed messages into gzipped pages ([below](#spliced-gzip)) | Room page 2,527 → 5,461 req/s; messages page 3,709 → 16,523 req/s; search 2,123 → 5,526 req/s |
+| Splice precompressed messages into gzipped pages ([below](#gzip-and-etags-from-cached-page-parts)) | Room page 2,527 → 5,461 req/s; messages page 3,709 → 16,523 req/s; search 2,123 → 5,526 req/s |
 | Forgery protection by `Sec-Fetch-Site` instead of CSRF tokens ([Known differences](#known-differences)) | Room page +9%, messages page +6%, search +10%; pages render the same until their content changes, so revalidation gets a 304 |
-| Cache every part of a page, not just its messages, and take the ETag from the parts ([above](#cached-page-parts)) | Room page 2.9×, search 2.8×, messages page 1.3× |
-| Cable: own WebSocket framing with shared, once-compressed frames; connections on their own runtime ([above](#100000-clients-and-a-raspberry-pi-5)) | 100,000 clients in 1.6 GB instead of 5.9 GB while fanning out; a post during a 100,000-client fan-out 637 → 43 ms; frames 10 KB → 2.3 KB on the wire |
 | Index messages by `(room_id, created_at)`; check "more than a page" without counting the room | In a room with 236k messages: room page 95 → 6,051 req/s (64×), messages page 87 → 17,972 req/s (208×). Before, a room page sorted the room's whole history, so rooms slowed as they grew; now a long room serves as fast as a new one |
+| Cache every part of a page, not just its messages, and take the ETag from the parts ([below](#gzip-and-etags-from-cached-page-parts)); send cookies only when they change | Room page 2.9×, search 2.8×, messages page 1.3× |
+| Cable: own WebSocket framing with shared, once-compressed frames; connections on their own runtime ([above](#100000-clients-and-a-raspberry-pi-5)) | 100,000 clients in 1.6 GB instead of 5.9 GB while fanning out; a post during a 100,000-client fan-out 637 → 43 ms; frames 10 KB → 2.3 KB on the wire |
 
-Measured the same way as the preliminary run, the room page went from 4.4× to 10.9× Rails, and cable
-fan-out at 1,000 clients from 4.8× to 19.5×.
+Against Rails, the room page went from 4.4× in the preliminary benchmark to 27× in the latest one,
+before cached page parts made it about 2.9× faster again.
 
-### Spliced gzip
+### gzip and ETags from cached page parts
 
-After those passes, compression was 60–76% of the CPU on large pages. Parity with Rails'
-`Rack::Deflater` requires gzip at level 6 on every response, and a page can't be cached whole
-because each one carries a fresh CSRF token. But most of a room page is cached messages, and those
-bytes are the same on every request.
+Every response is gzipped at level 6, as Rails' `Rack::Deflater` does, and after the passes above
+that was 60–76% of the CPU on large pages. Most of a room page is cached messages, whose bytes are
+the same on every request, so the app stopped compressing them per request, in two steps:
 
-Each cached message is now compressed once and kept. Pages splice those stored pieces into the
-gzip stream and compress only the layout around them live. Compressing each message on its own
-would make a room page 4.4× larger, because consecutive messages share most of their markup.
-Instead, each piece is compressed against the message before it as a preset dictionary. It's reused
-only when that same message, with the same text between them, precedes it again, which is the
-steady state for a room page. The decoded body is byte-identical; only the compressed bytes
-differ, as they already did from Ruby's zlib.
+1. **Spliced gzip.** Each cached message is compressed once and kept, and pages splice the stored
+   pieces into the gzip stream. Compressing each message on its own would make a room page 4.4×
+   larger, because consecutive messages share most of their markup, so each piece is compressed
+   against the message before it as a preset dictionary, and reused only when that same message
+   (with the same text between them) comes before it again: the steady state for a room page. The
+   layout around the messages was still compressed live, because every page carried a fresh CSRF
+   token.
+2. **Cached page parts.** Without CSRF tokens (see [Known differences](#known-differences)), a page
+   renders byte for byte the same until what it shows changes, so the layout can be stored too. A
+   page is now split into parts that cover it end to end: its cached messages and the text between
+   them. Each part is compressed once, against the part before it, and kept under the part's
+   identity (the cached fragment, or the SHA-256 of the text) and its predecessor's; a message keeps
+   pieces for the few predecessors it's seen with (its room, a page of older messages, search
+   results). The ETag comes from the parts' digests instead of a SHA-256 over the whole body.
 
-Measured natively against the previous commit (16 clients, median of 3 alternating runs; details
-in [`bench/results/splice-20260927/report.md`](bench/results/splice-20260927/report.md)):
+For a 466 KB room page, gzip and the ETag took ~1,200 µs per request at first, ~460 µs after
+splicing, and 42 µs now; the first request after a page changes pays ~2 ms, once, to compress its
+new parts. The decoded body is unchanged, and the compressed page is within 1% of compressing it
+whole.
 
-| Route | Before | After | Change | Compressed size |
-|---|---|---|---|---|
-| Room page | 2,527 req/s | 5,461 req/s | **2.16×** | +0.3% |
-| Messages page (`?before=`) | 3,709 req/s | 16,523 req/s | **4.45×** | +0.8% |
-| Search | 2,123 req/s | 5,526 req/s | **2.60×** | +0.9% |
-
-gzip of a 466 KB room page went from 1,032 µs to 271 µs. What remains is the live compression of
-the ~55 KB of layout around the messages. The messages page now serves about as fast as it did with
-compression turned off.
-
-### Cached page parts
-
-Without CSRF tokens (see [Known differences](#known-differences)), a page renders byte for byte the
-same until what it shows changes, so the layout around the messages can be stored too. A page is now
-split into parts that cover it end to end: its cached messages, and the text between them. Each part
-is compressed once, against the part before it, and kept under the part's identity (the cached
-fragment, or the SHA-256 of the text) and its predecessor's. The ETag comes from the same parts'
-digests instead of a SHA-256 over the whole body. For a 466 KB room page, the ETag and gzip went from
-~460 µs to 42 µs; the first request after the page changes pays ~2 ms to compress its new parts.
-
-Measured against the previous commit (details in
-[`bench/results/page-parts-20260927`](bench/results/page-parts-20260927/report.md); the host was
-busy, so these are lower than on a quiet machine):
-
-| Route | Before | After | Change |
+| Route (16 clients) | Before | Spliced gzip | Cached page parts |
 |---|---|---|---|
-| Room page | 5,762 req/s | 16,881 req/s | **2.9×** |
-| Messages page (`?before=`) | 17,087 req/s | 22,580 req/s | **1.3×** |
-| Search | 5,692 req/s | 16,097 req/s | **2.8×** |
-| Sidebar | 15,586 req/s | 17,207 req/s | **1.1×** |
+| Room page | 2,527 req/s | 5,461 req/s | 16,881 req/s |
+| Messages page (`?before=`) | 3,709 req/s | 16,523 req/s | 22,580 req/s |
+| Search | 2,123 req/s | 5,526 req/s | 16,097 req/s |
+
+Each step was measured natively against the commit before it, in its own session, so the columns
+come from different runs (the page-parts run on a busy host, which understates it). Details in
+[`bench/results/splice-20260927`](bench/results/splice-20260927/report.md),
+[`bench/results/header-csrf-20260927`](bench/results/header-csrf-20260927/report.md) and
+[`bench/results/page-parts-20260927`](bench/results/page-parts-20260927/report.md).
 
 ## Running it
 
@@ -247,9 +242,13 @@ docker run -d -p 80:80 -p 443:443 \
   JPEG, TIFF, WebP, AVIF and HEIC/HEIF (with EXIF orientation and ICC profiles) and saves PNG,
   JPEG, GIF and WebP; ffmpeg keeps every built-in demuxer and decoder plus dav1d for AV1, the
   filters that pick and orient a poster frame, and only the MJPEG encoder and `image2` muxer that
-  write it; other encoders and muxers, hardware, network and external codec libraries are left out. That took the image from
-  640 MB to 169 MB unpacked, and from 246 MB to 67 MB to download (see the
-  [`Dockerfile`](Dockerfile)).
+  write it; other encoders and muxers, hardware, network and external codec libraries are left
+  out. That took the image from 640 MB to 169 MB unpacked, and from 246 MB to 67 MB to download
+  (see the [`Dockerfile`](Dockerfile)).
+- **Many clients:** every connected browser is a socket, and the app raises its open-file limit to
+  the hard limit at startup (Docker's default soft limit would stop it at 65,536). Past that, it's
+  memory (~15 KB per client) and bandwidth; see
+  [100,000 clients](#100000-clients-and-a-raspberry-pi-5).
 - **ONCE hooks:** `/hooks/pre-backup` runs `campfire backup`, which uses SQLite's online backup API.
 - **Other options:** see `crates/campfire/src/config.rs`.
 
@@ -269,6 +268,7 @@ parity/bin/candidate compare                               # lean parity gate, R
 parity/bin/compare --matrix full ...                       # full matrix, for release checks
 reference-tools/http_shape/sweep.py <rails-url> <rust-url> # response header shape
 bench/run                                                  # benchmark both apps
+bench/results/pi-100k-20260928/run100k.sh BIN LABEL        # 100,000 cable clients (PI=1: a Pi 5's budget)
 ```
 
 [`parity/SCREENS.md`](parity/SCREENS.md) documents the screen inventory, masks and the flake policy.
@@ -293,10 +293,6 @@ Deliberate:
   working: their tokens are ignored, and the header does the job.
 - **Redis and Resque are gone.** Jobs run in-process and are best-effort: a crash loses queued
   webhooks and pushes, as a Redis restart would under Rails.
-- **Not ported:** the duplicate `session_token` cookie Rails' Active Storage streaming sends; responses
-  to requests for multiple byte ranges; and legacy AES-CBC encrypted cookies, since Campfire started
-  on GCM.
-
 - **Cookies are only sent when they change.** Rails rewrites the session cookie, re-signs the
   `session_token` cookie and re-sets `last_room` on nearly every response. The session cookie is now
   written only when the session changed, and deleted once it's empty (it only holds the flash and a
@@ -319,6 +315,9 @@ Deliberate:
   modules (libopenmpt), game-console music (libgme), JPEG XL and SVG frames, codec2 speech,
   teletext subtitles, and DASH/IMF manifests. Tracker modules and game-console music attached to
   a message are now stored without duration or bit rate, which Campfire never shows.
+- **Not ported:** the duplicate `session_token` cookie Rails' Active Storage streaming sends; responses
+  to requests for multiple byte ranges; and legacy AES-CBC encrypted cookies, since Campfire started
+  on GCM.
 
 Not fully covered:
 
@@ -343,7 +342,8 @@ The port was built in about a day by coordinated Claude Code agents, each owning
 harness component. They followed the plan in `plans/rust-conversion.md`, which Codex also reviewed.
 [`plans/overnight-report.md`](plans/overnight-report.md) logs the unattended overnight run: the
 parity gate going green, the Thruster replacement, the benchmarks, and each optimization with its
-before and after numbers.
+before and after numbers. The optimizations and divergences since then were made the same way, one
+pull request each, with their measurements in `bench/results/`.
 
 ## License
 
