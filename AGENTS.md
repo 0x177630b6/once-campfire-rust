@@ -26,7 +26,7 @@ faster or better.
 | `crates/storage` | `campfire_storage` | Active Storage-compatible blobs, disk service, variants (libvips), previews (ffmpeg) |
 | `crates/cable` | `campfire_cable` | Action Cable protocol server, its WebSocket implementation, and in-process pub/sub |
 | `crates/assets` | `campfire_assets` | Propshaft-compatible digesting, importmap, vendored JS/CSS, port-owned overrides |
-| `crates/views` | `campfire_views` | Askama templates (one per ERB file, same relative path) and view helpers |
+| `crates/views` | `campfire_views` | Askama templates (at the ERB file's relative path) and view helpers |
 | `crates/campfire` | `campfire` (bin) | Controllers, router wiring, channels, jobs, integrations |
 | `parity/` | — | Playwright parity harness, screen inventory, reference Docker setup |
 | `reference-tools/` | — | Ruby scripts run inside the reference container to produce `vectors/` |
