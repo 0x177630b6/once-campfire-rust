@@ -8,9 +8,9 @@ use campfire_views::accounts;
 
 use crate::app::AppCtx;
 use crate::concerns::{self, Before, cast_integer};
-use crate::controllers::presenters_a::pagination::Page;
-use crate::controllers::presenters_a::view_context::Layout;
-use crate::controllers::presenters_a;
+use crate::controllers::presenters::pagination::Page;
+use crate::controllers::presenters::view_context::Layout;
+use crate::controllers::presenters;
 
 /// `set_page_and_extract_portion_from User.active.ordered.without_bots, per_page: 500`,
 /// rendered as `index.turbo_stream.erb` (the only template, so other formats are 406).
@@ -20,7 +20,7 @@ pub async fn index(c: &mut Ctx) -> Result {
     let users = c.app().db.read(User::active_ordered_without_bots).await.map_err(Error::internal)?;
     let page = Page::new(c.param_str("page"), users.len() as i64, &[500]);
     let secrets = c.app().secrets.clone();
-    let users: Vec<_> = page.records(&users).iter().map(|user| presenters_a::user_summary(&secrets, user)).collect();
+    let users: Vec<_> = page.records(&users).iter().map(|user| presenters::user_summary(&secrets, user)).collect();
     let next_page = (!page.is_last()).then(|| page.next_param().to_string());
 
     let layout = Layout::load(c).await?;

@@ -7,8 +7,8 @@ use campfire_storage::Variation;
 
 use crate::app::AppCtx;
 use crate::concerns::{self, Before};
-use crate::controllers::presenters_a::attachments::{self, Record};
-use crate::controllers::presenters_a::cache_key_with_version;
+use crate::controllers::presenters::attachments::{self, Record};
+use crate::controllers::presenters::cache_key_with_version;
 use crate::controllers::users::avatars::asset_file;
 
 /// `expires_in 5.minutes, public: true, stale_while_revalidate: 1.week`

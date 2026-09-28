@@ -131,7 +131,7 @@ pub fn attach(tx: &mut Tx<'_>, record: Record, name: &str, staged: Staged) -> ca
     let blob = staged.insert(tx.conn(), now.jiff()).map_err(storage_error)?;
     keep_after_commit(tx, staged);
     campfire_storage::blob::insert_attachment(tx.conn(), name, record.record_type, record.id, blob.id, now.jiff()).map_err(storage_error)?;
-    super::touch(tx.conn(), record.table, record.id, tx.now())?;
+    super::accounts::touch(tx.conn(), record.table, record.id, tx.now())?;
     Ok(Pending { blob })
 }
 
@@ -149,7 +149,7 @@ pub fn destroy(tx: &mut Tx<'_>, record: Record, name: &str) -> campfire_db::Resu
         .or_else(|error| if error == rusqlite::Error::QueryReturnedNoRows { Ok(None) } else { Err(error) })?;
     let Some((attachment_id, blob_id)) = attachment else { return Ok(false) };
     tx.conn().execute_cached("DELETE FROM active_storage_attachments WHERE id = ?1", [attachment_id])?;
-    super::touch(tx.conn(), record.table, record.id, tx.now())?;
+    super::accounts::touch(tx.conn(), record.table, record.id, tx.now())?;
     tx.emit_after_commit(Event::PurgeBlob { blob_id });
     Ok(true)
 }
@@ -173,7 +173,7 @@ pub async fn analyze(app: &App, blob_id: i64) -> anyhow::Result<()> {
             blob.update_metadata(tx.conn(), metadata).map_err(storage_error)?;
             for (record_type, record_id) in campfire_storage::blob::attachment_records(tx.conn(), blob_id).map_err(storage_error)? {
                 if let Some(table) = table_for(&record_type) {
-                    super::touch(tx.conn(), table, record_id, tx.now())?;
+                    super::accounts::touch(tx.conn(), table, record_id, tx.now())?;
                 }
             }
             Ok(())

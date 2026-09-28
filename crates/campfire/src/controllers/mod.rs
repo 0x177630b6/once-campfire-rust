@@ -35,7 +35,6 @@ pub mod autocompletable;
 pub mod first_runs;
 pub mod messages;
 pub mod presenters;
-pub mod presenters_a;
 pub mod pwa;
 pub mod qr_code;
 pub mod rooms;

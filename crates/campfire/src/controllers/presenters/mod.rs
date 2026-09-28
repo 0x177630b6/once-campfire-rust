@@ -2,8 +2,12 @@
 //! off the records (`message.creator`, `room_display_name`, `message_presentation`, the Jbuilder
 //! partials) computed up front.
 
+pub mod accounts;
+pub mod attachments;
 pub mod page;
+pub mod pagination;
 pub mod rich_text;
+pub mod view_context;
 #[cfg(test)]
 pub mod test_support;
 

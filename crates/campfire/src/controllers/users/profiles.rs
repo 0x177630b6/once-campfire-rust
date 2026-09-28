@@ -8,8 +8,8 @@ use campfire_views::users;
 use crate::app::AppCtx;
 use crate::controllers::presenters::page::framed_page;
 use crate::concerns::{self, Before};
-use crate::controllers::presenters_a::attachments::{self, Assignment, Record};
-use crate::controllers::presenters_a::{self, string_attribute};
+use crate::controllers::presenters::attachments::{self, Assignment, Record};
+use crate::controllers::presenters::{self, accounts::string_attribute};
 
 /// `set_user` (`Current.user`); memberships partitioned into direct and shared rooms.
 pub async fn show(c: &mut Ctx) -> Result {
@@ -17,19 +17,19 @@ pub async fn show(c: &mut Ctx) -> Result {
     c.respond_to(&[&format::HTML])?;
     let user = concerns::require_current_user(c)?.clone();
     let secrets = c.app().secrets.clone();
-    let transfer_id = presenters_a::transfer_id(&secrets, user.id, c.now());
+    let transfer_id = presenters::accounts::transfer_id(&secrets, user.id, c.now());
     let (avatar_attached, (direct_memberships, shared_memberships)) = {
         let user = user.clone();
         c.app()
             .db
             .read(move |conn| {
                 let attached = attachments::attached_blob(conn, "User", user.id, "avatar")?.is_some();
-                Ok((attached, presenters_a::profile_memberships(conn, &user)?))
+                Ok((attached, presenters::accounts::profile_memberships(conn, &user)?))
             })
             .await
             .map_err(Error::internal)?
     };
-    let user = presenters_a::user_summary(&secrets, &user);
+    let user = presenters::user_summary(&secrets, &user);
     framed_page!(c, StatusCode::OK, |ctx| users::ProfileShow {
         ctx,
         user: user.clone(),

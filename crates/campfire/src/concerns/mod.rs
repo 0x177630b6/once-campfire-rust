@@ -407,7 +407,7 @@ async fn render_incompatible_browser(c: &mut Ctx) -> Result {
     let own_layout = c
         .current::<crate::controllers::MatchedRoute>()
         .is_some_and(|route| route.endpoint.starts_with("messages#") || route.endpoint.starts_with("messages/by_bots#"));
-    use crate::controllers::presenters_a::view_context::{page_in_any_format, page_or_frame_in_any_format};
+    use crate::controllers::presenters::view_context::{page_in_any_format, page_or_frame_in_any_format};
 
     // An explicit `render template:`, so no format lookup: a blocked browser gets this page for
     // /webmanifest.json, /service-worker.js or `Accept: application/json` alike (verified against

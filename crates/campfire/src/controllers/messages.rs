@@ -18,7 +18,7 @@ use crate::active_storage::{self, keep_after_commit};
 use crate::app::{App, AppCtx};
 use crate::concerns::{self, Before, before_actions, cast_integer, require_current_user};
 use crate::controllers::presenters::page::{self, Rendered, db_error};
-use crate::controllers::presenters_a::attachments::Assignment;
+use crate::controllers::presenters::attachments::Assignment;
 use crate::controllers::presenters::{DbResolver, Presenter, cache_key_with_version, room_kind, storage_error};
 
 // --- Actions ------------------------------------------------------------------------------------

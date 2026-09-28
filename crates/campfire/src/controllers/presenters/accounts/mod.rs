@@ -1,13 +1,9 @@
 //! Maps database rows into the view models `campfire_views` renders for the account, session and
 //! user screens (sessions, first run, users, accounts, autocompletable, pwa): what the Rails views
 //! read off `@user`, `Current.account` and friends, computed up front. The `ViewContext` builder
-//! for every page is [`view_context::Layout`].
+//! for every page is [`super::view_context::Layout`].
 //!
 //! Queries the db crate doesn't have yet are written here against the reference's SQL.
-
-pub mod attachments;
-pub mod pagination;
-pub mod view_context;
 
 #[cfg(test)]
 mod tests;
@@ -23,7 +19,7 @@ use rails_compat::Secrets;
 use rails_compat::global_id::{self, GlobalId};
 use rusqlite::params;
 
-pub use super::presenters::{avatar_path, cache_key_with_version, epoch_string, to_fs_number, user_summary};
+use super::{attachments, epoch_string, to_fs_number, user_summary};
 
 /// `User::Transferable::TRANSFER_LINK_EXPIRY_DURATION`
 pub const TRANSFER_LINK_EXPIRY: jiff::SignedDuration = jiff::SignedDuration::from_hours(4);

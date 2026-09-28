@@ -10,9 +10,9 @@ pub mod users {
 
     use crate::app::AppCtx;
     use crate::concerns::{self, Before, cast_integer};
-    use crate::controllers::presenters_a::pagination::Page;
-    use crate::controllers::presenters_a::view_context::Layout;
-    use crate::controllers::presenters_a;
+    use crate::controllers::presenters::pagination::Page;
+    use crate::controllers::presenters::view_context::Layout;
+    use crate::controllers::presenters;
 
     /// `set_page_and_extract_portion_from find_autocompletable_users.with_attached_avatar.ordered, per_page: 20`
     pub async fn index(c: &mut Ctx) -> Result {
@@ -38,7 +38,7 @@ pub mod users {
         let users = c.app().db.read(move |conn| autocompletable_users(conn, room_id, query.as_deref())).await.map_err(Error::internal)?;
         let page = Page::new(c.param_str("page"), users.len() as i64, &[20]);
         let secrets = c.app().secrets.clone();
-        let users: Vec<_> = page.records(&users).iter().map(|user| presenters_a::mention_user(&secrets, user)).collect();
+        let users: Vec<_> = page.records(&users).iter().map(|user| presenters::accounts::mention_user(&secrets, user)).collect();
 
         let format = c.respond_to(&[&format::HTML, &format::JSON])?;
         page.apply_headers(c);
@@ -69,6 +69,6 @@ pub mod users {
             values.push(Value::Text(format!("%{query}%")));
         }
         sql.push_str(" ORDER BY LOWER(name)");
-        presenters_a::query_users(conn, &sql, rusqlite::params_from_iter(values))
+        presenters::accounts::query_users(conn, &sql, rusqlite::params_from_iter(values))
     }
 }
