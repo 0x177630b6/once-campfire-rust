@@ -114,19 +114,6 @@ pub fn query_escape(value: &str) -> String {
     out
 }
 
-/// `turbo_stream_action_tag(action, target:, template:, **attributes)`, what both
-/// `turbo_stream.<action>` and the `broadcast_*_to` helpers emit. Extra attributes come first;
-/// Campfire only ever passes `maintain_scroll: true` (rendered as `maintain_scroll="true"`).
-/// `remove` has no template element. The target is escaped; the content is safe HTML.
-pub fn turbo_stream(action: &str, target: &str, content: &str, maintain_scroll: bool) -> String {
-    let attributes = if maintain_scroll { " maintain_scroll=\"true\"" } else { "" };
-    let template = if action == "remove" || action == "refresh" { String::new() } else { format!("<template>{content}</template>") };
-    format!(
-        "<turbo-stream{attributes} action=\"{action}\" target=\"{}\">{template}</turbo-stream>",
-        crate::helpers::escape(target)
-    )
-}
-
 /// Serializes like Rails' `to_json`: `ActiveSupport::JSON` escapes `<`, `>` and `&` as `\u`
 /// sequences, which serde_json leaves raw (U+2028/U+2029 stay raw with `load_defaults 8.2`).
 /// Those characters only ever appear inside JSON strings, so replacing them after the fact is
@@ -178,15 +165,6 @@ mod tests {
     #[test]
     fn escapes_json_like_rails() {
         assert_eq!(rails_json(&"<b>&</b>"), "\"\\u003cb\\u003e\\u0026\\u003c/b\\u003e\"");
-    }
-
-    #[test]
-    fn builds_turbo_streams_like_turbo_rails() {
-        assert_eq!(
-            turbo_stream("append", "x", "<b>y</b>", true),
-            r#"<turbo-stream maintain_scroll="true" action="append" target="x"><template><b>y</b></template></turbo-stream>"#
-        );
-        assert_eq!(turbo_stream("remove", "x", "", false), r#"<turbo-stream action="remove" target="x"></turbo-stream>"#);
     }
 
     #[test]

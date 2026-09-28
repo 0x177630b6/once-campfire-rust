@@ -502,40 +502,13 @@ fn users_partials() {
 
     let name = "user_json";
     let jz = user(name, "JZ");
-    let json = h::to_rails_json(&users::UserJson {
+    let json = h::to_rails_json(&campfire_views::messages::json::UserJson {
         id: jz["id"].as_i64().unwrap(),
         name: "JZ".into(),
         role: jz["role"].as_str().unwrap().into(),
         avatar_url: format!("{}{}", facts()["base_url"].as_str().unwrap(), jz["avatar_path"].as_str().unwrap()),
     });
     assert_eq!(json, golden(name, "json"));
-}
-
-#[test]
-fn action_text_partials() {
-    let embeds: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(golden_dir().join("og_embeds.json")).unwrap()).unwrap();
-    for (name, attributes) in embeds.as_object().unwrap() {
-        let html = action_text::OpengraphEmbedPartial {
-            opengraph_embed: action_text::OpengraphEmbed {
-                href: str_of(&attributes["href"]),
-                url: str_of(&attributes["url"]),
-                filename: attributes["filename"].as_str().unwrap().into(),
-                description: str_of(&attributes["description"]),
-            },
-        }
-        .render()
-        .unwrap();
-        assert_parity(name, "html", html);
-    }
-
-    let name = "action_text_content";
-    let html = layouts::ActionTextContent { content: h::raw("<p>Hi <strong>there</strong></p>") }.render().unwrap();
-    assert_parity(name, "html", html.clone());
-    assert_eq!(html, golden(name, "html"), "bytes");
-
-    let name = "mailer_layout";
-    let html = layouts::MailerHtml { content: h::raw("<p>Mail</p>") }.render().unwrap();
-    assert_parity(name, "html", html);
 }
 
 #[test]

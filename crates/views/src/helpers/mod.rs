@@ -8,7 +8,6 @@
 
 pub mod application;
 pub mod assets;
-pub mod emoji;
 pub mod filters;
 pub mod forms;
 pub mod html;
@@ -23,7 +22,6 @@ pub mod users;
 
 pub use application::*;
 pub use assets::*;
-pub use emoji::*;
 pub use forms::*;
 pub use html::*;
 pub use links::*;

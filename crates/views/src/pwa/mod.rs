@@ -3,8 +3,7 @@
 use askama::Template;
 
 use crate::ViewContext;
-#[allow(unused_imports)]
-use crate::helpers::{self as h, filters};
+use crate::helpers as h;
 
 /// `pwa/service_worker.js`, served verbatim.
 pub const SERVICE_WORKER_JS: &str = include_str!("../../templates/pwa/service_worker.js");

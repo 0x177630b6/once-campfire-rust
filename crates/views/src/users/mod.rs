@@ -1,11 +1,9 @@
 //! Views for `reference/app/views/users`.
 
 use askama::Template;
-use serde::Serialize;
 
 use crate::ViewContext;
 use crate::accounts::HelpContact;
-#[allow(unused_imports)]
 use crate::helpers::{self as h, filters};
 use crate::layouts::Page;
 
@@ -288,14 +286,4 @@ pub struct SidebarDirectPartial<'a> {
 #[template(path = "users/sidebars/rooms/_shared.html")]
 pub struct SidebarSharedPartial {
     pub room: SidebarRoom,
-}
-
-/// `users/_user.json.jbuilder` (`json.(user, :id, :name, :role)` then `avatar_url`).
-#[derive(Clone, Debug, Serialize)]
-pub struct UserJson {
-    pub id: i64,
-    pub name: String,
-    pub role: String,
-    /// `fresh_user_avatar_url(user)`: absolute.
-    pub avatar_url: String,
 }

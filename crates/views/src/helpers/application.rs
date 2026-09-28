@@ -6,7 +6,7 @@ use base64_url::urlsafe_encode64;
 use super::assets::image_tag;
 use super::html::{Html, Safe};
 use super::links::link_to;
-use super::tag::{Attrs, attrs, builder_tag, content_tag, content_tag_text, legacy_tag};
+use super::tag::{attrs, builder_tag, content_tag, content_tag_text, legacy_tag};
 use crate::ViewContext;
 
 /// `page_title_tag`: `@page_title || "Campfire"`.
@@ -78,12 +78,6 @@ pub fn version_badge(ctx: &ViewContext) -> Html {
     content_tag_text("span", attrs().class("version-badge"), &ctx.app_version)
 }
 
-/// `local_datetime_tag(datetime, style:, **attributes)`; `datetime` is already `iso8601`.
-pub fn local_datetime_tag(datetime_iso8601: &str, style: &str, attributes: Attrs) -> Html {
-    let options = attributes.attr("datetime", datetime_iso8601).data("local_time_target", style);
-    content_tag("time", &options, "")
-}
-
 /// `button_to_copy_to_clipboard(url) { content }`.
 pub fn button_to_copy_to_clipboard(url: &str, content: &str) -> Html {
     let options = attrs()
@@ -93,11 +87,6 @@ pub fn button_to_copy_to_clipboard(url: &str, content: &str) -> Html {
         .data("copy_to_clipboard_success_class", "btn--success")
         .data("copy_to_clipboard_content_value", url);
     content_tag("button", &options, content)
-}
-
-/// `drop_target_actions`.
-pub fn drop_target_actions() -> &'static str {
-    "dragenter->drop-target#dragenter dragover->drop-target#dragover drop->drop-target#drop"
 }
 
 /// `link_to_zoom_qr_code(url) { content }`: the QR code route takes the URL, base64url-encoded.

@@ -42,12 +42,6 @@ pub fn text(text: &str) -> Html {
     Safe(escape(text))
 }
 
-/// `safe_join(parts, separator)` for already-safe parts.
-pub fn safe_join<I: IntoIterator<Item = Html>>(parts: I, separator: &str) -> Html {
-    let parts: Vec<String> = parts.into_iter().map(|part| part.0).collect();
-    Safe(parts.join(separator))
-}
-
 pub fn empty() -> Html {
     Safe(String::new())
 }
