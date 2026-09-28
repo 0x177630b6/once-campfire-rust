@@ -361,6 +361,9 @@ Deliberate:
   or read; one that runs out answers "Failed to respond within 60 seconds", as a 7-second timeout
   answers with its own. A reply larger than 100 MB (after decompression) fails the delivery and
   posts nothing; Rails read replies of any size into memory.
+- **Push deliveries are bounded in time.** A push service gets 10 seconds per connect or read and 30
+  in all, where the web-push gem leaves `Net::HTTP`'s 60 seconds per step; a slow service would
+  otherwise hold one of the few push workers for minutes.
 - **The front server is stricter than Thruster.** The app's own listener on `TARGET_PORT` binds
   loopback only (Puma bound every interface) and has the front's timeouts and `MAX_REQUEST_BODY`
   (see [Running it](#running-it)). The response cache counts its keys toward `CACHE_SIZE`, skips

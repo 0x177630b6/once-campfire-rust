@@ -9,7 +9,7 @@ pub mod encryption;
 pub mod pool;
 mod vapid;
 
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
@@ -25,6 +25,11 @@ pub use vapid::{VapidConfig, VapidError};
 /// `WebPush::Request#default_options[:ttl]`: four weeks.
 const TTL_SECONDS: u64 = 60 * 60 * 24 * 7 * 4;
 const URGENCY: &str = "high";
+/// Per connect and read. The web-push gem leaves `Net::HTTP`'s 60 seconds, which let a slow push
+/// service hold one of the pool's few workers for minutes.
+const TIMEOUTS: Timeouts = Timeouts { open: Duration::from_secs(10), read: Duration::from_secs(10) };
+/// For a whole delivery, however the push service trickles its reply.
+const DELIVERY_DEADLINE: Duration = Duration::from_secs(30);
 /// `Rails.application.routes.url_helpers.account_logo_path`
 const ICON_PATH: &str = "/account/logo";
 
@@ -173,7 +178,9 @@ async fn payload_send(
     let endpoint = Endpoint { https: true, host: host.clone(), port: uri.port.unwrap_or(443) as u16, pinned_ip: Some(endpoint_ip) };
     let mut request = http::Request::net_http(hyper::Method::POST, http::request_uri(&uri), None, headers).transport(true, &endpoint);
     request.body = payload;
-    let response = http::exchange(net, &endpoint, request, &Timeouts::default()).await?;
+    let response = tokio::time::timeout(DELIVERY_DEADLINE, http::exchange(net, &endpoint, request, &TIMEOUTS))
+        .await
+        .map_err(|_| HttpError::ReadTimeout)??;
     verify_response(response.status, &response.reason, &host)
 }
 
