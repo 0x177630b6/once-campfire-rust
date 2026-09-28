@@ -358,3 +358,22 @@ async fn a_client_close_is_answered_with_its_code() {
     client.socket.send(tokio_tungstenite::tungstenite::Message::Close(Some(close))).await.unwrap();
     assert_eq!(client.next().await, Frame::Close(Some((1001, String::new()))));
 }
+
+#[tokio::test]
+async fn a_connection_holds_a_bounded_number_of_subscriptions() {
+    let app = start(test_config()).await;
+    let mut client = app.connect(1).await;
+    assert_eq!(client.next_text().await, WELCOME);
+    for nonce in 0..64 {
+        let heartbeat = identifier(json!({ "channel": "HeartbeatChannel", "nonce": nonce }));
+        client.subscribe(&heartbeat).await;
+        assert_eq!(client.next_text().await, confirm(&heartbeat));
+    }
+    // Past the limit, and an oversized identifier: ignored, no reply.
+    client.subscribe(&identifier(json!({ "channel": "HeartbeatChannel", "nonce": 64 }))).await;
+    client.assert_silent().await;
+    let mut other = app.connect(2).await;
+    assert_eq!(other.next_text().await, WELCOME);
+    other.subscribe(&identifier(json!({ "channel": "HeartbeatChannel", "pad": "x".repeat(5000) }))).await;
+    other.assert_silent().await;
+}

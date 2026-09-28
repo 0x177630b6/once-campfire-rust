@@ -316,7 +316,12 @@ fn protocol_error(message: &'static str) -> io::Error {
 
 // --- Writing -----------------------------------------------------------------------------------
 
-/// Writes server frames: unmasked, each as its header plus its (shared) payload.
+/// How long a write may wait for a client to read before it fails. A client that stops reading
+/// doesn't hold its connection's task forever.
+pub const WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Writes server frames: unmasked, each as its header plus its (shared) payload. Every write fails
+/// after [`WRITE_TIMEOUT`].
 pub struct Writer<W> {
     io: W,
     deflate: bool,
@@ -343,8 +348,7 @@ impl<W: AsyncWrite + Unpin> Writer<W> {
             slices.push(IoSlice::new(&header[..*len]));
             slices.push(IoSlice::new(payload));
         }
-        write_all_vectored(&mut self.io, &mut slices).await?;
-        self.io.flush().await
+        self.write(&mut slices).await
     }
 
     pub async fn pong(&mut self, payload: &[u8]) -> io::Result<()> {
@@ -368,8 +372,16 @@ impl<W: AsyncWrite + Unpin> Writer<W> {
     async fn control(&mut self, opcode: u8, payload: &[u8]) -> io::Result<()> {
         let (header, len) = header(opcode, false, payload.len());
         let mut slices = [IoSlice::new(&header[..len]), IoSlice::new(payload)];
-        write_all_vectored(&mut self.io, &mut slices).await?;
-        self.io.flush().await
+        self.write(&mut slices).await
+    }
+
+    async fn write(&mut self, slices: &mut [IoSlice<'_>]) -> io::Result<()> {
+        let io = &mut self.io;
+        let write = async move {
+            write_all_vectored(io, slices).await?;
+            io.flush().await
+        };
+        tokio::time::timeout(WRITE_TIMEOUT, write).await.unwrap_or_else(|_| Err(io::ErrorKind::TimedOut.into()))
     }
 }
 

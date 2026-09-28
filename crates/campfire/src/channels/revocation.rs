@@ -5,8 +5,10 @@
 //! - membership destroyed (`after_destroy_commit { user.reset_remote_connections }`, which covers
 //!   `revoke_from`, `revise` and room destroy) and sign-out: `reconnect: true`. The client
 //!   reconnects and replays its subscriptions, and the channels turn away the rooms it lost.
-//! - `User#deactivate` and `User::Bannable#ban`: `reconnect: false`, inside their transaction,
-//!   before the sessions are deleted, so a reconnect is refused anyway.
+//! - `User#deactivate` and `User::Bannable#ban`: `reconnect: false`, once their transaction has
+//!   committed and the sessions are gone, so a reconnect is refused. (Rails sends it inside the
+//!   transaction; a connection authenticating just then could miss it and stay open. The cable
+//!   connection also re-checks its session once it's listening for this.)
 //!
 //! Each connection of the user gets `{"type":"disconnect","reason":"remote","reconnect":..}` and
 //! is closed; closing unsubscribes every channel (so `PresenceChannel#absent` runs).
