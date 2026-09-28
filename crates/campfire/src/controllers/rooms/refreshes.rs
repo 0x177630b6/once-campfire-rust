@@ -52,7 +52,10 @@ fn set_last_updated_at(c: &Ctx) -> Result<Timestamp> {
             None => return Err(Error::internal(anyhow::anyhow!("undefined method 'to_i'"))),
         },
     };
-    Ok(Timestamp::from_microsecond(since.saturating_mul(1000)))
+    // Outside the representable range (a crafted `since`), the nearest end of it.
+    let since = jiff::Timestamp::from_microsecond(since.saturating_mul(1000))
+        .unwrap_or(if since < 0 { jiff::Timestamp::MIN } else { jiff::Timestamp::MAX });
+    Ok(Timestamp::from_jiff(since))
 }
 
 /// `String#to_i`: optional leading whitespace and sign, then digits (underscores between them).
