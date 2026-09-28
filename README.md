@@ -305,6 +305,10 @@ Deliberate:
   VAPID keys are now checked once at boot (Web Push is off, with a log line, when they're missing
   or don't form a key pair), and a subscription is destroyed only when the push service answers
   410 or 404 (RFC 8030; Rails keeps it on a 404) or its own key isn't a valid P-256 point.
+- **Long messages still get push notifications.** Rails puts the whole message in the notification,
+  and one over about 4 KB fails to encrypt (a Web Push message holds 4096 bytes), so nobody is
+  notified. The notification's body is now cut short with an ellipsis at 3 KB, and its title at 256
+  bytes.
 - **The VAPID subject is configurable.** Rails identifies every install to push services as
   `mailto:support@37signals.com`; this uses `VAPID_SUBJECT`, or `https://` and the first
   `TLS_DOMAIN`, or the project's URL.

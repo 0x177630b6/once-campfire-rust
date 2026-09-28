@@ -100,6 +100,22 @@ fn encodes_the_message_like_json_generate() {
 }
 
 #[test]
+fn the_longest_payload_fits_a_push_message() {
+    use campfire_db::{MAX_PAYLOAD_BODY_BYTES, MAX_PAYLOAD_TITLE_BYTES};
+    let receiver = Receiver::new();
+    let notification = Notification {
+        title: "\"".repeat(MAX_PAYLOAD_TITLE_BYTES / 2),
+        body: "\u{1}".repeat(MAX_PAYLOAD_BODY_BYTES / 6),
+        path: format!("/rooms/{}", i64::MIN),
+        badge: i64::MIN,
+        subscription: receiver.subscription(1, "https://fcm.googleapis.com/fcm/send/abc"),
+    };
+    let subscription = &notification.subscription;
+    let body = encryption::encrypt(notification.encoded_message().as_bytes(), subscription.p256dh_key.as_deref(), subscription.auth_key.as_deref());
+    assert_eq!(receiver.open(&body.unwrap()), notification.encoded_message());
+}
+
+#[test]
 fn signs_the_vapid_header_like_the_gem() {
     let expected = expected();
     let now = expected["now"].as_i64().unwrap();
