@@ -1,6 +1,7 @@
 //! Thruster's configuration (internal/config.go): every setting is read from `THRUSTER_<NAME>`,
 //! falling back to `<NAME>`, and a value that doesn't parse falls back to the default.
 
+use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -15,6 +16,9 @@ pub struct FrontConfig {
     /// `TARGET_PORT`: where Thruster's upstream listened. Thruster exported it to the app as
     /// `PORT`, so the app itself still listens there.
     pub target_port: u16,
+    /// `TARGET_BIND` (not Thruster's): the address the app's own listener on TARGET_PORT binds.
+    /// Loopback by default, since nothing outside needs it and it lacks the front's protections.
+    pub target_bind: IpAddr,
     /// `CACHE_SIZE`: the response cache's capacity in bytes.
     pub cache_size: i64,
     /// `MAX_CACHE_ITEM_SIZE`: the largest response the cache stores.
@@ -69,6 +73,7 @@ impl FrontConfig {
             .unwrap_or_default();
         let mut config = Self {
             target_port: port("TARGET_PORT", 3000),
+            target_bind: find("TARGET_BIND").and_then(|v| v.parse().ok()).unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST)),
             cache_size: int("CACHE_SIZE", 64 * MB),
             max_cache_item_size: int("MAX_CACHE_ITEM_SIZE", MB),
             gzip_compression_enabled: boolean("GZIP_COMPRESSION_ENABLED", true),
@@ -122,6 +127,7 @@ mod tests {
     fn defaults() {
         let c = config(&[]);
         assert_eq!((c.http_port, c.https_port, c.target_port), (80, 443, 3000));
+        assert_eq!(c.target_bind, IpAddr::V4(Ipv4Addr::LOCALHOST));
         assert_eq!(c.cache_size, 64 * 1024 * 1024);
         assert_eq!(c.max_cache_item_size, 1024 * 1024);
         assert_eq!(c.http_idle_timeout, Duration::from_secs(60));
@@ -138,6 +144,13 @@ mod tests {
     fn prefixed_variables_win() {
         let c = config(&[("HTTP_PORT", "8080"), ("THRUSTER_HTTP_PORT", "9090"), ("HTTPS_PORT", "8443")]);
         assert_eq!((c.http_port, c.https_port), (9090, 8443));
+    }
+
+    #[test]
+    fn target_bind_can_open_the_app_listener() {
+        assert_eq!(config(&[("TARGET_BIND", "0.0.0.0")]).target_bind, IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+        assert_eq!(config(&[("TARGET_BIND", "::")]).target_bind.to_string(), "::");
+        assert_eq!(config(&[("TARGET_BIND", "everywhere")]).target_bind, IpAddr::V4(Ipv4Addr::LOCALHOST));
     }
 
     #[test]
