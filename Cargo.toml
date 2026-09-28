@@ -77,6 +77,7 @@ x509-parser  = "0.18"
 zstd         = "0.13"
 # The global allocator (crates/campfire/src/main.rs)
 tikv-jemallocator = "0.6"
+tikv-jemalloc-sys = "0.6"
 
 # One codegen unit with fat LTO: ~5-10% less CPU on app-bound routes (plans/perf-attribution.md §4)
 # for about twice the build time. Not `panic = "abort"`: the DB writer and the Web Push pool catch
