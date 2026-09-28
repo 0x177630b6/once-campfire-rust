@@ -26,7 +26,7 @@ pub async fn show(c: &mut Ctx) -> Result {
             let new_messages = Message::page_created_since(conn, room.id, last_updated_at)?;
             let new_ids: Vec<i64> = new_messages.iter().map(|message| message.id).collect();
             let updated_messages = Message::page_updated_since(conn, room.id, last_updated_at, &new_ids)?;
-            let presenter = Presenter::new(conn, &app.secrets, &app.storage, &*app.db.env().rich_text, app.clock.now(), request_host);
+            let presenter = Presenter::new(conn, &app, request_host);
             campfire_views::fragment_cache::with(&app.fragment_cache, || {
                 Ok(RefreshView {
                     room_id: room.id,

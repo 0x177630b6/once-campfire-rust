@@ -45,7 +45,7 @@ pub async fn update(c: &mut Ctx) -> Result {
         .app()
         .db
         .read(move |conn| {
-            let presenter = Presenter::new(conn, &app.secrets, &app.storage, &*app.db.env().rich_text, app.clock.now(), None);
+            let presenter = Presenter::new(conn, &app, None);
             let sidebar_room = presenter.sidebar_room(&broadcast_room);
             let account = Account::first(conn)?;
             Ok(page::render_detached_at(&app, account.as_ref(), &base_url, |_| {

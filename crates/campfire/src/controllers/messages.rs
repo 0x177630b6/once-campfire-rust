@@ -77,7 +77,7 @@ pub async fn create(c: &mut Ctx) -> Result {
         .app()
         .db
         .read(move |conn| {
-            let presenter = Presenter::new(conn, &app.secrets, &app.storage, &*app.db.env().rich_text, app.clock.now(), None);
+            let presenter = Presenter::new(conn, &app, None);
             let item = campfire_views::fragment_cache::with(&app.fragment_cache, || presenter.message_item(&message))?;
             let account = campfire_db::Account::first(conn)?;
             page::render_detached_at(&app, account.as_ref(), &base_url, |ctx| views::CreateStream { ctx, message: &item, room_kind: kind }.render())
@@ -377,7 +377,7 @@ pub(crate) async fn broadcast_create(c: &Ctx, room: &Room, message: &Message) ->
     c.app()
         .db
         .read(move |conn| {
-            let presenter = Presenter::new(conn, &app.secrets, &app.storage, &*app.db.env().rich_text, app.clock.now(), None);
+            let presenter = Presenter::new(conn, &app, None);
             let view = presenter.message(&message)?;
             let account = campfire_db::Account::first(conn)?;
             let html = page::render_detached_at(&app, account.as_ref(), &base_url, |ctx| views::message(ctx, &view));
@@ -396,7 +396,7 @@ pub(crate) async fn broadcast_replace(c: &Ctx, room: &Room, message: &Message) -
     c.app()
         .db
         .read(move |conn| {
-            let presenter = Presenter::new(conn, &app.secrets, &app.storage, &*app.db.env().rich_text, app.clock.now(), None);
+            let presenter = Presenter::new(conn, &app, None);
             let view = presenter.message(&message)?;
             let account = campfire_db::Account::first(conn)?;
             let html = page::render_detached_at(&app, account.as_ref(), &base_url, |ctx| {
@@ -452,7 +452,7 @@ pub(crate) async fn present<T: Send + 'static>(
     c.app()
         .db
         .read(move |conn| {
-            let presenter = Presenter::new(conn, &app.secrets, &app.storage, &*app.db.env().rich_text, app.clock.now(), request_host);
+            let presenter = Presenter::new(conn, &app, request_host);
             // The Jbuilder partials (`json.cache!`) read the fragment cache on this thread.
             campfire_views::fragment_cache::with(&app.fragment_cache, || f(&presenter))
         })

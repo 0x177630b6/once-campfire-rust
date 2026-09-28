@@ -54,7 +54,7 @@ pub async fn edit(c: &mut Ctx) -> Result {
         .app()
         .db
         .read(move |conn| {
-            let presenter = Presenter::new(conn, &app.secrets, &app.storage, &*app.db.env().rich_text, app.clock.now(), None);
+            let presenter = Presenter::new(conn, &app, None);
             // `@room.users.many? ? @room.users.without(Current.user) : @room.users`
             let users = room.users(conn)?;
             let users: Vec<User> =
@@ -84,7 +84,7 @@ async fn broadcast_create_room(c: &Ctx, room: &Room) -> Result<()> {
     c.app()
         .db
         .read(move |conn| {
-            let presenter = Presenter::new(conn, &app.secrets, &app.storage, &*app.db.env().rich_text, app.clock.now(), None);
+            let presenter = Presenter::new(conn, &app, None);
             let account = Account::first(conn)?;
             let mut partials = Rendered::default();
             for membership in Membership::for_room(conn, room.id)? {
