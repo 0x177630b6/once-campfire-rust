@@ -212,7 +212,7 @@ impl Attrs {
     }
 }
 
-fn value_to_string(value: &Value) -> String {
+pub(super) fn value_to_string(value: &Value) -> String {
     match value {
         Value::Text(text) | Value::Safe(text) => text.clone(),
         Value::Bool(flag) => flag.to_string(),

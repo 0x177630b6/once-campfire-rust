@@ -92,14 +92,7 @@ pub(crate) async fn broadcast_create(c: &Ctx, message: &Message, boost: &Boost) 
     c.app()
         .db
         .read(move |conn| {
-            let presenter = crate::controllers::presenters::Presenter::new(
-                conn,
-                &app.secrets,
-                &app.storage,
-                &*app.db.env().rich_text,
-                app.clock.now(),
-                None,
-            );
+            let presenter = crate::controllers::presenters::Presenter::new(conn, &app, None);
             let view = presenter.boost(&boost)?;
             let account = campfire_db::Account::first(conn)?;
             let html = page::render_detached_at(&app, account.as_ref(), &base_url, |ctx| views::boost(ctx, &view));

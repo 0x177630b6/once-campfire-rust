@@ -6,7 +6,7 @@ use crate::ViewContext;
 use crate::helpers as h;
 
 /// `pwa/service_worker.js`, served verbatim.
-pub const SERVICE_WORKER_JS: &str = include_str!("../../templates/pwa/service_worker.js");
+pub const SERVICE_WORKER_JS: &str = include_str!("../templates/pwa/service_worker.js");
 
 /// `pwa/manifest.json.erb`. ERB HTML-escapes the values into the JSON, so an account named `a\b`
 /// or `"a"` made the manifest invalid and the logo URL came out as `?size=small&amp;v=...`; the

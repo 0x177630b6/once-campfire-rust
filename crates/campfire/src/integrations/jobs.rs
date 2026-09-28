@@ -133,7 +133,7 @@ async fn broadcast_create(app: &App, room: &Room, message: &Message) -> anyhow::
     let (app, room, message) = (app.clone(), room.clone(), message.clone());
     let db = app.db.clone();
     db.read(move |conn| {
-        let presenter = Presenter::new(conn, &app.secrets, &app.storage, &*app.db.env().rich_text, app.clock.now(), None);
+        let presenter = Presenter::new(conn, &app, None);
         let view = presenter.message(&message)?;
         let account = campfire_db::Account::first(conn)?;
         let html = page::render_detached(&app, account.as_ref(), |ctx| views::message(ctx, &view));

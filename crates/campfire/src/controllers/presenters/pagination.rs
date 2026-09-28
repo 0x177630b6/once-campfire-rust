@@ -3,6 +3,8 @@
 
 use campfire_kit::Ctx;
 
+use crate::concerns::ruby_to_i;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Page {
     /// `page.number`
@@ -81,30 +83,6 @@ impl Page {
 fn page_number_from(param: Option<&str>) -> i64 {
     // Capped, so the page arithmetic can't overflow on a huge `?page=`.
     param.map(ruby_to_i).unwrap_or(0).clamp(1, 1_000_000_000)
-}
-
-/// `String#to_i`: leading whitespace, an optional sign, then digits (underscores between digits
-/// allowed); anything else stops the scan.
-pub fn ruby_to_i(value: &str) -> i64 {
-    let value = value.trim_start_matches(|c: char| c.is_ascii_whitespace());
-    let (negative, rest) = match value.as_bytes().first() {
-        Some(b'-') => (true, &value[1..]),
-        Some(b'+') => (false, &value[1..]),
-        _ => (false, value),
-    };
-    let mut number: i64 = 0;
-    let mut previous_digit = false;
-    for c in rest.chars() {
-        match c {
-            '0'..='9' => {
-                number = number.saturating_mul(10).saturating_add(c as i64 - '0' as i64);
-                previous_digit = true;
-            }
-            '_' if previous_digit => previous_digit = false,
-            _ => break,
-        }
-    }
-    if negative { -number } else { number }
 }
 
 /// Addressable's `uri.query_values = (uri.query_values || {}).merge("page" => page)`: the query

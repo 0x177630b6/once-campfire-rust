@@ -18,6 +18,8 @@ use crate::clock::{self, SharedClock};
 use crate::crypto::SharedCrypto;
 use crate::{Error, Result};
 
+pub use rails_compat::cookies::escape;
+
 pub const MAX_COOKIE_SIZE: usize = 4096;
 const PERMANENT_YEARS: i64 = 20;
 
@@ -286,19 +288,6 @@ pub fn parse_cookie_header(header: &str) -> Vec<(String, String)> {
         cookies.push((key.to_string(), value));
     }
     cookies
-}
-
-/// `Rack::Utils.escape` (`URI.encode_www_form_component`).
-pub fn escape(value: &str) -> String {
-    let mut out = String::with_capacity(value.len());
-    for byte in value.bytes() {
-        match byte {
-            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'*' | b'-' | b'.' | b'_' => out.push(byte as char),
-            b' ' => out.push('+'),
-            _ => out.push_str(&format!("%{byte:02X}")),
-        }
-    }
-    out
 }
 
 fn same_site_attribute(same_site: Option<SameSite>) -> &'static str {

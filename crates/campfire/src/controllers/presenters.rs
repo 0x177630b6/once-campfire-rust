@@ -29,6 +29,8 @@ use campfire_views::rooms::{RoomView, room_display_name};
 use rails_compat::Secrets;
 use regex::Regex;
 
+use crate::app::AppState;
+
 pub use rich_text::DbResolver;
 
 /// `Message::THUMBNAIL_MAX_WIDTH` / `THUMBNAIL_MAX_HEIGHT`.
@@ -114,15 +116,17 @@ pub struct Presenter<'a> {
 }
 
 impl<'a> Presenter<'a> {
-    pub fn new(
-        conn: &'a Connection,
-        secrets: &'a Secrets,
-        storage: &'a Storage,
-        rich_text: &'a dyn RichText,
-        now: jiff::Timestamp,
-        request_host: Option<String>,
-    ) -> Self {
-        Self { conn, secrets, storage, rich_text, now, request_host, users: RefCell::default(), room_names: RefCell::default() }
+    pub fn new(conn: &'a Connection, app: &'a AppState, request_host: Option<String>) -> Self {
+        Self {
+            conn,
+            secrets: &app.secrets,
+            storage: &app.storage,
+            rich_text: &*app.db.env().rich_text,
+            now: app.clock.now(),
+            request_host,
+            users: RefCell::default(),
+            room_names: RefCell::default(),
+        }
     }
 
     pub fn resolver(&self) -> DbResolver<'_> {
