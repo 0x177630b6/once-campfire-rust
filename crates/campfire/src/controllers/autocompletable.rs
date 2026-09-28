@@ -55,7 +55,7 @@ pub mod users {
 
     /// `users_scope.active[.filtered_by(query)].ordered`
     fn autocompletable_users(conn: &Connection, room_id: Option<i64>, query: Option<&str>) -> campfire_db::Result<Vec<User>> {
-        let mut sql = String::from(r#"SELECT "users"."id" FROM "users""#);
+        let mut sql = String::from(r#"SELECT "users".* FROM "users""#);
         let mut values = Vec::new();
         if let Some(room_id) = room_id {
             sql.push_str(r#" INNER JOIN "memberships" ON "users"."id" = "memberships"."user_id" WHERE "memberships"."room_id" = ? AND"#);
@@ -69,8 +69,6 @@ pub mod users {
             values.push(Value::Text(format!("%{query}%")));
         }
         sql.push_str(" ORDER BY LOWER(name)");
-        let mut statement = conn.prepare_cached(&sql)?;
-        let ids: Vec<i64> = statement.query_map(rusqlite::params_from_iter(values), |row| row.get(0))?.collect::<Result<_, _>>()?;
-        ids.into_iter().map(|id| User::find(conn, id)).collect()
+        presenters_a::query_users(conn, &sql, rusqlite::params_from_iter(values))
     }
 }

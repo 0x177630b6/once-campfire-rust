@@ -140,7 +140,8 @@ pub struct UserChanges {
 const INSERT: &str = r#"INSERT INTO "users" ("bio", "bot_token", "created_at", "email_address", "name", "password_digest", "role", "status", "updated_at") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING "id""#;
 
 impl User {
-    pub(crate) fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
+    /// A `SELECT "users".*` row.
+    pub fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
         Ok(Self {
             id: row.get("id")?,
             name: row.get("name")?,
