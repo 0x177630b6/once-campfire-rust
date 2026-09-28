@@ -22,3 +22,7 @@ match_token = "0.35.0"
 
 [features]
 trace_tokenizer = []
+
+# Upstream's code, not ours: keep clippy's opinions of it out of the workspace's lint run.
+[lints.clippy]
+all = "allow"

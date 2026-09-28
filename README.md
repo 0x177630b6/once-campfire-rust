@@ -221,13 +221,23 @@ come from different runs (the page-parts run on a busy host, which understates i
 It's a drop-in replacement for the Rails image: the same environment variables, ports and storage
 layout. Point it at an existing Campfire's storage and everyone stays signed in.
 
+With [ONCE](https://github.com/basecamp/once), on any server with Docker:
+
 ```sh
-docker build -t campfire-rust .
+once deploy ghcr.io/basecamp/once-campfire-rust --host chat.example.com
+```
+
+ONCE provides the secrets, TLS, backups and upgrades. The image is published for amd64 and arm64
+from `main` and from `v*` tags (see [`.github/workflows`](.github/workflows)).
+
+Or with Docker alone:
+
+```sh
 docker run -d -p 80:80 -p 443:443 \
   -e SECRET_KEY_BASE=... -e VAPID_PUBLIC_KEY=... -e VAPID_PRIVATE_KEY=... \
   -e TLS_DOMAIN=chat.example.com \
   -v campfire:/rails/storage \
-  campfire-rust
+  ghcr.io/basecamp/once-campfire-rust
 ```
 
 - **TLS:** with `TLS_DOMAIN` set, the app gets and renews its own Let's Encrypt certificate. It
@@ -252,7 +262,8 @@ docker run -d -p 80:80 -p 443:443 \
 - **ONCE hooks:** `/hooks/pre-backup` runs `campfire backup`, which uses SQLite's online backup API.
 - **Other options:** see `crates/campfire/src/config.rs`.
 
-For development:
+To build the image yourself: `docker build -t campfire-rust .` (the `reference/` submodule must be
+checked out). For development:
 
 ```sh
 cargo test --workspace --exclude html5ever   # all crates

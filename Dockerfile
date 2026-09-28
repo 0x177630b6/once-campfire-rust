@@ -90,10 +90,25 @@ RUN apt-get source -qq ffmpeg=${FFMPEG_VERSION} && \
     strip --strip-unneeded /opt/ffmpeg/lib/*.so.* /opt/ffmpeg/bin/*
 
 
+# The toolchain CI runs the tests and clippy in, with the source bind-mounted: the same libvips and
+# ffmpeg as the image, so the storage vectors' byte comparisons run rather than skip.
+FROM media-base AS toolchain
+COPY --from=vips /opt/vips /opt/vips
+COPY --from=ffmpeg /opt/ffmpeg /opt/ffmpeg
+ENV LIBRARY_PATH=/opt/vips/lib \
+    LD_LIBRARY_PATH=/opt/vips/lib:/opt/ffmpeg/lib \
+    PATH=/opt/ffmpeg/bin:$PATH
+RUN rustup component add clippy
+
+
 # Build the binary against the libvips above.
 FROM media-base AS build
 COPY --from=vips /opt/vips /opt/vips
 ENV LIBRARY_PATH=/opt/vips/lib
+# jemalloc bakes the page size in at build time and refuses to start on a kernel with larger pages.
+# arm64 kernels come with 4 or 16 KB pages (the Raspberry Pi 5 uses 16 KB), and built for 16 KB it
+# runs on both.
+ARG TARGETARCH
 
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
@@ -103,6 +118,7 @@ COPY reference reference
 
 RUN --mount=type=cache,id=campfire-rust-cargo-registry,target=/usr/local/cargo/registry \
     --mount=type=cache,id=campfire-rust-target,target=/src/target \
+    if [ "$TARGETARCH" = arm64 ]; then export JEMALLOC_SYS_WITH_LG_PAGE=14; fi && \
     cargo build --release --locked -p campfire && \
     install -D -m 755 target/release/campfire /out/campfire
 

@@ -228,7 +228,7 @@ impl ParamMap {
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&String, &Param)> {
-        self.entries.iter().map(|(k, v)| (k, v))
+        self.entries.iter()
     }
 
     pub fn len(&self) -> usize {
