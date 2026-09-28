@@ -673,23 +673,19 @@ fn grant_membership_to_open_rooms(tx: &mut Tx<'_>, user_id: i64) -> Result<()> {
         ["Rooms::Open"],
         |r| r.get(0),
     )?;
-    if room_ids.is_empty() {
-        return Ok(());
+    for room_ids in room_ids.chunks(crate::models::room::MEMBERSHIP_INSERT_BATCH) {
+        let rows: Vec<String> = room_ids
+            .iter()
+            .map(|_| format!("({SQLITE_NOW}, ?, {SQLITE_NOW}, ?)"))
+            .collect();
+        let sql = format!(
+            r#"INSERT INTO "memberships" ("created_at","room_id","updated_at","user_id") VALUES {} ON CONFLICT  DO NOTHING RETURNING "id""#,
+            rows.join(", ")
+        );
+        let values: Vec<i64> = room_ids.iter().flat_map(|room_id| [*room_id, user_id]).collect();
+        let mut stmt = tx.conn().prepare(&sql)?;
+        let mut rows = stmt.query(rusqlite::params_from_iter(values))?;
+        while rows.next()?.is_some() {}
     }
-    let rows: Vec<String> = room_ids
-        .iter()
-        .map(|_| format!("({SQLITE_NOW}, ?, {SQLITE_NOW}, ?)"))
-        .collect();
-    let sql = format!(
-        r#"INSERT INTO "memberships" ("created_at","room_id","updated_at","user_id") VALUES {} ON CONFLICT  DO NOTHING RETURNING "id""#,
-        rows.join(", ")
-    );
-    let values: Vec<i64> = room_ids
-        .iter()
-        .flat_map(|room_id| [*room_id, user_id])
-        .collect();
-    let mut stmt = tx.conn().prepare(&sql)?;
-    let mut rows = stmt.query(rusqlite::params_from_iter(values))?;
-    while rows.next()?.is_some() {}
     Ok(())
 }

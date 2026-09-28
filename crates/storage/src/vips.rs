@@ -29,7 +29,7 @@ unsafe extern "C" {
     fn vips_version_string() -> *const c_char;
     fn vips_block_untrusted_set(state: c_int);
     fn vips_operation_block_set(name: *const c_char, state: c_int);
-    fn vips_error_buffer() -> *const c_char;
+    fn vips_error_buffer_copy() -> *mut c_char;
     fn vips_error_clear();
     fn vips_foreign_find_load(filename: *const c_char) -> *const c_char;
     fn vips_operation_new(name: *const c_char) -> *mut c_void;
@@ -215,10 +215,16 @@ fn cstring(path: &Path) -> Result<CString> {
     CString::new(path.as_os_str().as_bytes()).map_err(|_| Error::Vips("path contains a NUL byte".into()))
 }
 
+/// libvips' error buffer is process-wide; `vips_error_buffer_copy` takes and clears it under
+/// libvips' lock, so concurrent calls don't read each other's errors.
 fn take_error() -> String {
     unsafe {
-        let message = CStr::from_ptr(vips_error_buffer()).to_string_lossy().trim_end().to_string();
-        vips_error_clear();
+        let copy = vips_error_buffer_copy();
+        if copy.is_null() {
+            return String::new();
+        }
+        let message = CStr::from_ptr(copy).to_string_lossy().trim_end().to_string();
+        g_free(copy.cast());
         message
     }
 }

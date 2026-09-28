@@ -423,18 +423,33 @@ impl ReaderPool {
 
     fn with<T>(&self, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
         let conn = {
-            let mut idle = self.idle.lock().unwrap();
+            let mut idle = self.idle.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             loop {
                 if let Some(conn) = idle.pop() {
                     break conn;
                 }
-                idle = self.available.wait(idle).unwrap();
+                idle = self.available.wait(idle).unwrap_or_else(|poisoned| poisoned.into_inner());
             }
         };
-        let result = f(&conn);
-        self.idle.lock().unwrap().push(conn);
-        self.available.notify_one();
-        result
+        let checkout = Checkout { pool: self, conn: Some(conn) };
+        f(checkout.conn.as_ref().expect("checked out"))
+    }
+}
+
+/// A reader connection out of the pool, returned when dropped: also when the read panics, which
+/// would otherwise lose the connection for good (and after as many panics as there are readers,
+/// hang every read).
+struct Checkout<'a> {
+    pool: &'a ReaderPool,
+    conn: Option<Connection>,
+}
+
+impl Drop for Checkout<'_> {
+    fn drop(&mut self) {
+        if let Some(conn) = self.conn.take() {
+            self.pool.idle.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(conn);
+            self.pool.available.notify_one();
+        }
     }
 }
 
@@ -444,6 +459,22 @@ mod tests {
 
     fn main_file_len(path: &Path) -> u64 {
         std::fs::metadata(path).unwrap().len()
+    }
+
+    #[test]
+    fn a_panicking_read_returns_its_connection() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = Config::new(dir.path().join("test.sqlite3"));
+        config.readers = 1;
+        let db = Database::open(config, Env::default()).unwrap();
+        for _ in 0..3 {
+            let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                db.read_blocking(|_| -> Result<()> { panic!("a bug in a read") })
+            }));
+            assert!(panicked.is_err());
+        }
+        // With one reader, a lost connection would make this wait forever.
+        assert_eq!(db.read_blocking(|conn| Ok(conn.query_row("SELECT 1", [], |r| r.get::<_, i64>(0))?)).unwrap(), 1);
     }
 
     /// Commits never checkpoint on the writer: the WAL reaching the auto-checkpoint threshold

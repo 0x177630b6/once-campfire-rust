@@ -431,28 +431,31 @@ fn insert_memberships(
     involvement: &str,
     user_ids: &[i64],
 ) -> Result<()> {
-    if user_ids.is_empty() {
-        return Ok(());
+    // In batches: SQLite binds at most 32,766 variables per statement, 3 per row here.
+    for user_ids in user_ids.chunks(MEMBERSHIP_INSERT_BATCH) {
+        let rows: Vec<String> = user_ids
+            .iter()
+            .map(|_| format!("({SQLITE_NOW}, ?, ?, {SQLITE_NOW}, ?)"))
+            .collect();
+        let sql = format!(
+            r#"INSERT INTO "memberships" ("created_at","involvement","room_id","updated_at","user_id") VALUES {} ON CONFLICT  DO NOTHING RETURNING "id""#,
+            rows.join(", ")
+        );
+        let mut values: Vec<rusqlite::types::Value> = Vec::new();
+        for user_id in user_ids {
+            values.push(involvement.to_string().into());
+            values.push(room_id.into());
+            values.push((*user_id).into());
+        }
+        let mut stmt = tx.conn().prepare(&sql)?;
+        let mut rows = stmt.query(rusqlite::params_from_iter(values))?;
+        while rows.next()?.is_some() {}
     }
-    let rows: Vec<String> = user_ids
-        .iter()
-        .map(|_| format!("({SQLITE_NOW}, ?, ?, {SQLITE_NOW}, ?)"))
-        .collect();
-    let sql = format!(
-        r#"INSERT INTO "memberships" ("created_at","involvement","room_id","updated_at","user_id") VALUES {} ON CONFLICT  DO NOTHING RETURNING "id""#,
-        rows.join(", ")
-    );
-    let mut values: Vec<rusqlite::types::Value> = Vec::new();
-    for user_id in user_ids {
-        values.push(involvement.to_string().into());
-        values.push(room_id.into());
-        values.push((*user_id).into());
-    }
-    let mut stmt = tx.conn().prepare(&sql)?;
-    let mut rows = stmt.query(rusqlite::params_from_iter(values))?;
-    while rows.next()?.is_some() {}
     Ok(())
 }
+
+/// Rows per `INSERT` of memberships, well under SQLite's bound-variable limit.
+pub(crate) const MEMBERSHIP_INSERT_BATCH: usize = 1_000;
 
 /// `memberships.grant_to(User.active)`, from `Rooms::Open`'s `after_save_commit`.
 fn grant_to_active_users(tx: &mut Tx<'_>, room_id: i64) -> Result<()> {
