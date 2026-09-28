@@ -52,6 +52,9 @@ struct Connection<U: Send + Sync + 'static> {
     started: Vec<(Subscriber, AbortRegistration)>,
 }
 
+/// How long a write may wait for a client to read before the connection is given up.
+const WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Incoming messages buffered between the reader task and the connection. A client that sends
 /// commands faster than they're handled is held back by TCP once this fills.
 const INCOMING_CAPACITY: usize = 16;
@@ -218,12 +221,14 @@ async fn close_socket(sink: &mut Sink, incoming: &mut mpsc::Receiver<Incoming>, 
 }
 
 impl<U: Send + Sync + 'static> Connection<U> {
-    /// Writes the pending frames in order, in one vectored write where the socket takes it.
+    /// Writes the pending frames in order, in one vectored write where the socket takes it. A
+    /// client that stops reading doesn't hold its connection forever: a write that can't finish in
+    /// [`WRITE_TIMEOUT`] ends it.
     async fn flush(&mut self, sink: &mut Sink) -> bool {
         if self.pending.is_empty() {
             return true;
         }
-        let written = sink.send(&self.pending).await.is_ok();
+        let written = matches!(tokio::time::timeout(WRITE_TIMEOUT, sink.send(&self.pending)).await, Ok(Ok(())));
         self.pending.clear();
         written
     }

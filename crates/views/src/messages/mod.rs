@@ -160,7 +160,7 @@ pub struct BoostView {
 #[derive(Clone, Debug, PartialEq)]
 pub enum MessageItem {
     Fragment { client_message_id: String, room_id: i64, html: fragment_cache::Fragment },
-    View(MessageView),
+    View(Box<MessageView>),
 }
 
 impl MessageItem {
@@ -196,14 +196,14 @@ impl MessageItem {
 
 impl From<MessageView> for MessageItem {
     fn from(message: MessageView) -> Self {
-        MessageItem::View(message)
+        MessageItem::View(Box::new(message))
     }
 }
 
 /// Deserializes a [`MessageView`] (fixtures describe views, never cached fragments).
 impl<'de> Deserialize<'de> for MessageItem {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        MessageView::deserialize(deserializer).map(MessageItem::View)
+        MessageView::deserialize(deserializer).map(|message| MessageItem::View(Box::new(message)))
     }
 }
 

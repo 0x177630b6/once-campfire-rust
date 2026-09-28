@@ -102,11 +102,11 @@ pub fn raise_open_file_limit() -> Option<u64> {
         if limit.rlim_cur < limit.rlim_max {
             let raised = libc::rlimit { rlim_cur: limit.rlim_max, rlim_max: limit.rlim_max };
             if libc::setrlimit(libc::RLIMIT_NOFILE, &raised) == 0 {
-                return Some(raised.rlim_cur as u64);
+                return Some(raised.rlim_cur);
             }
         }
     }
-    Some(limit.rlim_cur as u64)
+    Some(limit.rlim_cur)
 }
 
 #[cfg(not(unix))]
@@ -123,6 +123,6 @@ mod open_file_limit_tests {
         // SAFETY: getrlimit writes one `rlimit` through a valid pointer.
         assert_eq!(unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut now) }, 0);
         assert_eq!(now.rlim_cur, now.rlim_max);
-        assert_eq!(limit, now.rlim_cur as u64);
+        assert_eq!(limit, now.rlim_cur);
     }
 }

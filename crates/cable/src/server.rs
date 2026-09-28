@@ -318,6 +318,23 @@ fn page_not_found() -> Response {
     (StatusCode::NOT_FOUND, [(header::CONTENT_TYPE, "text/plain; charset=utf-8")], "Page not found").into_response()
 }
 
+/// The runtime connections run on, apart from the app's. A broadcast to a big room wakes every
+/// subscriber's task at once; on a shared runtime the HTTP requests that arrive meanwhile (the
+/// POST that made the broadcast among them) queue behind that whole wave. On threads of their own,
+/// the OS shares the cores between requests and the wave.
+fn connections_runtime() -> &'static tokio::runtime::Handle {
+    static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+    RUNTIME
+        .get_or_init(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .thread_name("cable")
+                .enable_all()
+                .build()
+                .expect("the cable runtime starts")
+        })
+        .handle()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -335,21 +352,4 @@ mod tests {
         assert_eq!(negotiate_protocol(&headers("foo")), None);
         assert_eq!(negotiate_protocol(&HeaderMap::new()), None);
     }
-}
-
-/// The runtime connections run on, apart from the app's. A broadcast to a big room wakes every
-/// subscriber's task at once; on a shared runtime the HTTP requests that arrive meanwhile (the
-/// POST that made the broadcast among them) queue behind that whole wave. On threads of their own,
-/// the OS shares the cores between requests and the wave.
-fn connections_runtime() -> &'static tokio::runtime::Handle {
-    static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
-    RUNTIME
-        .get_or_init(|| {
-            tokio::runtime::Builder::new_multi_thread()
-                .thread_name("cable")
-                .enable_all()
-                .build()
-                .expect("the cable runtime starts")
-        })
-        .handle()
 }

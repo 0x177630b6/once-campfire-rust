@@ -257,8 +257,13 @@ impl<R: AsyncRead + Unpin> Reader<R> {
         }
         let mut mask = [0u8; 4];
         self.io.read_exact(&mut mask).await?;
-        let mut payload = vec![0u8; len as usize];
-        self.io.read_exact(&mut payload).await?;
+        // Grown as bytes arrive rather than allocated from the header's claim, so a client can't
+        // make the server hold a megabyte per socket by announcing a frame it never sends.
+        let mut payload = Vec::new();
+        (&mut self.io).take(len).read_to_end(&mut payload).await?;
+        if payload.len() as u64 != len {
+            return Err(io::ErrorKind::UnexpectedEof.into());
+        }
         for (i, byte) in payload.iter_mut().enumerate() {
             *byte ^= mask[i % 4];
         }

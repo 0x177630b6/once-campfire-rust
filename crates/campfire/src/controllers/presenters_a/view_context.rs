@@ -102,7 +102,7 @@ impl Layout {
     pub fn page(&self, c: &mut Ctx, status: StatusCode, html: String) -> Response {
         let links = &stylesheet_tags().preload_links;
         let existing = c.headers.get("link").and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
-        c.set_header("link", &campfire_assets::append_preload_links(&existing, &links));
+        c.set_header("link", &campfire_assets::append_preload_links(&existing, links));
         c.render(status, &format::HTML, html)
     }
 

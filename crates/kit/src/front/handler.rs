@@ -419,10 +419,10 @@ impl hyper::body::Body for LoggedBody {
         {
             entry.bytes += data.len() as u64;
         }
-        if matches!(polled, Poll::Ready(None)) || self.inner.is_end_stream() {
-            if let Some(entry) = self.entry.take() {
-                entry.write();
-            }
+        if (matches!(polled, Poll::Ready(None)) || self.inner.is_end_stream())
+            && let Some(entry) = self.entry.take()
+        {
+            entry.write();
         }
         polled
     }
