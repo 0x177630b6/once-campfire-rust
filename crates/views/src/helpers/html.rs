@@ -90,4 +90,9 @@ mod tests {
     fn escapes_like_erb_util() {
         assert_eq!(escape(r#"<&>"'x"#), "&lt;&amp;&gt;&quot;&#39;x");
     }
+
+    #[test]
+    fn escapes_json_like_rails() {
+        assert_eq!(to_rails_json(&"<b>&</b>"), r#""\u003cb\u003e\u0026\u003c/b\u003e""#);
+    }
 }

@@ -177,6 +177,8 @@ mod tests {
         let names = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         assert_eq!(to_sentence(&names(&["A", "B"]), "+"), "A+B");
         assert_eq!(to_sentence(&names(&["A", "B", "C"]), "+"), "A, B, and C");
+        assert_eq!(to_sentence(&names(&["A"]), " and "), "A");
+        assert_eq!(to_sentence(&names(&["A", "B"]), " and "), "A and B");
     }
 
     #[test]

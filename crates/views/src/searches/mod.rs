@@ -5,7 +5,6 @@ use serde::Deserialize;
 
 use crate::helpers as h;
 use crate::layouts::Page;
-use crate::messages::support::query_escape;
 use crate::messages::MessageItem;
 use crate::ViewContext;
 
@@ -44,5 +43,15 @@ impl Page for Index<'_> {
 
 /// `searches_path(q: query)`.
 pub fn search_path(query: &str) -> String {
-    format!("{}?q={}", campfire_routes::searches(), query_escape(query))
+    format!("{}?q={}", campfire_routes::searches(), h::url::cgi_escape(query))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn search_paths_escape_the_query_like_cgi_escape() {
+        assert_eq!(search_path(r#"pizza & "pie" *~"#), "/searches?q=pizza+%26+%22pie%22+%2A~");
+    }
 }

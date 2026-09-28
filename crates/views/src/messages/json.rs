@@ -1,6 +1,6 @@
 //! The Jbuilder views: `messages/_message.json`, `messages/by_bots/{index,show}.json`,
 //! `messages/boosts/_boost.json` and `messages/boosts/by_bots/show.json`. Field order is the
-//! JSON key order Jbuilder emits. Serialize with [`super::support::rails_json`].
+//! JSON key order Jbuilder emits. Serialize with [`crate::helpers::to_rails_json`].
 
 use serde::{Deserialize, Serialize};
 
@@ -61,17 +61,17 @@ pub struct BoostMessageJson {
 
 /// `messages/by_bots/index.json.jbuilder`: `json.array! @messages, partial: "messages/message"`.
 pub fn by_bots_index(messages: &[MessageJson]) -> String {
-    super::support::rails_json(&messages)
+    crate::helpers::to_rails_json(&messages)
 }
 
 /// `messages/by_bots/show.json.jbuilder`.
 pub fn by_bots_show(message: &MessageJson) -> String {
-    super::support::rails_json(message)
+    crate::helpers::to_rails_json(message)
 }
 
 /// `messages/boosts/by_bots/show.json.jbuilder`.
 pub fn boosts_by_bots_show(boost: &BoostJson) -> String {
-    super::support::rails_json(boost)
+    crate::helpers::to_rails_json(boost)
 }
 
 // A Jbuilder fragment's payload is its JSON.
