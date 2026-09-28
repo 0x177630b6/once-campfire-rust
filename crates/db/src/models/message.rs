@@ -561,6 +561,12 @@ fn reversed<T>(mut rows: Vec<T>) -> Vec<T> {
 /// Each word of a search as an FTS5 string, so every word must appear and none is read as query
 /// syntax. Rails passes the words straight to `MATCH`, where `NOT`, `AND`, `OR` or `NEAR` in the
 /// wrong place is a syntax error (a 500).
+/// NULs separate words too: SQLite would end the query string at one.
 fn match_terms(query: &str) -> String {
-    query.split_whitespace().map(|word| format!("\"{}\"", word.replace('"', "\"\""))).collect::<Vec<_>>().join(" ")
+    query
+        .split(|c: char| c.is_whitespace() || c == '\0')
+        .filter(|word| !word.is_empty())
+        .map(|word| format!("\"{}\"", word.replace('"', "\"\"")))
+        .collect::<Vec<_>>()
+        .join(" ")
 }

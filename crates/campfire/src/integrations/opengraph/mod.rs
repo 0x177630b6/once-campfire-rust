@@ -15,6 +15,7 @@ mod html;
 mod location;
 mod metadata;
 
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 pub use metadata::Metadata;
@@ -63,9 +64,20 @@ async fn unfurl_within(net: &Network, url: &str, deadline: Duration) -> Result<U
     })
 }
 
+/// Pages parsed at once. The blocking work outlives an unfurl that gives up at its deadline, so
+/// it's bounded by permits the work itself holds, not by the unfurl's slot.
+const MAX_CONCURRENT_PARSES: usize = 4;
+
 /// Runs CPU-bound work (parsing and sanitizing pages of up to 5MB) on the blocking pool.
 async fn off_the_runtime<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> T {
-    tokio::task::spawn_blocking(work).await.unwrap_or_else(|error| std::panic::resume_unwind(error.into_panic()))
+    static PARSES: LazyLock<Arc<Semaphore>> = LazyLock::new(|| Arc::new(Semaphore::new(MAX_CONCURRENT_PARSES)));
+    let permit = PARSES.clone().acquire_owned().await.expect("never closed");
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        work()
+    })
+    .await
+    .unwrap_or_else(|error| std::panic::resume_unwind(error.into_panic()))
 }
 
 #[cfg(test)]
