@@ -272,8 +272,8 @@ impl Response {
     }
 
     /// Reads the body (inflating it when `Net::HTTP` would), stopping once it would exceed
-    /// `limit` bytes.
-    pub async fn read_body(mut self, limit: Option<usize>) -> Result<Body, HttpError> {
+    /// `limit` bytes. `Net::HTTP` reads any size.
+    pub async fn read_body(mut self, limit: usize) -> Result<Body, HttpError> {
         let mut inflater = self.inflater();
         let mut body = Vec::new();
         loop {
@@ -281,18 +281,18 @@ impl Response {
             let Some(frame) = frame else { break };
             let frame = frame.map_err(HttpError::from_hyper)?;
             let Ok(chunk) = frame.into_data() else { continue };
+            let room = limit - body.len();
             let chunk = match &mut inflater {
-                Some(inflater) => inflater.inflate(&chunk)?,
-                None => chunk.to_vec(),
+                Some(inflater) => inflater.inflate(&chunk, room)?,
+                None => Some(chunk.to_vec()),
             };
-            if limit.is_some_and(|limit| body.len() + chunk.len() > limit) {
-                return Ok(Body::TooLarge);
-            }
+            let Some(chunk) = chunk.filter(|chunk| chunk.len() <= room) else { return Ok(Body::TooLarge) };
             body.extend_from_slice(&chunk);
         }
         if let Some(inflater) = inflater {
+            let room = limit - body.len();
             let rest = inflater.finish()?;
-            if limit.is_some_and(|limit| body.len() + rest.len() > limit) {
+            if rest.len() > room {
                 return Ok(Body::TooLarge);
             }
             body.extend_from_slice(&rest);
@@ -333,11 +333,12 @@ impl Inflater {
         Self { decoder: None, pending: Vec::new() }
     }
 
-    fn inflate(&mut self, chunk: &[u8]) -> Result<Vec<u8>, HttpError> {
+    /// The chunk inflated, or `None` once the output would pass `room` bytes.
+    fn inflate(&mut self, chunk: &[u8], room: usize) -> Result<Option<Vec<u8>>, HttpError> {
         if self.decoder.is_none() {
             self.pending.extend_from_slice(chunk);
             if self.pending.len() < 2 {
-                return Ok(Vec::new());
+                return Ok(Some(Vec::new()));
             }
             let pending = std::mem::take(&mut self.pending);
             self.decoder = Some(if pending.starts_with(&[0x1f, 0x8b]) {
@@ -345,25 +346,29 @@ impl Inflater {
             } else {
                 Decoder::Zlib(flate2::write::ZlibDecoder::new(Vec::new()))
             });
-            return self.write(&pending);
+            return self.write(&pending, room);
         }
-        self.write(chunk)
+        self.write(chunk, room)
     }
 
-    fn write(&mut self, data: &[u8]) -> Result<Vec<u8>, HttpError> {
-        let inflate_error = |e: io::Error| HttpError::Inflate(e.to_string());
-        Ok(match self.decoder.as_mut().expect("decoder chosen") {
-            Decoder::Gzip(d) => {
-                d.write_all(data).map_err(inflate_error)?;
-                std::mem::take(d.get_mut())
+    /// Feeds `data` to the decoder a step at a time (a step writes at most the decoder's 32 KB
+    /// buffer) and stops as soon as the output passes `room`: deflate expands about 1000×, so
+    /// inflating a whole network chunk before checking could allocate hundreds of megabytes.
+    fn write(&mut self, mut data: &[u8], room: usize) -> Result<Option<Vec<u8>>, HttpError> {
+        let decoder = self.decoder.as_mut().expect("decoder chosen");
+        while !data.is_empty() {
+            match decoder.write(data).map_err(inflate_error)? {
+                0 => return Err(HttpError::Inflate("failed to write whole buffer".into())),
+                written => data = &data[written..],
             }
-            Decoder::Zlib(d) => {
-                d.write_all(data).map_err(inflate_error)?;
-                std::mem::take(d.get_mut())
+            if decoder.output().len() > room {
+                return Ok(None);
             }
-        })
+        }
+        Ok(Some(std::mem::take(decoder.output())))
     }
 
+    /// The rest of the output: at most what the decoder still buffers.
     fn finish(mut self) -> Result<Vec<u8>, HttpError> {
         if self.decoder.is_none() {
             if self.pending.is_empty() {
@@ -371,14 +376,35 @@ impl Inflater {
             }
             let pending = std::mem::take(&mut self.pending);
             self.decoder = Some(Decoder::Zlib(flate2::write::ZlibDecoder::new(Vec::new())));
-            self.write(&pending)?;
+            self.write(&pending, usize::MAX)?;
         }
-        let inflate_error = |e: io::Error| HttpError::Inflate(e.to_string());
         match self.decoder.expect("decoder chosen") {
-            Decoder::Gzip(d) => d.finish().map_err(inflate_error),
-            Decoder::Zlib(d) => d.finish().map_err(inflate_error),
+            Decoder::Gzip(d) => d.finish(),
+            Decoder::Zlib(d) => d.finish(),
+        }
+        .map_err(inflate_error)
+    }
+}
+
+impl Decoder {
+    fn write(&mut self, data: &[u8]) -> io::Result<usize> {
+        match self {
+            Decoder::Gzip(d) => d.write(data),
+            Decoder::Zlib(d) => d.write(data),
         }
     }
+
+    /// What's been inflated so far and not yet taken.
+    fn output(&mut self) -> &mut Vec<u8> {
+        match self {
+            Decoder::Gzip(d) => d.get_mut(),
+            Decoder::Zlib(d) => d.get_mut(),
+        }
+    }
+}
+
+fn inflate_error(error: io::Error) -> HttpError {
+    HttpError::Inflate(error.to_string())
 }
 
 /// `URI::HTTP#request_uri`: path (at least "/") and query.
@@ -389,4 +415,34 @@ pub fn request_uri(url: &campfire_richtext::uri::Uri) -> String {
         None => path.to_string(),
     };
     if target.starts_with('/') { target } else { format!("/{target}") }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::integrations::test_support::gzip_bomb;
+
+    const LIMIT: usize = 5 * 1024 * 1024;
+
+    /// A gigabyte packed into a megabyte stops inflating just past the limit, in one chunk.
+    #[test]
+    fn stops_inflating_a_gzip_bomb_at_the_limit() {
+        let mut inflater = Inflater::new();
+        let started = std::time::Instant::now();
+        assert_eq!(inflater.inflate(&gzip_bomb(1024), LIMIT).unwrap(), None);
+        assert!(started.elapsed() < Duration::from_secs(1), "{:?}", started.elapsed());
+        let inflated = inflater.decoder.as_mut().unwrap().output().len();
+        assert!(inflated <= LIMIT + 64 * 1024, "{inflated}");
+    }
+
+    #[test]
+    fn inflates_bodies_within_the_limit() {
+        let body = gzip_bomb(3);
+        let mut inflater = Inflater::new();
+        let (head, tail) = body.split_at(body.len() / 2);
+        let mut out = inflater.inflate(head, LIMIT).unwrap().unwrap();
+        out.extend(inflater.inflate(tail, LIMIT - out.len()).unwrap().unwrap());
+        out.extend(inflater.finish().unwrap());
+        assert_eq!(out, vec![0; 3 * 1024 * 1024]);
+    }
 }

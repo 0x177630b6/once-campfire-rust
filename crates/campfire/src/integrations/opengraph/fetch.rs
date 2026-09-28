@@ -40,7 +40,7 @@ pub async fn fetch_document(net: &Network, url: &Uri, ip: IpAddr) -> Result<Opti
     if response.content_length()?.unwrap_or(0) > MAX_BODY_SIZE as u64 {
         return Ok(None);
     }
-    Ok(match response.read_body(Some(MAX_BODY_SIZE)).await? {
+    Ok(match response.read_body(MAX_BODY_SIZE).await? {
         Body::Complete(body) => Some(body),
         Body::TooLarge => None,
     })

@@ -315,6 +315,10 @@ Deliberate:
   modules (libopenmpt), game-console music (libgme), JPEG XL and SVG frames, codec2 speech,
   teletext subtitles, and DASH/IMF manifests. Tracker modules and game-console music attached to
   a message are now stored without duration or bit rate, which Campfire never shows.
+- **Bot webhooks are bounded.** A delivery gets 60 seconds in all, on top of Rails' 7 per connect
+  or read; one that runs out answers "Failed to respond within 60 seconds", as a 7-second timeout
+  answers with its own. A reply larger than 100 MB (after decompression) fails the delivery and
+  posts nothing; Rails read replies of any size into memory.
 - **Not ported:** the duplicate `session_token` cookie Rails' Active Storage streaming sends; responses
   to requests for multiple byte ranges; and legacy AES-CBC encrypted cookies, since Campfire started
   on GCM.
