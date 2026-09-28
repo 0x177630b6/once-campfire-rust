@@ -194,7 +194,7 @@ impl Browser<'_> {
 }
 
 fn encode(value: &str) -> String {
-    super::cgi_escape(value)
+    campfire_views::helpers::url::cgi_escape(value)
 }
 
 fn assert_redirect(reply: &Reply, location: &str) {

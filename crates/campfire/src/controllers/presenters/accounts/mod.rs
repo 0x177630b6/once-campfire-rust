@@ -302,16 +302,3 @@ pub fn string_attribute(params: &campfire_kit::ParamMap, key: &str) -> Option<Op
     }
     Some(params.get(key).and_then(|param| param.to_s()))
 }
-
-/// `CGI.escape`, what `to_query` uses for URL query values.
-pub fn cgi_escape(value: &str) -> String {
-    let mut out = String::with_capacity(value.len());
-    for byte in value.bytes() {
-        match byte {
-            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' | b'.' | b'-' | b'~' => out.push(byte as char),
-            b' ' => out.push('+'),
-            _ => out.push_str(&format!("%{byte:02X}")),
-        }
-    }
-    out
-}
