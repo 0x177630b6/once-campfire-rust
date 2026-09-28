@@ -506,6 +506,30 @@ pub fn cast_integer(value: &str) -> Option<i64> {
     digits.parse::<i64>().ok().map(|n| sign * n)
 }
 
+/// `String#to_i`: optional leading whitespace and sign, then digits (underscores between them).
+pub fn ruby_to_i(value: &str) -> i64 {
+    let value = value.trim_start_matches([' ', '\t', '\n', '\u{b}', '\u{c}', '\r']);
+    let (negative, rest) = match value.as_bytes().first() {
+        Some(b'-') => (true, &value[1..]),
+        Some(b'+') => (false, &value[1..]),
+        _ => (false, value),
+    };
+    let rest = rest.strip_prefix("0d").or_else(|| rest.strip_prefix("0D")).unwrap_or(rest);
+    let mut number: i64 = 0;
+    let mut previous_digit = false;
+    for c in rest.chars() {
+        match c {
+            '0'..='9' => {
+                number = number.saturating_mul(10).saturating_add(i64::from(c as u8 - b'0'));
+                previous_digit = true;
+            }
+            '_' if previous_digit => previous_digit = false,
+            _ => break,
+        }
+    }
+    if negative { -number } else { number }
+}
+
 /// Ruby's `String#strip` (ASCII whitespace and NUL).
 fn ruby_strip(s: &str) -> &str {
     s.trim_matches(|c: char| c == '\0' || c.is_ascii_whitespace() || c == '\u{b}')
@@ -522,6 +546,25 @@ mod tests {
         assert_eq!(cast_integer(" -3"), Some(-3));
         assert_eq!(cast_integer("abc"), None);
         assert_eq!(cast_integer(""), None);
+    }
+
+    #[test]
+    fn to_i_like_ruby() {
+        assert_eq!(ruby_to_i("1717243200000"), 1717243200000);
+        assert_eq!(ruby_to_i(" +12abc"), 12);
+        assert_eq!(ruby_to_i("\t\n\u{b}\u{c}\r 7"), 7);
+        assert_eq!(ruby_to_i("\u{a0}5"), 0);
+        assert_eq!(ruby_to_i("abc"), 0);
+        assert_eq!(ruby_to_i("-5"), -5);
+        assert_eq!(ruby_to_i("--5"), 0);
+        assert_eq!(ruby_to_i("5_6"), 56);
+        assert_eq!(ruby_to_i("5__6"), 5);
+        assert_eq!(ruby_to_i("_5"), 0);
+        assert_eq!(ruby_to_i("0__5"), 0);
+        assert_eq!(ruby_to_i("-0d5"), -5);
+        assert_eq!(ruby_to_i("0d_5"), 0);
+        assert_eq!(ruby_to_i("0x5"), 0);
+        assert_eq!(ruby_to_i("99999999999999999999"), i64::MAX);
     }
 
     #[test]
