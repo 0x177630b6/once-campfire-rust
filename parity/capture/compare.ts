@@ -8,6 +8,7 @@ import type { PixelResult, TextDiff } from "./diff.ts"
 import { artifactBase } from "./capture.ts"
 import type { CellMeta } from "./capture.ts"
 import { cellId } from "./inventory.ts"
+import { maskDeliberateNetworkDifferences } from "./divergences.ts"
 import { maskOverriddenAssets } from "./overrides.ts"
 import type { Job } from "./inventory.ts"
 
@@ -114,8 +115,12 @@ export function compareJob(job: Job, runDir: string, expectedName: string, actua
   result.layers.push({ layer: "pixels", equal: pixels.equal, pixels })
 
   for (const [layer, ext] of TEXT_LAYERS) {
-    const expected = maskOverriddenAssets(readText(expectedBase + ext))
-    const actual = maskOverriddenAssets(readText(actualBase + ext))
+    const mask = (text: string) => {
+      const masked = maskOverriddenAssets(text)
+      return layer === "network" ? maskDeliberateNetworkDifferences(masked) : masked
+    }
+    const expected = mask(readText(expectedBase + ext))
+    const actual = mask(readText(actualBase + ext))
     const text = diffText(expected, actual)
     result.layers.push({ layer, equal: text.equal, text })
   }

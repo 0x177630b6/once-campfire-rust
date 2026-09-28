@@ -1,4 +1,4 @@
-// parity/allowlist.yml: known, owned exceptions. It must be empty at cutover.
+// parity/allowlist.yml: known, owned exceptions, each a deliberate divergence no mask can express.
 //
 // - state: rooms/show/busy        # glob over state ids (* within a segment, ** across)
 //   cells: "webkit-phone-*"        # optional glob over cell ids (engine-viewport-scheme)
