@@ -6,6 +6,11 @@
 //! client whose request has the same method, path, query, host and `Vary`ing headers. Everything
 //! else passes through with `X-Cache: miss`, or `X-Cache: bypass` for requests that can't be
 //! cached at all.
+//!
+//! Unlike Thruster, an entry's size includes its key and bookkeeping, so CACHE_SIZE bounds the
+//! memory the cache holds, and requests with very long URIs aren't cached at all: otherwise a
+//! stream of cacheable URIs padded with junk query parameters would be charged for their small
+//! responses while holding their large keys.
 
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex};
@@ -15,6 +20,14 @@ use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, Request, StatusCode
 use bytes::Bytes;
 use rand::Rng;
 use regex::Regex;
+
+/// The longest path and query a cacheable request may have. Campfire's own cacheable URLs
+/// (assets, avatars, QR codes) are far shorter.
+pub const MAX_CACHEABLE_URI: usize = 2048;
+
+/// What an entry costs beyond its key and response: the map slot, the `Entry` and the
+/// `CachedResponse`, and the key's place in the eviction list.
+const ENTRY_OVERHEAD: usize = 256;
 
 /// A response as the cache keeps it (`CacheableResponse`).
 #[derive(Debug)]
@@ -27,11 +40,11 @@ pub struct CachedResponse {
 }
 
 impl CachedResponse {
-    /// How much of the cache it takes up (Thruster counts its gob encoding).
-    fn size(&self) -> usize {
+    /// How much of the cache it takes up stored under `key`.
+    fn size(&self, key: &str) -> usize {
         let headers: usize = self.headers.iter().map(|(n, v)| n.as_str().len() + v.len()).sum();
         let variant: usize = self.variant.iter().map(|(n, v)| n.len() + v.len()).sum();
-        self.body.len() + headers + variant
+        self.body.len() + headers + variant + key.len() + ENTRY_OVERHEAD
     }
 }
 
@@ -44,8 +57,9 @@ struct Inner {
     capacity: i64,
     max_item_size: i64,
     size: i64,
-    keys: Vec<String>,
-    items: HashMap<String, Entry>,
+    /// The keys again, for sampling; each shares its string with the map.
+    keys: Vec<Arc<str>>,
+    items: HashMap<Arc<str>, Entry>,
 }
 
 struct Entry {
@@ -72,7 +86,7 @@ impl MemoryCache {
 
     pub fn set(&self, key: String, value: CachedResponse, expires_at: Instant, now: Instant) {
         let mut inner = self.inner.lock().unwrap();
-        let item_size = value.size() as i64;
+        let item_size = value.size(&key) as i64;
         if item_size > inner.max_item_size || item_size > inner.capacity {
             tracing::debug!(len = item_size, "Cache: item is too large to store");
             return;
@@ -81,6 +95,7 @@ impl MemoryCache {
         while inner.size > limit && !inner.keys.is_empty() {
             inner.evict_oldest_item(now);
         }
+        let key: Arc<str> = key.into();
         match inner.items.get(&key) {
             Some(existing) => inner.size -= existing.size,
             None => inner.keys.push(key.clone()),
@@ -119,13 +134,15 @@ impl Inner {
     }
 }
 
-/// `shouldCacheRequest`: GET or HEAD, not an upgrade, not a range.
+/// `shouldCacheRequest`: GET or HEAD, not an upgrade, not a range; and (unlike Thruster) not a
+/// very long URI.
 pub fn should_cache_request<B>(request: &Request<B>) -> bool {
     let header = |name| request.headers().get(name).map(HeaderValue::as_bytes).unwrap_or_default();
     let allowed_method = request.method() == Method::GET || request.method() == Method::HEAD;
     let is_upgrade = header(header::CONNECTION) == b"Upgrade" || header(header::UPGRADE) == b"websocket";
     let is_range = !header(header::RANGE).is_empty();
-    allowed_method && !is_upgrade && !is_range
+    let uri_length = request.uri().path_and_query().map_or(0, |p| p.as_str().len());
+    allowed_method && !is_upgrade && !is_range && uri_length <= MAX_CACHEABLE_URI
 }
 
 static PUBLIC: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?-u)\bpublic\b").unwrap());
@@ -173,9 +190,10 @@ impl Variant {
             .map(str::to_string)
             .or_else(|| uri.authority().map(|a| a.to_string()))
             .unwrap_or_default();
-        let path = percent_encoding::percent_decode_str(uri.path()).decode_utf8_lossy();
+        // The raw path, as the router sees it: Thruster keys on the decoded one, which would give
+        // `/a%2Fb` and `/a/b` one entry.
         let query = encode_query(uri.query().unwrap_or(""));
-        let base = format!("{}\n{path}\n{query}\n{host}", request.method());
+        let base = format!("{}\n{}\n{query}\n{host}", request.method(), uri.path());
         Self { base, request_headers: request.headers().clone(), names: Vec::new() }
     }
 
@@ -345,6 +363,9 @@ mod tests {
         assert!(!get(&[("range", "bytes=0-1")]));
         assert!(!should_cache_request(&Request::post("/x").body(()).unwrap()));
         assert!(should_cache_request(&Request::head("/x").body(()).unwrap()));
+        let uri = |length: usize| format!("/qr_code/aGk?pad={}", "x".repeat(length - 17));
+        assert!(should_cache_request(&Request::head(uri(MAX_CACHEABLE_URI)).body(()).unwrap()));
+        assert!(!should_cache_request(&Request::head(uri(MAX_CACHEABLE_URI + 1)).body(()).unwrap()));
     }
 
     #[test]
@@ -354,7 +375,7 @@ mod tests {
         assert_eq!(key("/a?b=2&a=1"), key("/a?a=1&b=2"));
         assert_eq!(key("/a?q=a+b"), key("/a?q=a%20b"));
         assert_ne!(key("/a?a=1"), key("/a?a=2"));
-        assert_eq!(key("/a%2Fb"), key("/a/b"));
+        assert_ne!(key("/a%2Fb"), key("/a/b"));
 
         let mut gzip = Variant::new(&request("/a", "gzip"));
         let mut plain = Variant::new(&request("/a", ""));
@@ -367,25 +388,47 @@ mod tests {
         assert!(!plain.matches(&gzip.variant_headers()));
     }
 
+    /// A body that makes an entry under a one-letter key take `size` bytes.
+    fn response_of_size(size: usize) -> CachedResponse {
+        response(&"x".repeat(size - 1 - ENTRY_OVERHEAD))
+    }
+
     #[test]
     fn memory_cache_expires_and_evicts() {
         let now = Instant::now();
-        let cache = MemoryCache::new(100, 60);
-        cache.set("a".into(), response(&"a".repeat(50)), now + Duration::from_secs(10), now);
+        let item = ENTRY_OVERHEAD as i64 + 50;
+        let cache = MemoryCache::new(2 * item, item + 10);
+        cache.set("a".into(), response_of_size(item as usize), now + Duration::from_secs(10), now);
         assert!(cache.get("a", now).is_some());
         assert!(cache.get("a", now + Duration::from_secs(11)).is_none());
 
-        cache.set("big".into(), response(&"b".repeat(61)), now + Duration::from_secs(10), now);
+        cache.set("big".into(), response_of_size(item as usize + 11), now + Duration::from_secs(10), now);
         assert!(cache.get("big", now).is_none(), "larger than the item limit");
 
-        cache.set("b".into(), response(&"b".repeat(50)), now + Duration::from_secs(10), now);
-        cache.set("c".into(), response(&"c".repeat(50)), now + Duration::from_secs(10), now);
-        assert_eq!(cache.size(), 100);
+        cache.set("b".into(), response_of_size(item as usize), now + Duration::from_secs(10), now);
+        cache.set("c".into(), response_of_size(item as usize), now + Duration::from_secs(10), now);
+        assert_eq!(cache.size(), 2 * item);
         let kept = ["a", "b", "c"].iter().filter(|k| cache.get(k, now).is_some()).count();
         assert_eq!(kept, 2);
 
-        cache.set("c".into(), response(&"c".repeat(20)), now + Duration::from_secs(10), now);
-        assert!(cache.size() <= 100);
+        cache.set("c".into(), response_of_size(item as usize - 30), now + Duration::from_secs(10), now);
+        assert!(cache.size() <= 2 * item);
+    }
+
+    #[test]
+    fn memory_cache_charges_keys() {
+        let now = Instant::now();
+        let capacity = 64 * 1024;
+        let cache = MemoryCache::new(capacity, 1024 * 1024);
+        for n in 0..100 {
+            let key = format!("HEAD\n/qr_code/aGk\npad={n}{}\nchat.test", "x".repeat(1000));
+            cache.set(key, response(""), now + Duration::from_secs(60), now);
+        }
+        assert!(cache.size() <= capacity);
+        assert!(cache.size() > capacity - 2000, "charged the keys: {}", cache.size());
+        let inner = cache.inner.lock().unwrap();
+        let held: usize = inner.keys.iter().map(|k| k.len() + ENTRY_OVERHEAD).sum();
+        assert!(held as i64 <= capacity);
     }
 
     #[test]

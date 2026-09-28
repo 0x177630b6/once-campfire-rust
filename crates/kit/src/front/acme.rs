@@ -117,6 +117,11 @@ impl CertManager {
         if let Some(certificate) = self.loaded(&name) {
             return Ok(certificate);
         }
+        // A cached certificate is used even for a name no longer in TLS_DOMAIN, as autocert does.
+        // Any other name is turned away here, before it costs a task or a place in `obtaining`.
+        if !self.host_allowed(&name) && !self.has_cache_file(&name).await {
+            return Err(format!("acme/autocert: host {name:?} not configured in HostWhitelist").into());
+        }
         // In a task of its own, so a client that gives up doesn't abandon the order.
         let this = self.clone();
         let task = tokio::spawn(async move { this.obtain(name).await });
@@ -143,22 +148,39 @@ impl CertManager {
         self.http_tokens.read().unwrap().get(path).cloned()
     }
 
+    /// Obtains the certificate for `name` once, however many handshakes ask for it meanwhile.
     async fn obtain(self: Arc<Self>, name: String) -> Result<Arc<CertifiedKey>, Error> {
         let lock = self.obtaining.lock().unwrap().entry(name.clone()).or_default().clone();
-        let _obtaining = lock.lock().await;
-        if let Some(certificate) = self.loaded(&name) {
+        let result = {
+            let _obtaining = lock.lock().await;
+            self.obtain_now(&name).await
+        };
+        self.finish_obtaining(&name, lock);
+        result
+    }
+
+    /// Forgets `name`'s lock unless another `obtain` holds it too. Clones are only taken with
+    /// `obtaining` locked, so under that lock a count of two (the map's and ours) is final.
+    fn finish_obtaining(&self, name: &str, lock: Arc<tokio::sync::Mutex<()>>) {
+        let mut obtaining = self.obtaining.lock().unwrap();
+        if obtaining.get(name).is_some_and(|current| Arc::ptr_eq(current, &lock)) && Arc::strong_count(&lock) == 2 {
+            obtaining.remove(name);
+        }
+    }
+
+    async fn obtain_now(self: &Arc<Self>, name: &str) -> Result<Arc<CertifiedKey>, Error> {
+        if let Some(certificate) = self.loaded(name) {
             return Ok(certificate);
         }
-        // A cached certificate is used even for a name no longer in TLS_DOMAIN, as autocert does.
-        if let Some((certificate, not_after)) = self.read_cached(&name) {
-            self.install(&name, certificate.clone(), not_after);
+        if let Some((certificate, not_after)) = self.read_cached(name).await {
+            self.install(name, certificate.clone(), not_after);
             return Ok(certificate);
         }
-        if !self.host_allowed(&name) {
+        if !self.host_allowed(name) {
             return Err(format!("acme/autocert: host {name:?} not configured in HostWhitelist").into());
         }
-        let (certificate, not_after) = self.issue(&name).await?;
-        self.install(&name, certificate.clone(), not_after);
+        let (certificate, not_after) = self.issue(name).await?;
+        self.install(name, certificate.clone(), not_after);
         Ok(certificate)
     }
 
@@ -192,9 +214,13 @@ impl CertManager {
         }
     }
 
+    async fn has_cache_file(&self, name: &str) -> bool {
+        tokio::fs::try_exists(self.options.storage_path.join(name)).await.unwrap_or(false)
+    }
+
     /// `cacheGet`: a cached certificate that's current, covers `name` and matches its key.
-    fn read_cached(&self, name: &str) -> Option<(Arc<CertifiedKey>, SystemTime)> {
-        let pem = std::fs::read(self.options.storage_path.join(name)).ok()?;
+    async fn read_cached(&self, name: &str) -> Option<(Arc<CertifiedKey>, SystemTime)> {
+        let pem = tokio::fs::read(self.options.storage_path.join(name)).await.ok()?;
         match parse_cached(&pem, name) {
             Ok(parsed) => Some(parsed),
             Err(error) => {
@@ -271,7 +297,7 @@ impl CertManager {
 
         let pem = cache_entry(&key.serialize_der(), &chain)?;
         let parsed = parse_cached(pem.as_bytes(), name)?;
-        write_cache_file(&self.options.storage_path, name, pem.as_bytes())?;
+        self.write_cache_file(name, pem.into_bytes()).await?;
         Ok(parsed)
     }
 
@@ -287,7 +313,7 @@ impl CertManager {
         };
         let directory = self.options.directory_url.clone();
         let key_path = self.options.storage_path.join(ACCOUNT_KEY);
-        let registered = match std::fs::read(&key_path).ok() {
+        let registered = match tokio::fs::read(&key_path).await.ok() {
             Some(pem) => {
                 let pkcs8 = parse_private_key(&pem)?;
                 let key = Key::from_pkcs8_der(pkcs8.clone_key())?;
@@ -297,18 +323,23 @@ impl CertManager {
                 Some((kid, hmac)) => {
                     let new_account = NewAccount { contact: &[], terms_of_service_agreed: true, only_return_existing: false };
                     let (account, credentials) = builder()?.create(&new_account, directory, Some(&ExternalAccountKey::new(kid.clone(), hmac))).await?;
-                    write_cache_file(&self.options.storage_path, ACCOUNT_KEY, private_key_pem(credentials.private_key().secret_pkcs8_der())?.as_bytes())?;
+                    self.write_cache_file(ACCOUNT_KEY, private_key_pem(credentials.private_key().secret_pkcs8_der())?.into_bytes()).await?;
                     account
                 }
                 None => {
                     let (key, pkcs8) = Key::generate_pkcs8()?;
-                    write_cache_file(&self.options.storage_path, ACCOUNT_KEY, private_key_pem(pkcs8.secret_pkcs8_der())?.as_bytes())?;
+                    self.write_cache_file(ACCOUNT_KEY, private_key_pem(pkcs8.secret_pkcs8_der())?.into_bytes()).await?;
                     builder()?.create_from_key((key, PrivateKeyDer::Pkcs8(pkcs8)), directory).await?.0
                 }
             },
         };
         *account = Some(registered.clone());
         Ok(registered)
+    }
+
+    async fn write_cache_file(&self, name: &str, data: Vec<u8>) -> Result<(), Error> {
+        let (dir, name) = (self.options.storage_path.clone(), name.to_string());
+        tokio::task::spawn_blocking(move || write_cache_file(&dir, &name, &data)).await?
     }
 }
 
@@ -534,6 +565,44 @@ mod tests {
             assert_eq!(std::fs::metadata(path.join("chat.example.com")).unwrap().permissions().mode() & 0o777, 0o600);
             assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o700);
         }
+    }
+
+    fn manager(storage: &Path) -> Arc<CertManager> {
+        let options = AcmeOptions {
+            directory_url: "https://acme.invalid/directory".into(),
+            external_account: None,
+            storage_path: storage.to_path_buf(),
+            domains: vec!["chat.example.com".into()],
+            challenge_types: vec![ChallengeType::TlsAlpn01],
+            directory_root: None,
+        };
+        CertManager::new(options)
+    }
+
+    #[tokio::test]
+    async fn names_outside_tls_domain_leave_nothing_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let certs = manager(dir.path());
+        for n in 0..100 {
+            assert!(certs.certificate(Some(&format!("x{n}.example.com"))).await.is_err());
+        }
+        assert!(certs.obtaining.lock().unwrap().is_empty());
+        assert!(certs.certificates.read().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn cached_certificates_load_and_are_forgotten_by_obtaining() {
+        let dir = tempfile::tempdir().unwrap();
+        let (chain, key) = self_signed(&["chat.example.com", "old.example.com"]);
+        let pem = cache_entry(&key.serialize_der(), &chain).unwrap();
+        write_cache_file(dir.path(), "chat.example.com", pem.as_bytes()).unwrap();
+        write_cache_file(dir.path(), "old.example.com", pem.as_bytes()).unwrap();
+        let certs = manager(dir.path());
+        assert!(certs.certificate(Some("chat.example.com")).await.is_ok());
+        // No longer in TLS_DOMAIN, but cached: served, as autocert does.
+        assert!(certs.certificate(Some("old.example.com")).await.is_ok());
+        assert!(certs.loaded("old.example.com").is_some());
+        assert!(certs.obtaining.lock().unwrap().is_empty());
     }
 
     #[test]

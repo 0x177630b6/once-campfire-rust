@@ -98,9 +98,10 @@ impl Compression {
             match stream.next().await {
                 Some(Ok(chunk)) => buffered.extend_from_slice(&chunk),
                 Some(Err(error)) => {
-                    tracing::debug!(%error, "response body failed");
-                    ended = true;
-                    break;
+                    // Pass on what came and then the error, so the response is cut short rather
+                    // than completed.
+                    let body = stream::iter([Ok(buffered.freeze()), Err(error)]);
+                    return Response::from_parts(parts, Body::from_stream(body));
                 }
                 None => {
                     ended = true;
@@ -470,6 +471,15 @@ mod tests {
         assert_eq!(decoded, body);
         let comment = decoder.header().unwrap().comment().unwrap();
         assert!(!comment.is_empty() && comment.len() <= 32 && b"Padding-Padding-Padding-Padding-P".starts_with(comment));
+    }
+
+    #[tokio::test]
+    async fn a_failing_body_fails_the_response() {
+        let chunks = [Ok(Bytes::from("hello campfire ".repeat(100))), Err(std::io::Error::other("disk gone"))];
+        let failing = Response::builder().header(header::CONTENT_TYPE, "text/html").body(Body::from_stream(stream::iter(chunks))).unwrap();
+        let response = Compression::new(32, false).apply(negotiation("gzip"), failing, HeaderMerge::Append).await;
+        assert!(response.headers().get(header::CONTENT_ENCODING).is_none());
+        assert!(response.into_body().collect().await.is_err());
     }
 
     #[tokio::test]
