@@ -70,7 +70,7 @@ fn run_scenario(t: &TestDb) {
             NewUser {
                 name: "User".into(),
                 email_address: Some("u@example.com".into()),
-                password: Some("secret123456".into()),
+                password_digest: Some(crate::PasswordDigest::create("secret123456", 4).unwrap()),
                 ..Default::default()
             },
         )

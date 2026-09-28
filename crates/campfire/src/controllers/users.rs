@@ -37,7 +37,7 @@ pub async fn create(c: &mut Ctx) -> Result {
         // users.name is NOT NULL: a missing name fails the insert, as in Rails.
         name: params.get("name").and_then(|p| p.to_s()).ok_or_else(|| Error::internal(anyhow::anyhow!("NOT NULL constraint failed: users.name")))?,
         email_address: email_address.clone(),
-        password: params.get("password").and_then(|p| p.to_s()).filter(|password| !password.is_empty()),
+        password_digest: concerns::password_digest(c, params.get("password").and_then(|p| p.to_s()).filter(|password| !password.is_empty())).await?,
         ..NewUser::default()
     };
     let avatar = Assignment::from_params(&params, "avatar")?.stage(c.app()).await?;

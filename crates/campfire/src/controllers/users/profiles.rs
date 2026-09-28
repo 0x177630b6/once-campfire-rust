@@ -53,7 +53,7 @@ pub async fn update(c: &mut Ctx) -> Result {
         name: present("name"),
         email_address: present("email_address").map(Some),
         // `password=` ignores a blank password.
-        password: present("password").filter(|password| !password.is_empty()),
+        password_digest: concerns::password_digest(c, present("password").filter(|password| !password.is_empty())).await?,
         bio: present("bio").map(Some),
         ..UserChanges::default()
     };
