@@ -298,7 +298,9 @@ async fn cable_handshake_with_a_rails_session_cookie() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let router = test.booted.router.clone();
-    tokio::spawn(campfire_kit::server::serve(listener, router, std::future::pending()));
+    let service = campfire_kit::front::app_service(router);
+    let shutdown = campfire_kit::front::Shutdown::when(std::future::pending());
+    tokio::spawn(campfire_kit::front::serve_plain(listener, service, campfire_kit::front::Protocol::Http1, Default::default(), shutdown));
 
     let connect = |cookie: Option<String>| async move {
         let mut request = format!("ws://{address}/cable").into_client_request().unwrap();

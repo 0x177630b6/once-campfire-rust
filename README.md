@@ -247,6 +247,9 @@ docker run -d -p 80:80 -p 443:443 \
   (as the Rails image takes them). They're checked at boot; without a valid pair, push
   notifications are off and the log says why. `VAPID_SUBJECT` is the contact push services see (a
   `mailto:` or `https:` URL); it defaults to `https://` and your `TLS_DOMAIN`.
+- **The app port:** as with Puma behind Thruster, the app also answers on `TARGET_PORT` (3000)
+  without the front server's cache and compression, but only on loopback. Set `TARGET_BIND`
+  (e.g. `0.0.0.0`) to open it further; it trusts `X-Forwarded-*` from whoever reaches it.
 - **Storage:** everything lives under `/rails/storage`: the SQLite database, uploaded files and
   backups.
 - **Media:** the image builds libvips 8.16.1 (thumbnails and other variants) and ffmpeg 7.1.5
@@ -358,6 +361,12 @@ Deliberate:
   or read; one that runs out answers "Failed to respond within 60 seconds", as a 7-second timeout
   answers with its own. A reply larger than 100 MB (after decompression) fails the delivery and
   posts nothing; Rails read replies of any size into memory.
+- **The front server is stricter than Thruster.** The app's own listener on `TARGET_PORT` binds
+  loopback only (Puma bound every interface) and has the front's timeouts and `MAX_REQUEST_BODY`
+  (see [Running it](#running-it)). The response cache counts its keys toward `CACHE_SIZE`, skips
+  URIs longer than 2 KB, keys on the raw path (Thruster decoded it, so `/a%2Fb` and `/a/b` shared
+  an entry), and lets range requests through to the app instead of answering them with a whole
+  cached body.
 - **Not ported:** the duplicate `session_token` cookie Rails' Active Storage streaming sends; responses
   to requests for multiple byte ranges; and legacy AES-CBC encrypted cookies, since Campfire started
   on GCM.

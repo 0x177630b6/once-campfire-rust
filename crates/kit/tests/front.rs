@@ -245,8 +245,16 @@ async fn caches_public_responses() {
     assert!(revalidated.body.is_empty());
 
     let ranged = exchange(server.http, &get_request("/public", "Accept-Encoding: identity\r\nRange: bytes=0-1\r\n")).await;
-    assert_eq!(ranged.get("x-cache"), Some("hit"), "Thruster looks a range up before bypassing it");
-    assert_eq!(renders.load(Ordering::SeqCst), 2);
+    assert_eq!(ranged.get("x-cache"), Some("bypass"), "ranges go to the app");
+    assert_eq!(renders.load(Ordering::SeqCst), 3);
+
+    // Long URIs aren't cached.
+    let long = format!("/public?pad={}", "x".repeat(4096));
+    for _ in 0..2 {
+        let reply = exchange(server.http, &get_request(&long, "Accept-Encoding: identity\r\n")).await;
+        assert_eq!(reply.get("x-cache"), Some("bypass"));
+    }
+    assert_eq!(renders.load(Ordering::SeqCst), 5);
 
     for _ in 0..2 {
         let private = exchange(server.http, &get_request("/private", "")).await;
@@ -331,6 +339,32 @@ async fn the_app_still_listens_on_the_target_port() {
     assert_eq!(reply.get("date"), None);
     assert_eq!(reply.get("set-cookie"), Some("tracked=1; path=/"));
     server.stop().await;
+}
+
+#[tokio::test]
+async fn the_target_port_is_loopback_only_and_limited() {
+    let (app, _) = test_app();
+    let server = Server::start(&[("HTTP_READ_TIMEOUT", "1"), ("MAX_REQUEST_BODY", "10")], app).await;
+    if let Some(address) = non_loopback_address() {
+        assert!(TcpStream::connect((address, server.target)).await.is_err(), "reachable on {address}");
+    }
+
+    let large = exchange(server.target, "POST /upload HTTP/1.1\r\nHost: x\r\nConnection: close\r\nContent-Length: 11\r\n\r\nhello world").await;
+    assert_eq!(large.status, 413);
+
+    let mut stream = TcpStream::connect(("127.0.0.1", server.target)).await.unwrap();
+    stream.write_all(b"GET / HTTP/1.1\r\nHost: x\r\n").await.unwrap();
+    let mut buffer = vec![0; 4096];
+    let n = tokio::time::timeout(Duration::from_secs(5), stream.read(&mut buffer)).await.expect("closed by the read timeout").unwrap_or(0);
+    assert!(n == 0 || buffer.starts_with(b"HTTP/1.1 408"));
+    server.stop().await;
+}
+
+/// This machine's address on its default route, if it has one.
+fn non_loopback_address() -> Option<std::net::IpAddr> {
+    let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.connect("192.0.2.1:9").ok()?;
+    Some(socket.local_addr().ok()?.ip()).filter(|ip| !ip.is_loopback() && !ip.is_unspecified())
 }
 
 #[tokio::test]

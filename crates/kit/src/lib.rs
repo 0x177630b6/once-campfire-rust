@@ -35,6 +35,7 @@ pub mod request;
 pub mod response;
 pub mod server;
 pub mod session;
+#[cfg(any(test, feature = "test-support"))]
 pub mod testing;
 
 pub use adapter::{ActionFn, OriginalMethod, RequestId, action, app, delete, get, patch, post, put};

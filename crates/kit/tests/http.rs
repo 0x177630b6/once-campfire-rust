@@ -8,7 +8,7 @@ use axum::extract::ConnectInfo;
 use axum::http::{Request as HttpRequest, header};
 use campfire_kit::format::{HTML, JSON, TURBO_STREAM};
 use campfire_kit::{
-    Cookie, Ctx, ExpiresIn, Freshness, Kit, KitConfig, Redirect, Result, SendOptions, StatusCode, action, halt, testing,
+    Cookie, Ctx, ExpiresIn, Freshness, Kit, KitConfig, Redirect, Result, SendOptions, StatusCode, action, front, halt, testing,
 };
 use serde_json::json;
 use tower::ServiceExt;
@@ -98,6 +98,12 @@ async fn sign_in(c: &mut Ctx) -> Result {
     c.cookies.set_signed("session_token", Cookie::new("tok123").permanent().httponly())?;
     c.cookies.set("last_room", Cookie::new("7").permanent());
     Ok(c.head(StatusCode::OK))
+}
+
+/// `sign_in` from an `ActionController::Live` controller.
+async fn live_sign_in(c: &mut Ctx) -> Result {
+    c.use_live_response();
+    sign_in(c).await
 }
 
 async fn whoami(c: &mut Ctx) -> Result {
@@ -202,6 +208,7 @@ fn app_with(config: KitConfig) -> Router {
         .route("/notice", campfire_kit::get(notice))
         .route("/flash", campfire_kit::get(show_flash))
         .route("/sign_in", campfire_kit::get(sign_in))
+        .route("/live_sign_in", campfire_kit::get(live_sign_in))
         .route("/whoami", campfire_kit::get(whoami))
         .route("/sign_out", campfire_kit::get(sign_out))
         .route("/admin", campfire_kit::get(admin))
@@ -296,6 +303,14 @@ async fn conditional_get_on_body_etag() {
     assert_eq!(second.status, StatusCode::NOT_MODIFIED);
     assert!(second.body.is_empty());
     assert_eq!(second.header("content-type"), None);
+
+    // Lists and `*` count, as they do for `fresh_when` (RFC 9110).
+    for if_none_match in [format!("\"other\", {etag}"), "*".to_string()] {
+        let listed = send(&app, get("/rooms/5").header(header::IF_NONE_MATCH, &if_none_match).body(AxumBody::empty()).unwrap()).await;
+        assert_eq!(listed.status, StatusCode::NOT_MODIFIED, "{if_none_match}");
+    }
+    let other = send(&app, get("/rooms/5").header(header::IF_NONE_MATCH, "\"other\"").body(AxumBody::empty()).unwrap()).await;
+    assert_eq!(other.status, StatusCode::OK);
 }
 
 #[tokio::test]
@@ -514,6 +529,10 @@ async fn signed_permanent_cookies_and_deletion() {
         && c.ends_with("; path=/; expires=Wed, 01 Jun 2044 12:00:00 GMT; httponly; samesite=lax")));
     assert!(cookies.contains(&"last_room=7; path=/; expires=Wed, 01 Jun 2044 12:00:00 GMT; samesite=lax".to_string()));
 
+    // Rails' Live responses send the action's cookies twice; this sends them once.
+    let live = send(&app, get("/live_sign_in").body(AxumBody::empty()).unwrap()).await;
+    assert_eq!(live.cookies().len(), 2, "{:?}", live.cookies());
+
     let jar = signed_in.cookie_jar();
     let me = send(&app, get("/whoami").header(header::COOKIE, &jar).body(AxumBody::empty()).unwrap()).await;
     assert_eq!(me.json(), json!({"token": "tok123", "last_room": "7"}));
@@ -664,6 +683,8 @@ async fn stale_and_expires_in() {
     let etag = fresh.header("etag").unwrap().to_string();
     let cached = send(&app, get("/fresh").header(header::IF_NONE_MATCH, &etag).body(AxumBody::empty()).unwrap()).await;
     assert_eq!(cached.status, StatusCode::NOT_MODIFIED);
+    let listed = send(&app, get("/fresh").header(header::IF_NONE_MATCH, format!("\"other\", {etag}")).body(AxumBody::empty()).unwrap()).await;
+    assert_eq!(listed.status, StatusCode::NOT_MODIFIED);
 
     // Turbo Frame requests get a different ETag (turbo-rails' frame etagger).
     let frame = send(&app, get("/fresh").header("turbo-frame", "x").body(AxumBody::empty()).unwrap()).await;
@@ -738,9 +759,11 @@ async fn serves_with_peer_addresses_and_shuts_down_gracefully() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
-    let server = tokio::spawn(campfire_kit::server::serve(listener, app(), async {
+    let shutdown = front::Shutdown::when(async {
         let _ = stopped.await;
-    }));
+    });
+    let service = front::app_service(app());
+    let server = tokio::spawn(front::serve_plain(listener, service, front::Protocol::Http1, front::Options::default(), shutdown.clone()));
 
     let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
     stream.write_all(b"GET /echo/1 HTTP/1.1\r\nHost: chat.example.com\r\nConnection: close\r\n\r\n").await.unwrap();
@@ -750,5 +773,6 @@ async fn serves_with_peer_addresses_and_shuts_down_gracefully() {
     assert!(response.contains(r#""remote_ip":"127.0.0.1""#));
 
     stop.send(()).unwrap();
-    tokio::time::timeout(std::time::Duration::from_secs(5), server).await.unwrap().unwrap().unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), server).await.unwrap().unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), shutdown.drained()).await.unwrap();
 }

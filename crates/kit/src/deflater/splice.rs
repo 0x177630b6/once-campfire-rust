@@ -137,7 +137,7 @@ impl PageParts {
                 }
             }
         }
-        hasher.finalize()[..16].iter().map(|b| format!("{b:02x}")).collect()
+        hex::encode(&hasher.finalize()[..16])
     }
 
     /// The whole gzip member for `body`, decoding to exactly `body`. `mtime` and the Unix OS code

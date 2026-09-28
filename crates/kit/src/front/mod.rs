@@ -8,7 +8,9 @@
 //! - For every request: the in-memory response cache (`cache.rs`), compression on top of the
 //!   app's own gzip (`compression.rs`), `X-Forwarded-*` and `X-Request-Start`, MAX_REQUEST_BODY,
 //!   the HTTP_*_TIMEOUTs and a request log line (`handler.rs`, `conn.rs`).
-//! - The app still listens on TARGET_PORT (3000) by itself, as Puma did behind Thruster.
+//! - The app still listens on TARGET_PORT (3000) by itself, as Puma did behind Thruster, but only
+//!   on loopback unless TARGET_BIND says otherwise, and with the front's timeouts and
+//!   MAX_REQUEST_BODY.
 //!
 //! Not carried over, because nothing reaches them: X-Sendfile (Rack 3.2's `Rack::Sendfile` no
 //! longer honours the `X-Sendfile-Type` request header Thruster sends, and the reference
@@ -31,7 +33,6 @@ use std::time::Duration;
 use axum::Router;
 use axum::body::Body;
 use axum::extract::ConnectInfo;
-use tokio::sync::watch;
 use tower::ServiceExt;
 
 pub use acme::{AcmeOptions, CertManager};
@@ -54,12 +55,7 @@ pub async fn serve_with(
     acme: Option<AcmeOptions>,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> std::io::Result<()> {
-    let (closing_tx, closing_rx) = watch::channel(false);
-    let shutdown_state = Shutdown::new(closing_rx);
-    tokio::spawn(async move {
-        shutdown.await;
-        let _ = closing_tx.send(true);
-    });
+    let shutdown_state = Shutdown::when(shutdown);
 
     let options = Options {
         idle_timeout: nonzero(config.http_idle_timeout),
@@ -73,7 +69,7 @@ pub async fn serve_with(
         Box::pin(async move { handler.call(request, conn).await })
     });
 
-    let upstream = serve_upstream(&config, app, shutdown_state.clone()).await?;
+    let upstream = serve_upstream(&config, app, options, shutdown_state.clone()).await?;
     let http = bind(config.http_port).await?;
     let mut servers = vec![upstream];
     if config.has_tls() {
@@ -102,14 +98,31 @@ pub async fn serve_with(
 }
 
 /// The app on its own on TARGET_PORT, as Puma listened behind Thruster (Thruster set `PORT` to
-/// TARGET_PORT for it): HTTP/1.1, no `Date`, none of Thruster's handling.
-async fn serve_upstream(config: &FrontConfig, app: Router, shutdown: Shutdown) -> std::io::Result<tokio::task::JoinHandle<()>> {
+/// TARGET_PORT for it): HTTP/1.1, no `Date`, no cache or compression. Unlike Puma it listens on
+/// TARGET_BIND (loopback) and keeps to the front's timeouts and body limit, since whoever reaches
+/// it can claim any `X-Forwarded-*`.
+async fn serve_upstream(config: &FrontConfig, app: Router, options: Options, shutdown: Shutdown) -> std::io::Result<tokio::task::JoinHandle<()>> {
     if config.target_port == config.http_port || (config.has_tls() && config.target_port == config.https_port) {
         tracing::warn!(port = config.target_port, "TARGET_PORT is the front server's port; not listening on it separately");
         return Ok(tokio::spawn(async {}));
     }
-    let listener = bind(config.target_port).await?;
-    Ok(tokio::spawn(serve_plain(listener, app_service(app), Protocol::Http1, Options::default(), shutdown)))
+    let listener = tokio::net::TcpListener::bind((config.target_bind, config.target_port)).await?;
+    let service = limited_app_service(app, config.max_request_body.max(0) as u64);
+    Ok(tokio::spawn(serve_plain(listener, service, Protocol::Http1, Options { date: false, ..options }, shutdown)))
+}
+
+/// `app_service` behind MAX_REQUEST_BODY.
+fn limited_app_service(app: Router, max_request_body: u64) -> Service {
+    let app = app_service(app);
+    Arc::new(move |request, conn| {
+        let app = app.clone();
+        Box::pin(async move {
+            match handler::within_limit(request, max_request_body).await {
+                Ok(request) => app(request, conn).await,
+                Err(()) => handler::too_large(),
+            }
+        })
+    })
 }
 
 /// The bare app as a connection service.

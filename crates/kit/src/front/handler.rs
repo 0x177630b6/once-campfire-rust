@@ -73,8 +73,15 @@ impl Handler {
         }
     }
 
-    /// `CacheHandler.ServeHTTP`
+    /// `CacheHandler.ServeHTTP`, except that requests the cache can't serve bypass it before the
+    /// lookup (Thruster looks them up first, so a range request could get a whole cached body).
     async fn cached(&self, request: Request<Body>, conn: ConnInfo) -> (Response<Body>, HeaderMerge) {
+        if !cache::should_cache_request(&request) {
+            let mut response = self.proxy(request, conn).await;
+            response.headers_mut().insert("x-cache", HeaderValue::from_static("bypass"));
+            return (response, HeaderMerge::Append);
+        }
+
         let now = Instant::now();
         let mut variant = Variant::new(&request);
         let mut key = variant.cache_key();
@@ -88,12 +95,6 @@ impl Handler {
         }
         if let Some(cached) = found {
             return (hit(&cached, &request), HeaderMerge::Replace);
-        }
-
-        if !cache::should_cache_request(&request) {
-            let mut response = self.proxy(request, conn).await;
-            response.headers_mut().insert("x-cache", HeaderValue::from_static("bypass"));
-            return (response, HeaderMerge::Append);
         }
 
         let head = request.method() == Method::HEAD;
@@ -133,17 +134,8 @@ impl Handler {
     /// The proxy (`internal/proxy_handler.go`): the request size limit Thruster's
     /// `http.MaxBytesHandler` enforces (an oversized body never reaches the app and gets an empty
     /// 413), the `X-Forwarded-*` headers `httputil.ReverseProxy` sets, then the app.
-    async fn proxy(&self, mut request: Request<Body>, conn: ConnInfo) -> Response<Body> {
-        if self.max_request_body > 0 {
-            match limit_body(request, self.max_request_body).await {
-                Ok(limited) => request = limited,
-                Err(()) => {
-                    let mut response = Response::new(Body::empty());
-                    *response.status_mut() = StatusCode::PAYLOAD_TOO_LARGE;
-                    return response;
-                }
-            }
-        }
+    async fn proxy(&self, request: Request<Body>, conn: ConnInfo) -> Response<Body> {
+        let Ok(mut request) = within_limit(request, self.max_request_body).await else { return too_large() };
         as_proxied_http1(&mut request);
         set_forwarded_headers(&mut request, &conn, self.forward_headers);
         request.extensions_mut().insert(ConnectInfo(conn.remote));
@@ -311,6 +303,18 @@ fn set_forwarded_headers(request: &mut Request<Body>, conn: &ConnInfo, forward_h
             headers.insert("x-forwarded-proto", proto);
         }
     }
+}
+
+/// MAX_REQUEST_BODY, 0 for none.
+pub(super) async fn within_limit(request: Request<Body>, limit: u64) -> Result<Request<Body>, ()> {
+    if limit == 0 { Ok(request) } else { limit_body(request, limit).await }
+}
+
+/// The empty 413 for a body over MAX_REQUEST_BODY.
+pub(super) fn too_large() -> Response<Body> {
+    let mut response = Response::new(Body::empty());
+    *response.status_mut() = StatusCode::PAYLOAD_TOO_LARGE;
+    response
 }
 
 /// `http.MaxBytesHandler`: a body over the limit fails the proxied request with 413 before the
