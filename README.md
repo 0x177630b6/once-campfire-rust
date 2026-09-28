@@ -166,6 +166,7 @@ test suite and the parity gate green.
 | Splice precompressed messages into gzipped pages ([below](#spliced-gzip)) | Room page 2,527 → 5,461 req/s; messages page 3,709 → 16,523 req/s; search 2,123 → 5,526 req/s |
 | Forgery protection by `Sec-Fetch-Site` instead of CSRF tokens ([Known differences](#known-differences)) | Room page +9%, messages page +6%, search +10%; pages render the same until their content changes, so revalidation gets a 304 |
 | Cache every part of a page, not just its messages, and take the ETag from the parts ([above](#cached-page-parts)) | Room page 2.9×, search 2.8×, messages page 1.3× |
+| Cable: own WebSocket framing with shared, once-compressed frames; connections on their own runtime ([above](#100000-clients-and-a-raspberry-pi-5)) | 100,000 clients in 1.6 GB instead of 5.9 GB while fanning out; a post during a 100,000-client fan-out 637 → 43 ms; frames 10 KB → 2.3 KB on the wire |
 | Index messages by `(room_id, created_at)`; check "more than a page" without counting the room | In a room with 236k messages: room page 95 → 6,051 req/s (64×), messages page 87 → 17,972 req/s (208×). Before, a room page sorted the room's whole history, so rooms slowed as they grew; now a long room serves as fast as a new one |
 
 Measured the same way as the preliminary run, the room page went from 4.4× to 10.9× Rails, and cable
