@@ -1,6 +1,6 @@
 //! Small Ruby/Rails behaviors the message, room and search views depend on: time formats,
 //! `Float#to_s`, `Array#to_sentence`, `to_query` escaping, turbo-stream tags and Rails' JSON
-//! encoding. Candidates for `crate::helpers` once views agent A merges them (see NOTES.md).
+//! encoding.
 
 use jiff::Timestamp;
 

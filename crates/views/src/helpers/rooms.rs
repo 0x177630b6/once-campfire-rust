@@ -1,6 +1,5 @@
-//! The parts of `RoomsHelper` and `Rooms::InvolvementsHelper` that views agent A's templates
-//! use (the sidebar and the profile's memberships). Views agent B owns the rest of the rooms
-//! helpers in `crate::rooms`.
+//! The parts of `RoomsHelper` and `Rooms::InvolvementsHelper` the sidebar and the profile's
+//! memberships use; the rest of the rooms helpers are in `crate::rooms`.
 
 use super::assets::image_tag;
 use super::forms::button_to;

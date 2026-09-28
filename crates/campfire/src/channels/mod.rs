@@ -1,12 +1,11 @@
 //! Action Cable: `reference/app/channels`, the broadcasts the app makes (`Broadcasts`), and
-//! revocation (`revocation`). How app core wires this in is in NOTES.md under "campfire".
+//! revocation (`revocation`). `app.rs` builds the cable server with these channels and routes the
+//! models' events to `Broadcasts` and `revocation`.
 //!
 //! Every channel matches its Ruby class: identifier, streams, payloads, and callback order
 //! (`on_subscribe` runs after `subscribed`, before the confirmation). Ruby makes every public
 //! method an action, including a publicly redefined `subscribed`, so those are performable here
 //! too.
-//!
-//! See main.rs for ownership.
 #![allow(dead_code)]
 
 pub mod broadcasts;

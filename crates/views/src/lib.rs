@@ -1,11 +1,7 @@
 //! Askama templates mirroring `reference/app/views`, one template file per ERB file at the same
 //! relative path under `templates/`. Views take plain view-model structs defined here, never
 //! database rows, so this crate doesn't depend on `campfire_db`. Rich text arrives pre-rendered
-//! as sanitized HTML.
-//!
-//! Ownership: views agent A owns `helpers`, `layouts`, `sessions`, `first_runs`, `users`,
-//! `accounts`, `welcome`, `pwa`, `autocompletable`. Views agent B owns `rooms`, `messages`,
-//! `searches`. Both share `ViewContext` below; changes to it go through NOTES.md.
+//! as sanitized HTML. Every template renders with the per-request [`ViewContext`] below.
 
 pub mod fragment_cache;
 pub mod helpers;

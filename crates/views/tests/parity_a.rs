@@ -1,4 +1,5 @@
-//! DOM parity of views agent A's templates against golden renders from the reference app
+//! DOM parity of the layout, session, account and user templates against golden renders from the
+//! reference app
 //! (`reference-tools/views/a/render.rb`). Each case rebuilds, from facts.json, the view-model a
 //! Rust controller would pass, renders it, and compares normalized token streams.
 
