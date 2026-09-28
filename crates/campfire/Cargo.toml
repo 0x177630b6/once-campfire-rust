@@ -51,6 +51,7 @@ thiserror.workspace = true
 
 [dev-dependencies]
 campfire_db = { workspace = true, features = ["test-support"] }
+tikv-jemalloc-sys.workspace = true
 tower = { workspace = true, features = ["util"] }
 tokio-tungstenite.workspace = true
 futures-util.workspace = true

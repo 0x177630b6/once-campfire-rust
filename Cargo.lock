@@ -372,6 +372,7 @@ dependencies = [
  "sha2",
  "tempfile",
  "thiserror",
+ "tikv-jemalloc-sys",
  "tikv-jemallocator",
  "tokio",
  "tokio-rustls",
