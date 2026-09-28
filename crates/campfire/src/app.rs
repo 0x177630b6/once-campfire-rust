@@ -24,8 +24,7 @@ use crate::config::Config;
 use crate::rich_text::AppRichText;
 use crate::{channels, controllers, jobs};
 
-#[allow(unused_imports)]
-pub use crate::channels::{Cable, CableUser};
+pub use crate::channels::Cable;
 
 /// Everything that outlives a request. Cheap to share as [`App`].
 pub struct AppState {

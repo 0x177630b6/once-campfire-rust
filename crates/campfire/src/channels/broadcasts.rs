@@ -73,10 +73,6 @@ impl Broadcasts {
         Self { server }
     }
 
-    pub fn server(&self) -> &Cable {
-        &self.server
-    }
-
     fn room_messages(room: &Room) -> [String; 2] {
         [room_gid(room).to_param(), MESSAGES.to_string()]
     }
@@ -117,16 +113,6 @@ impl Broadcasts {
     /// `message.broadcast_remove`: MessagesController#destroy and `User#remove_banned_content`.
     pub fn message_remove(&self, room: &Room, message: &Message) {
         self.to(&Self::room_messages(room), Action::Remove, &message_dom_id(message, None), None, &[]);
-    }
-
-    /// `broadcast_remove` for each message `User#remove_banned_content` destroyed (the job
-    /// passes what `campfire_db::User::remove_banned_content` returned).
-    pub fn messages_remove(&self, conn: &Connection, messages: &[Message]) -> campfire_db::Result<()> {
-        for message in messages {
-            let room = Room::find(conn, message.room_id)?;
-            self.message_remove(&room, message);
-        }
-        Ok(())
     }
 
     /// MessagesController#update: replace `[message, :presentation]` with

@@ -3,8 +3,7 @@
 //! (`PUT /rails/active_storage/disk/:encoded_token`).
 
 use std::fs;
-use std::io::{self, Read, Seek, SeekFrom, Write};
-use std::ops::Range;
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 use crate::disposition::{content_disposition_with, escape_path, escape_segment};
@@ -72,15 +71,6 @@ impl DiskService {
 
     pub fn download(&self, key: &str) -> Result<Vec<u8>> {
         fs::read(self.path_for(key)).map_err(not_found)
-    }
-
-    /// `download_chunk(key, range)`: reads up to `range.len()` bytes from `range.start`.
-    pub fn download_chunk(&self, key: &str, range: Range<u64>) -> Result<Vec<u8>> {
-        let mut file = fs::File::open(self.path_for(key)).map_err(not_found)?;
-        file.seek(SeekFrom::Start(range.start))?;
-        let mut buf = Vec::new();
-        file.take(range.end.saturating_sub(range.start)).read_to_end(&mut buf)?;
-        Ok(buf)
     }
 
     pub fn delete(&self, key: &str) -> Result<()> {

@@ -113,11 +113,6 @@ impl Version {
         is_present(&self.string)
     }
 
-    /// `version.to_s.blank?`.
-    pub fn is_empty(&self) -> bool {
-        !self.is_present()
-    }
-
     pub fn as_str(&self) -> &str {
         &self.string
     }
@@ -425,10 +420,6 @@ impl Agent {
         self.try_platform().ok().flatten()
     }
 
-    pub fn os(&self) -> Option<String> {
-        self.try_os().ok().flatten()
-    }
-
     /// `bot?`.
     pub fn is_bot(&self) -> bool {
         let Some(application) = self.application() else {
@@ -441,11 +432,6 @@ impl Agent {
             .any(|c| c.to_lowercase().contains("bot"))
             || self.detect_product("Chrome-Lighthouse").is_some()
             || application.product.contains("bot")
-    }
-
-    /// `mobile?`.
-    pub fn is_mobile(&self) -> bool {
-        self.try_mobile().unwrap_or(false)
     }
 
     // --- Base helpers ---
@@ -965,8 +951,9 @@ impl Agent {
         })
     }
 
-    // --- mobile? ---
+    // --- mobile? (unused by the app; kept for the gem's vectors) ---
 
+    #[cfg(test)]
     pub(crate) fn try_mobile(&self) -> Rb<bool> {
         Ok(match self.kind {
             Kind::Opera => self.opera_mini(),

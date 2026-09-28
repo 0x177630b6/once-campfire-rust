@@ -57,11 +57,6 @@ async fn message_broadcasts() {
 
     app.broadcasts.message_remove(&designers, &message);
     assert_eq!(turbo_stream(&kevin.next_text().await), r#"<turbo-stream action="remove" target="message_0002"></turbo-stream>"#);
-
-    let (broadcasts, messages) = (app.broadcasts.clone(), vec![app.message("first").await, app.message("fourth").await]);
-    app.db.read(move |conn| broadcasts.messages_remove(conn, &messages)).await.unwrap();
-    // "fourth" is in the watercooler, which kevin isn't streaming.
-    assert_eq!(turbo_stream(&kevin.next_text().await), r#"<turbo-stream action="remove" target="message_0001"></turbo-stream>"#);
     kevin.assert_silent().await;
 }
 

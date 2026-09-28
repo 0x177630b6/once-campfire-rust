@@ -32,7 +32,6 @@
 //! with [`current_user`] / [`current_session`].
 
 // The frame later controller ports build on; parts are unused until they land.
-#![allow(dead_code)]
 
 pub mod platform;
 pub mod user_agent;

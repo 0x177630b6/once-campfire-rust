@@ -6,7 +6,6 @@
 //! (`on_subscribe` runs after `subscribed`, before the confirmation). Ruby makes every public
 //! method an action, including a publicly redefined `subscribed`, so those are performable here
 //! too.
-#![allow(dead_code)]
 
 pub mod broadcasts;
 mod connection;
@@ -91,8 +90,4 @@ pub fn user_gid(user_id: i64) -> GlobalId {
 /// A room's GlobalID names its STI class (`gid://campfire/Rooms::Open/1`).
 pub fn room_gid(room: &campfire_db::Room) -> GlobalId {
     GlobalId::new(room.room_type.class_name(), room.id)
-}
-
-fn db_error(error: campfire_db::Error) -> campfire_cable::ChannelError {
-    campfire_cable::ChannelError(error.to_string())
 }
