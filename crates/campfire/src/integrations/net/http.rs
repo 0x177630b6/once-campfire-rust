@@ -430,7 +430,9 @@ mod tests {
         let mut inflater = Inflater::new();
         let started = std::time::Instant::now();
         assert_eq!(inflater.inflate(&gzip_bomb(1024), LIMIT).unwrap(), None);
-        assert!(started.elapsed() < Duration::from_secs(1), "{:?}", started.elapsed());
+        // Inflating the whole gigabyte would take minutes; stopping at the limit takes about a
+        // second in an unoptimized build on a CI runner.
+        assert!(started.elapsed() < Duration::from_secs(10), "{:?}", started.elapsed());
         let inflated = inflater.decoder.as_mut().unwrap().output().len();
         assert!(inflated <= LIMIT + 64 * 1024, "{inflated}");
     }
