@@ -343,3 +343,34 @@ fn pipeline_matches_the_reference() {
     eprintln!("byte-identical: {:?}", comparison.identical);
     assert!(comparison.mismatches.is_empty(), "not byte-identical:\n{}", comparison.mismatches.join("\n"));
 }
+
+#[test]
+fn staging_a_file_unfurls_it_as_its_bytes_would() {
+    let root = tempfile::tempdir().unwrap();
+    let storage = Storage::new(DiskService::new(root.path(), "local"), Arc::new(verifier()));
+    for m in vectors()["messages"].as_array().unwrap() {
+        let name = m["fixture"].as_str().unwrap();
+        let declared = m["declared_type"].as_str();
+        let from_file = storage.stage_file(&fixture(name), Filename::new(name), declared).unwrap();
+        let from_bytes = storage.stage_bytes(&std::fs::read(fixture(name)).unwrap(), Filename::new(name), declared).unwrap();
+        let (a, b) = (from_file.blob(), from_bytes.blob());
+        assert_eq!((&a.content_type, &a.checksum, a.byte_size), (&b.content_type, &b.checksum, b.byte_size), "{name}");
+        assert_eq!(std::fs::read(storage.service.path_for(&a.key)).unwrap(), std::fs::read(fixture(name)).unwrap(), "{name}");
+    }
+}
+
+#[test]
+fn a_staged_file_is_deleted_unless_kept() {
+    let root = tempfile::tempdir().unwrap();
+    let storage = Storage::new(DiskService::new(root.path(), "local"), Arc::new(verifier()));
+    let dropped = storage.stage_bytes(b"dropped", Filename::new("a.txt"), None).unwrap();
+    let dropped_path = storage.service.path_for(&dropped.blob().key);
+    assert!(dropped_path.exists());
+    drop(dropped);
+    assert!(!dropped_path.exists());
+
+    let kept = storage.stage_bytes(b"kept", Filename::new("b.txt"), None).unwrap();
+    let kept_path = storage.service.path_for(&kept.blob().key);
+    kept.keep();
+    assert!(kept_path.exists());
+}

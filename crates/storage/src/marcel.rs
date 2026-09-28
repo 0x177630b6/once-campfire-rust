@@ -49,6 +49,27 @@ fn parents(content_type: &str) -> &'static [&'static str] {
         .unwrap_or(&[])
 }
 
+/// How many leading bytes [`by_magic`] can look at: identifying the first `magic_prefix_len()`
+/// bytes of a file gives the same answer as identifying all of it.
+pub fn magic_prefix_len() -> usize {
+    fn reach(matches: &[Match]) -> usize {
+        matches
+            .iter()
+            .map(|m| {
+                let value = m.value.map_or(0, <[u8]>::len);
+                let own = match m.range_end {
+                    Some(end) => end + value,
+                    None => m.offset + value,
+                };
+                own.max(reach(m.children))
+            })
+            .max()
+            .unwrap_or(0)
+    }
+    static LEN: std::sync::LazyLock<usize> = std::sync::LazyLock::new(|| tables::MAGIC.iter().map(|(_, m)| reach(m)).max().unwrap_or(0));
+    *LEN
+}
+
 /// `Marcel::Magic.by_magic`: the first table entry whose matches hit.
 pub fn by_magic(data: &[u8]) -> Option<String> {
     tables::MAGIC
