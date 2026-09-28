@@ -10,8 +10,8 @@ use campfire_views::users::AvatarSvg;
 
 use crate::app::AppCtx;
 use crate::concerns::{self, Before};
-use crate::controllers::presenters_a::attachments::{self, Record};
-use crate::controllers::presenters_a::{self, cache_key_with_version};
+use crate::controllers::presenters::attachments::{self, Record};
+use crate::controllers::presenters::{self, cache_key_with_version};
 
 /// `ActionView::Digestor.digest(name: "users/avatars/show", ...)`: the SHA256 (truncated) of
 /// `show.svg.erb`'s source plus "-" (it renders nothing else). `EtagWithTemplateDigest` adds it
@@ -66,7 +66,7 @@ pub async fn destroy(c: &mut Ctx) -> Result {
 /// user is `ActiveRecord::RecordNotFound`.
 async fn from_avatar_token(c: &mut Ctx) -> Result<User> {
     let token = c.param_str("user_id").unwrap_or_default().to_string();
-    let Some(user_id) = presenters_a::user_id_from_avatar_token(&c.app().secrets, &token, c.now()) else {
+    let Some(user_id) = presenters::accounts::user_id_from_avatar_token(&c.app().secrets, &token, c.now()) else {
         return halt(c.head(campfire_kit::StatusCode::NOT_FOUND));
     };
     c.app().db.read(move |conn| User::find_by_id(conn, user_id)).await.map_err(Error::internal)?.ok_or(Error::NotFound)

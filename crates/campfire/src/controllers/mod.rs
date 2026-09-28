@@ -35,7 +35,6 @@ pub mod autocompletable;
 pub mod first_runs;
 pub mod messages;
 pub mod presenters;
-pub mod presenters_a;
 pub mod pwa;
 pub mod qr_code;
 pub mod rooms;
@@ -61,7 +60,9 @@ where
 
 pub struct Route {
     pub verb: Method,
-    /// The Rails path spec, e.g. `/rooms/:room_id/messages(.:format)`.
+    /// The Rails path spec, e.g. `/rooms/:room_id/messages(.:format)`. Compiled into `regex`; kept
+    /// for the test that compares the table with `bin/rails routes`.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub pattern: &'static str,
     /// `controller#action`, as `bin/rails routes` prints it.
     pub endpoint: &'static str,
@@ -93,12 +94,9 @@ impl Route {
 
 /// The route that matched the current request (`request.path_parameters` plus the endpoint),
 /// available to actions as `c.current::<MatchedRoute>()`.
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct MatchedRoute {
     pub endpoint: &'static str,
-    pub pattern: &'static str,
-    pub path_params: ParamMap,
 }
 
 fn get(pattern: &'static str, endpoint: &'static str, action: impl Action) -> Route {
@@ -319,8 +317,8 @@ pub async fn dispatch(c: &mut Ctx) -> Result {
     let Some((route, path_params)) = recognize(&c.request.method, &path)? else {
         return Err(Error::NotFound);
     };
-    install_path_params(c, path_params.clone());
-    c.set_current(MatchedRoute { endpoint: route.endpoint, pattern: route.pattern, path_params });
+    install_path_params(c, path_params);
+    c.set_current(MatchedRoute { endpoint: route.endpoint });
     route.action.call(c).await
 }
 
@@ -408,7 +406,6 @@ fn compile(pattern: &str) -> (Regex, Vec<String>) {
 }
 
 /// A declared route whose action the controller doesn't define (`AbstractController::ActionNotFound`).
-#[allow(dead_code)]
 pub async fn action_not_found(_c: &mut Ctx) -> Result {
     Err(Error::NotFound)
 }

@@ -6,8 +6,8 @@
 //! tokens ("blob_token"). The data is passed as already-encoded JSON because key order is part of
 //! the signed bytes (e.g. `{key:, disposition:, content_type:, service_name:}`).
 //!
-//! [`AppMessageVerifier`] is a local stand-in until rails_compat exposes named app verifiers
-//! (requested in NOTES.md); the app can plug that in through the trait instead.
+//! The app plugs `rails_compat`'s message verifier in through the [`Verifier`] trait;
+//! [`AppMessageVerifier`] is a self-contained implementation the golden-vector tests use.
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;

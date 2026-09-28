@@ -4,6 +4,7 @@
 #   vendor/<gem>/<path>     every gem-provided directory on the Propshaft load path, copied verbatim
 #   vendor/LOAD_PATH        the load path, in Propshaft's order, as `reference:<dir>` / `vendor:<dir>`
 #   vendor/MANIFEST.md      provenance: gem, version, source, path and sha256 of every vendored file
+#   vendor/<gem>/<license>  each vendored gem's license file (all MIT), which its copies carry
 #   tests/reference/*       golden outputs: the precompiled manifest, sha256 of every compiled file,
 #                           the rendered layout head tags, the Link header, public file headers
 #
@@ -39,6 +40,7 @@ end
 
 load_path_lines = []
 provenance = []
+vendored = {}
 
 Rails.application.assets.load_path.paths.each do |path|
   path = path.to_s
@@ -48,6 +50,7 @@ Rails.application.assets.load_path.paths.each do |path|
     load_path_lines << "reference:#{path.delete_prefix(root)}"
   else
     spec = gem_for(path) or raise "No gem owns asset path #{path}"
+    vendored[spec.name] = spec
     rel = path.delete_prefix(spec.full_gem_path + "/")
     dest = vendor.join(spec.name, rel)
     load_path_lines << "vendor:#{spec.name}/#{rel}"
@@ -60,6 +63,12 @@ Rails.application.assets.load_path.paths.each do |path|
   end
 end
 
+vendored.each_value do |spec|
+  licenses = Dir.glob("{MIT-LICENSE,LICENSE,LICENSE.*,LICENCE,COPYING}", base: spec.full_gem_path)
+  raise "No license file in #{spec.name}" if licenses.empty?
+  licenses.each { |license| FileUtils.cp(File.join(spec.full_gem_path, license), vendor.join(spec.name, license)) }
+end
+
 File.write(vendor.join("LOAD_PATH"), load_path_lines.join("\n") + "\n")
 
 File.open(vendor.join("MANIFEST.md"), "w") do |md|
@@ -69,6 +78,7 @@ File.open(vendor.join("MANIFEST.md"), "w") do |md|
   md.puts "Do not edit by hand. Every file is copied byte-for-byte from the gem that the reference's"
   md.puts "Gemfile.lock resolves, at the path Propshaft puts on its load path. `LOAD_PATH` lists the full"
   md.puts "load path in Propshaft's order (`reference:` entries are read straight from the submodule)."
+  md.puts "Each gem's license file (all MIT) is copied beside its files, under `<gem>/`."
   md.puts
   md.puts "| Gem | Version | Source | Path | SHA-256 |"
   md.puts "|---|---|---|---|---|"

@@ -1,4 +1,5 @@
-//! DOM parity of views agent A's templates against golden renders from the reference app
+//! DOM parity of the layout, session, account and user templates against golden renders from the
+//! reference app
 //! (`reference-tools/views/a/render.rb`). Each case rebuilds, from facts.json, the view-model a
 //! Rust controller would pass, renders it, and compares normalized token streams.
 
@@ -412,8 +413,27 @@ fn pwa_manifest_and_service_worker() {
     }
     .render()
     .unwrap();
-    assert_eq!(json, golden(name, "json"));
+    // Rails HTML-escapes the values into the JSON (README, Known differences)
+    assert_eq!(json, golden(name, "json").replace("&amp;", "&"));
     assert_eq!(pwa::SERVICE_WORKER_JS, golden("service_worker", "js"));
+}
+
+#[test]
+fn pwa_manifest_is_valid_json_whatever_the_account_is_called() {
+    let asset_path = |logical: &str| format!("/assets/{logical}");
+    let name = r#"Back\slash "quoted" <b>&amp;</b>"#;
+    let json = pwa::Manifest {
+        account_name: Some(name.into()),
+        logo_path_small: "/account/logo?size=small&v=1".into(),
+        logo_path: "/account/logo?v=1".into(),
+        base_url: "http://campfire.test".into(),
+        asset_path: &asset_path,
+    }
+    .render()
+    .unwrap();
+    let manifest: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+    assert_eq!(manifest["name"], name);
+    assert_eq!(manifest["icons"][0]["src"], "/account/logo?size=small&v=1");
 }
 
 #[test]
@@ -482,40 +502,13 @@ fn users_partials() {
 
     let name = "user_json";
     let jz = user(name, "JZ");
-    let json = h::to_rails_json(&users::UserJson {
+    let json = h::to_rails_json(&campfire_views::messages::json::UserJson {
         id: jz["id"].as_i64().unwrap(),
         name: "JZ".into(),
         role: jz["role"].as_str().unwrap().into(),
         avatar_url: format!("{}{}", facts()["base_url"].as_str().unwrap(), jz["avatar_path"].as_str().unwrap()),
     });
     assert_eq!(json, golden(name, "json"));
-}
-
-#[test]
-fn action_text_partials() {
-    let embeds: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(golden_dir().join("og_embeds.json")).unwrap()).unwrap();
-    for (name, attributes) in embeds.as_object().unwrap() {
-        let html = action_text::OpengraphEmbedPartial {
-            opengraph_embed: action_text::OpengraphEmbed {
-                href: str_of(&attributes["href"]),
-                url: str_of(&attributes["url"]),
-                filename: attributes["filename"].as_str().unwrap().into(),
-                description: str_of(&attributes["description"]),
-            },
-        }
-        .render()
-        .unwrap();
-        assert_parity(name, "html", html);
-    }
-
-    let name = "action_text_content";
-    let html = layouts::ActionTextContent { content: h::raw("<p>Hi <strong>there</strong></p>") }.render().unwrap();
-    assert_parity(name, "html", html.clone());
-    assert_eq!(html, golden(name, "html"), "bytes");
-
-    let name = "mailer_layout";
-    let html = layouts::MailerHtml { content: h::raw("<p>Mail</p>") }.render().unwrap();
-    assert_parity(name, "html", html);
 }
 
 #[test]

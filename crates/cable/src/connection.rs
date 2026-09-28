@@ -52,6 +52,10 @@ struct Connection<U: Send + Sync + 'static> {
     started: Vec<(Subscriber, AbortRegistration)>,
 }
 
+/// The most subscriptions one connection may hold, and the longest identifier it may subscribe with.
+const MAX_SUBSCRIPTIONS: usize = 64;
+const MAX_IDENTIFIER_BYTES: usize = 4096;
+
 /// Incoming messages buffered between the reader task and the connection. A client that sends
 /// commands faster than they're handled is held back by TCP once this fills.
 const INCOMING_CAPACITY: usize = 16;
@@ -68,17 +72,8 @@ pub(crate) async fn run<U: Identified + Send + Sync + 'static>(server: Server<U>
 
     // handle_open: connect, subscribe to the internal channel, welcome, then process whatever
     // arrived meanwhile (the socket buffers it for us, like MessageBuffer).
-    let user = server.authenticator().connect(&request).await;
-    // Only connecting needs the request. Its header values are slices of the HTTP read buffer, so
-    // keeping it would hold that buffer (8 KB) for as long as the socket is open.
-    drop(request);
-    let Some(user) = user else {
-        tracing::error!("An unauthorized connection attempt was rejected");
-        let frame = protocol::disconnect(Some(DisconnectReason::Unauthorized), &Value::Bool(false));
-        let _ = sink.send(&[frame.into()]).await;
-        close_socket(&mut sink, &mut incoming, config.close_timeout).await;
-        reader.abort();
-        return;
+    let Some(user) = server.authenticator().connect(&request).await else {
+        return reject_unauthorized(sink, incoming, reader, &config).await;
     };
 
     // The internal channel carries raw payloads; every subscription stream carries frames.
@@ -86,7 +81,16 @@ pub(crate) async fn run<U: Identified + Send + Sync + 'static>(server: Server<U>
     let identifier = user.connection_identifier();
     if !identifier.is_empty() {
         internal.push(server.hub().subscribe(&internal_channel(&identifier), None).deliveries());
+        // A ban or sign-out that disconnected this user between the check above and that
+        // subscription went unheard, so check again now that it would be heard (Rails has this
+        // gap).
+        if server.authenticator().connect(&request).await.is_none() {
+            return reject_unauthorized(sink, incoming, reader, &config).await;
+        }
     }
+    // Only connecting needs the request. Its header values are slices of the HTTP read buffer, so
+    // keeping it would hold that buffer (8 KB) for as long as the socket is open.
+    drop(request);
     let mut deliveries = SelectAll::<Deliveries>::new();
 
     let mut heartbeat = server.heartbeat();
@@ -182,6 +186,16 @@ fn process_internal_message(message: &str) -> Option<Close> {
     })
 }
 
+/// `Connection::Base#respond_to_invalid_request` for an unauthorized connection: tell the client
+/// not to reconnect, and close.
+async fn reject_unauthorized(mut sink: Sink, mut incoming: mpsc::Receiver<Incoming>, reader: JoinHandle<()>, config: &crate::Config) {
+    tracing::error!("An unauthorized connection attempt was rejected");
+    let frame = protocol::disconnect(Some(DisconnectReason::Unauthorized), &Value::Bool(false));
+    let _ = sink.send(&[frame.into()]).await;
+    close_socket(&mut sink, &mut incoming, config.close_timeout).await;
+    reader.abort();
+}
+
 /// Reads the socket until it closes or errors, handing each message to the connection. It stops
 /// after a close frame, as the connection does.
 fn spawn_reader(mut reader: Reader<ReadHalf<Io>>) -> (JoinHandle<()>, mpsc::Receiver<Incoming>) {
@@ -253,6 +267,11 @@ impl<U: Send + Sync + 'static> Connection<U> {
         };
         if self.position(identifier).is_some() {
             return;
+        }
+        // Bounds on what one socket can make the server hold (Rails has none). A page subscribes
+        // to six channels with identifiers of a few hundred bytes.
+        if self.subscriptions.len() >= MAX_SUBSCRIPTIONS || identifier.len() > MAX_IDENTIFIER_BYTES {
+            return tracing::error!(subscriptions = self.subscriptions.len(), "Could not execute command: subscription limit reached");
         }
         let class_name = params.get("channel").and_then(Value::as_str).unwrap_or_default().to_string();
         let Some(factory) = self.server.channel_factory(&class_name) else {

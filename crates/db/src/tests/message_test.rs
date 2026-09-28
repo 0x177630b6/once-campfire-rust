@@ -113,6 +113,18 @@ fn message_body_is_indexed_and_searchable() {
 }
 
 #[test]
+fn search_words_are_never_query_syntax() {
+    let t = TestDb::new();
+    let message = create(&t, "designers", "jason", "Do NOT feed the eel OR the shark", "c1");
+    for query in ["NOT", "OR", "AND", "NEAR", "eel NOT", "NOT eel", "shark OR", "\"", "*", "", "a\0b", "\0"] {
+        search(&t, "designers", query);
+    }
+    assert_eq!(search(&t, "designers", "NOT eel"), vec![message.id]);
+    assert!(search(&t, "designers", "eel dolphin").is_empty());
+    assert_eq!(search(&t, "designers", "eel\0shark"), vec![message.id]);
+}
+
+#[test]
 fn search_results_are_returned_in_message_order() {
     let t = TestDb::new();
     let ids: Vec<i64> = ["first cat", "second cat", "third cat", "cat cat cat"]

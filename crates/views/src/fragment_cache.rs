@@ -1,8 +1,8 @@
 //! Fragment caching: `cache record do ... end` in ERB and `json.cache! record do ... end` in
-//! Jbuilder. Production Rails keeps fragments in `redis_cache_store`, so the first rendering of a
-//! record version is what every later render reuses, whoever renders it: a broadcast renders
-//! without a request (no CSRF tokens in `button_to` forms, the renderer's host in URLs), and the
-//! pages that show the same message afterwards repeat that rendering byte for byte.
+//! Jbuilder. The first rendering of a record version is what every later render reuses, whoever
+//! renders it: a broadcast renders without a request, and the pages that show the same message
+//! afterwards repeat that rendering byte for byte. So nothing in a fragment may depend on the
+//! request unless its key does (a message's "Copy link" carries a path, not the request's host).
 //!
 //! [`FragmentCache`] is the process's store. The reference keeps fragments in Redis
 //! (`config.cache_store = :redis_cache_store`, `config/environments/production.rb`), whose
@@ -11,7 +11,8 @@
 //! `ActiveSupport::Cache::MemoryStore`: each entry counts its key, its payload and
 //! [`PER_ENTRY_OVERHEAD`] bytes, and when a write takes the total past the limit, least recently
 //! used entries go until it's back to three quarters of it (`MemoryStore#prune`). Reads count as
-//! uses. Templates reach the store that's current on this thread:
+//! uses. An entry larger than a quarter of the limit is returned but not kept, so that one huge
+//! fragment can't flush everything else. Templates reach the store that's current on this thread:
 //! the app enters it for every request ([`Scoped`]) and for renders outside one ([`with`]).
 //! Without a current store, fragments render uncached (`perform_caching = false`).
 //!
@@ -203,6 +204,9 @@ impl FragmentCache {
                 *bytes -= replaced.size;
             }
         }
+        if size > self.max_bytes / 4 {
+            return value;
+        }
         let key: Arc<str> = key.into();
         values.insert(key.clone(), Entry { key: key.clone(), value: Arc::new(value.clone()), used: *clock, size });
         recency.insert(*clock, key);
@@ -297,10 +301,10 @@ impl<F: Future> Future for Scoped<F> {
 
 /// The template digest part of a key: a stable hash of the template sources a fragment renders
 /// (`ActionView::Digestor` digests the template and its dependency tree). Only its stability
-/// within the process matters: the store doesn't outlive it.
+/// within the process matters: the store doesn't outlive it, and ETags hash the fragments'
+/// content, not their keys.
 pub fn digest(sources: &[&str]) -> String {
-    #[allow(deprecated)]
-    let mut hasher = std::hash::SipHasher::new();
+    let mut hasher = std::hash::DefaultHasher::new();
     sources.hash(&mut hasher);
     format!("{:016x}", hasher.finish())
 }
@@ -405,6 +409,22 @@ mod tests {
         assert_eq!(cache.fetch("a", || "x".repeat(100)), "x".repeat(100));
         assert_eq!(cache.len(), 0);
         assert_eq!(cache.bytes(), 0);
+    }
+
+    #[test]
+    fn a_value_larger_than_a_quarter_of_the_store_doesnt_evict_the_rest() {
+        let cache = FragmentCache::new(8 * entry(100));
+        for key in ["a", "b", "c"] {
+            cache.fetch(key, || "x".repeat(100));
+        }
+        let big = "y".repeat(3 * entry(100));
+        assert_eq!(cache.fetch("big", || big.clone()), big);
+        assert_eq!(cache.len(), 3, "the big value isn't kept");
+        assert_eq!(cache.get::<Fragment>("big"), None);
+        for key in ["a", "b", "c"] {
+            assert!(cache.get::<Fragment>(key).is_some(), "{key} is still stored");
+        }
+        assert_eq!(cache.bytes(), 3 * entry(100));
     }
 
     #[test]

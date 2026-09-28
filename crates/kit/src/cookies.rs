@@ -147,9 +147,10 @@ impl CookieJar {
         clock: SharedClock,
     ) -> Self {
         let mut cookies: Vec<(String, String)> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
         for header in headers {
             for (name, value) in parse_cookie_header(header) {
-                if !cookies.iter().any(|(n, _)| *n == name) {
+                if seen.insert(name.clone()) {
                     cookies.push((name, value));
                 }
             }
@@ -267,13 +268,15 @@ fn check_for_overflow(name: &str, value: &str) -> Result<()> {
 /// (kept raw when unescaping fails).
 pub fn parse_cookie_header(header: &str) -> Vec<(String, String)> {
     let mut cookies: Vec<(String, String)> = Vec::new();
+    // Seen names in a set: a header of tens of thousands of cookies stays linear.
+    let mut seen = std::collections::HashSet::new();
     for (i, part) in header.split(';').enumerate() {
         let part = if i == 0 { part } else { part.trim_start_matches(' ') };
         if part.is_empty() {
             continue;
         }
         let (key, value) = part.split_once('=').unwrap_or((part, ""));
-        if cookies.iter().any(|(k, _)| k == key) {
+        if !seen.insert(key) {
             continue;
         }
         let value = crate::params::decode_www_form_component(value)
@@ -446,5 +449,13 @@ mod tests {
         assert!(jar.set_cookie_headers(false, "example.com").is_empty());
         assert_eq!(jar.set_cookie_headers(false, "x.onion").len(), 1);
         assert_eq!(jar.set_cookie_headers(true, "example.com"), vec!["s=1; path=/; secure; samesite=lax"]);
+    }
+
+    #[test]
+    fn many_cookies_parse_in_linear_time() {
+        let header: String = (0..100_000).map(|n| format!("c{n}=1")).collect::<Vec<_>>().join("; ");
+        let started = std::time::Instant::now();
+        assert_eq!(parse_cookie_header(&header).len(), 100_000);
+        assert!(started.elapsed() < std::time::Duration::from_secs(1), "{:?}", started.elapsed());
     }
 }

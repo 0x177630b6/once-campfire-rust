@@ -7,7 +7,7 @@ use serde::Deserialize;
 
 use crate::helpers as h;
 use crate::layouts::Page;
-use crate::messages::support::{epoch_ms, query_escape, to_sentence};
+use crate::messages::support::epoch_ms;
 use crate::messages::{room_dom_id, MessageItem, RoomKind, UserView};
 use crate::ViewContext;
 
@@ -16,7 +16,7 @@ use crate::ViewContext;
 /// name when they're alone in it.
 pub fn room_display_name(name: Option<&str>, direct: bool, other_member_names: &[String], for_user_name: Option<&str>) -> String {
     if direct {
-        let sentence = to_sentence(other_member_names);
+        let sentence = h::to_sentence(other_member_names, " and ");
         if sentence.trim().is_empty() { for_user_name.unwrap_or_default().to_string() } else { sentence }
     } else {
         name.unwrap_or_default().to_string()
@@ -25,7 +25,7 @@ pub fn room_display_name(name: Option<&str>, direct: bool, other_member_names: &
 
 /// `mention_prompt_tag(room)`'s `src`: `autocompletable_users_path(room_id: room.id)`.
 pub fn mention_prompt_src(room_id: i64) -> String {
-    format!("{}?room_id={}", campfire_routes::autocompletable_users(), query_escape(&room_id.to_string()))
+    format!("{}?room_id={room_id}", campfire_routes::autocompletable_users())
 }
 
 /// A persisted room.

@@ -29,6 +29,7 @@ hyper-util = { workspace = true, features = ["server", "server-auto", "service",
 flate2.workspace = true
 crc32fast.workspace = true
 memchr.workspace = true
+indexmap.workspace = true
 bytes.workspace = true
 regex.workspace = true
 rustls.workspace = true
@@ -40,8 +41,14 @@ zstd.workspace = true
 url.workspace = true
 p256 = { workspace = true, features = ["pkcs8", "pem"] }
 libc.workspace = true
+hex.workspace = true
+
+[features]
+# `campfire_kit::testing`: insecure stand-ins for tests.
+test-support = []
 
 [dev-dependencies]
+campfire_kit = { path = ".", features = ["test-support"] }
 tower = { workspace = true, features = ["util"] }
 tempfile.workspace = true
 hyper = { workspace = true, features = ["client", "http1", "http2"] }

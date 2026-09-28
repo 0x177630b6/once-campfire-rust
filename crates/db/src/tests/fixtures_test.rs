@@ -179,7 +179,7 @@ fn export_database_for_rails() {
             crate::NewUser {
                 name: "Rusty".into(),
                 email_address: Some("rusty@example.com".into()),
-                password: Some("secret123456".into()),
+                password_digest: Some(crate::PasswordDigest::create("secret123456", 4).unwrap()),
                 ..Default::default()
             },
         )?;

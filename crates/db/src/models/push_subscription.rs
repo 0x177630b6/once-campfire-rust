@@ -31,6 +31,12 @@ pub struct PushSubscription {
     pub updated_at: Timestamp,
 }
 
+/// How long a payload's title and body may be, counted as the bytes they take in the JSON
+/// message. An encrypted Web Push record holds at most 4096 bytes: 4078 of JSON once the padding
+/// and tag are in, and the icon, path and badge take under 150 of that.
+pub const MAX_PAYLOAD_TITLE_BYTES: usize = 256;
+pub const MAX_PAYLOAD_BODY_BYTES: usize = 3072;
+
 /// What `Room::MessagePusher#build_payload` sends.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PushPayload {
@@ -201,6 +207,8 @@ impl PushSubscription {
     // Room::MessagePusher
 
     /// `build_payload`: direct rooms show the sender; others the room and "Sender: body".
+    /// Unlike Rails, a long title or body is cut short (with an ellipsis) so the notification
+    /// still fits a push message.
     pub fn payload_for(
         conn: &Connection,
         rich_text: &dyn RichText,
@@ -210,18 +218,18 @@ impl PushSubscription {
         let creator = message.creator(conn)?;
         let body = message.plain_text_body(conn, rich_text)?;
         let path = format!("/rooms/{}", room.id);
-        Ok(if room.direct() {
-            PushPayload {
-                title: creator.name,
-                body,
-                path,
-            }
+        let (title, body) = if room.direct() {
+            (creator.name, body)
         } else {
-            PushPayload {
-                title: room.name.clone().unwrap_or_default(),
-                body: format!("{}: {body}", creator.name),
-                path,
-            }
+            (
+                room.name.clone().unwrap_or_default(),
+                format!("{}: {body}", creator.name),
+            )
+        };
+        Ok(PushPayload {
+            title: truncate_json_string(title, MAX_PAYLOAD_TITLE_BYTES),
+            body: truncate_json_string(body, MAX_PAYLOAD_BODY_BYTES),
+            path,
         })
     }
 
@@ -296,6 +304,36 @@ impl PushSubscription {
     }
 }
 
+/// `text`, cut short with an ellipsis if it takes more than `max_bytes` as a JSON string's
+/// contents.
+fn truncate_json_string(mut text: String, max_bytes: usize) -> String {
+    const ELLIPSIS: char = '…';
+    if text.chars().map(json_len).sum::<usize>() <= max_bytes {
+        return text;
+    }
+    let mut used = ELLIPSIS.len_utf8();
+    let cut = text
+        .char_indices()
+        .find(|(_, c)| {
+            used += json_len(*c);
+            used > max_bytes
+        })
+        .map_or(text.len(), |(index, _)| index);
+    text.truncate(cut);
+    text.push(ELLIPSIS);
+    text
+}
+
+/// The bytes `c` takes in a JSON string: `"`, `\` and the short escapes take two, other
+/// control characters six (`\u001f`).
+fn json_len(c: char) -> usize {
+    match c {
+        '"' | '\\' | '\n' | '\r' | '\t' | '\u{8}' | '\u{c}' => 2,
+        c if c < ' ' => 6,
+        c => c.len_utf8(),
+    }
+}
+
 fn permitted_endpoint_host(host: &str) -> bool {
     let host = host.to_ascii_lowercase();
     !host.is_empty()
@@ -338,5 +376,19 @@ impl EndpointUri {
             host,
             port: port.or(default_port),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncates_by_json_escaped_length() {
+        assert_eq!(truncate_json_string("short".into(), 5), "short");
+        assert_eq!(truncate_json_string("longer".into(), 5), "lo…");
+        assert_eq!(truncate_json_string("\u{1}".repeat(10), 16), format!("{}…", "\u{1}".repeat(2)));
+        assert_eq!(truncate_json_string(r#"""""#.into(), 5), "\"…");
+        assert_eq!(truncate_json_string("😀😀".into(), 7), "😀…");
     }
 }

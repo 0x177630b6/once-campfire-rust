@@ -3,16 +3,15 @@
 //!
 //! Intentionally unguarded, unlike Opengraph::Fetch: only an administrator sets this URL and it
 //! may point at internal services. Connect and each read time out after 7 seconds, and a
-//! timeout is itself answered with a text reply.
+//! timeout is itself answered with a text reply. Unlike Rails, the whole delivery must finish
+//! within a minute and the reply is read up to 100 MB (see `DELIVERY_DEADLINE`, `MAX_REPLY_SIZE`).
 
 use std::sync::LazyLock;
 use std::time::Duration;
 
-use campfire_db::Connection;
 use campfire_richtext::uri;
-use campfire_storage::blob::Blob;
 use campfire_storage::filename::Filename;
-use campfire_storage::Storage;
+use campfire_storage::{Staged, Storage};
 use regex::Regex;
 
 use crate::integrations::net::Network;
@@ -20,6 +19,15 @@ use crate::integrations::net::http::{self, Body, Endpoint, HttpError, Timeouts};
 
 /// `Webhook::ENDPOINT_TIMEOUT`
 pub const ENDPOINT_TIMEOUT: Duration = Duration::from_secs(campfire_db::models::webhook::ENDPOINT_TIMEOUT_SECONDS);
+
+/// The most a delivery may take, connecting and reading the reply included. `ENDPOINT_TIMEOUT`
+/// applies to each read, so an endpoint that keeps trickling bytes would otherwise hold a job
+/// slot forever.
+pub const DELIVERY_DEADLINE: Duration = Duration::from_secs(60);
+
+/// The largest reply read (after decompression); a larger one fails the delivery. Rails reads
+/// any size into memory.
+pub const MAX_REPLY_SIZE: usize = 100 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WebhookDelivery {
@@ -36,7 +44,7 @@ pub enum WebhookReply {
     /// as the message's rich text body, as a bot's posted body is.
     Text(String),
     /// `room.messages.create_with_attachment!(attachment: blob, creator: bot).broadcast_create`,
-    /// with the blob from [`Attachment::create_blob`].
+    /// with the blob from [`Attachment::stage_blob`].
     Attachment(Attachment),
 }
 
@@ -50,9 +58,10 @@ pub struct Attachment {
 }
 
 impl Attachment {
-    /// `ActiveStorage::Blob.create_and_upload!(io:, filename:, content_type:)`
-    pub fn create_blob(&self, storage: &Storage, conn: &Connection, now: jiff::Timestamp) -> campfire_storage::Result<Blob> {
-        storage.create_and_upload(conn, &self.data, Filename::new(self.filename.clone()), Some(&self.content_type), now)
+    /// The upload half of `ActiveStorage::Blob.create_and_upload!(io:, filename:, content_type:)`,
+    /// blocking: the caller saves the staged blob's row.
+    pub fn stage_blob(&self, storage: &Storage) -> campfire_storage::Result<Staged> {
+        storage.stage_bytes(&self.data, Filename::new(self.filename.clone()), Some(&self.content_type))
     }
 }
 
@@ -68,18 +77,26 @@ pub enum WebhookError {
     /// `Mime::Type::InvalidMimeType`
     #[error("{0:?} is not a valid MIME type")]
     InvalidMimeType(String),
+    #[error("the reply is larger than {} MB", MAX_REPLY_SIZE / 1024 / 1024)]
+    ReplyTooLarge,
 }
 
 /// `Webhook#deliver(message)`: `payload` is `campfire_db::Webhook::payload`.
 pub async fn deliver(net: &Network, url: &str, payload: String) -> Result<WebhookDelivery, WebhookError> {
-    match post(net, url, payload).await {
-        Ok((status, content_type, body)) => Ok(WebhookDelivery { status: Some(status), reply: reply(status, content_type, body)? }),
-        Err(WebhookError::Http(HttpError::OpenTimeout | HttpError::ReadTimeout)) => Ok(WebhookDelivery {
-            status: None,
-            reply: WebhookReply::Text(format!("Failed to respond within {} seconds", ENDPOINT_TIMEOUT.as_secs())),
-        }),
-        Err(error) => Err(error),
+    deliver_within(net, url, payload, DELIVERY_DEADLINE).await
+}
+
+async fn deliver_within(net: &Network, url: &str, payload: String, deadline: Duration) -> Result<WebhookDelivery, WebhookError> {
+    match tokio::time::timeout(deadline, post(net, url, payload)).await {
+        Ok(Ok((status, content_type, body))) => Ok(WebhookDelivery { status: Some(status), reply: reply(status, content_type, body)? }),
+        Ok(Err(WebhookError::Http(HttpError::OpenTimeout | HttpError::ReadTimeout))) => Ok(timed_out(ENDPOINT_TIMEOUT)),
+        Ok(Err(error)) => Err(error),
+        Err(_) => Ok(timed_out(deadline)),
     }
+}
+
+fn timed_out(after: Duration) -> WebhookDelivery {
+    WebhookDelivery { status: None, reply: WebhookReply::Text(format!("Failed to respond within {} seconds", after.as_secs())) }
 }
 
 /// `post(payload)` over `Net::HTTP.new(uri.host, uri.port)`: the status, content type and body.
@@ -102,9 +119,9 @@ async fn post(net: &Network, url: &str, payload: String) -> Result<(u16, Option<
     let timeouts = Timeouts { open: ENDPOINT_TIMEOUT, read: ENDPOINT_TIMEOUT };
     let response = http::exchange(net, &endpoint, request, &timeouts).await.map_err(WebhookError::Http)?;
     let (status, content_type) = (response.status, response.content_type());
-    let body = match response.read_body(None).await.map_err(WebhookError::Http)? {
+    let body = match response.read_body(MAX_REPLY_SIZE).await.map_err(WebhookError::Http)? {
         Body::Complete(body) => body,
-        Body::TooLarge => unreachable!("no limit"),
+        Body::TooLarge => return Err(WebhookError::ReplyTooLarge),
     };
     Ok((status, content_type, body))
 }
@@ -212,7 +229,7 @@ mod tests {
     use serde_json::Value;
 
     use super::*;
-    use crate::integrations::test_support::{FakeResolver, FakeServer, MappingDialer, Route, network};
+    use crate::integrations::test_support::{FakeResolver, FakeServer, MappingDialer, Route, gzip_bomb, network, trickling_server};
 
     fn b64(s: &str) -> Vec<u8> {
         base64::engine::general_purpose::STANDARD.decode(s).unwrap()
@@ -318,6 +335,29 @@ mod tests {
         assert_eq!(resolver.lookups(), ["bots.internal"]);
         assert_eq!(*dialer.dialed.lock().unwrap(), ["10.0.0.7:8080".parse().unwrap()]);
         assert_eq!(server.received()[0].header("Host"), Some("bots.internal:8080"));
+    }
+
+    /// An endpoint that keeps sending never trips the 7-second read timeout, but the delivery as a
+    /// whole gives up and says so.
+    #[tokio::test]
+    async fn gives_up_on_a_trickling_reply() {
+        let server = trickling_server("HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nConnection: close\r\n\r\n").await;
+        let net = crate::integrations::net::Network::system();
+        let deadline = Duration::from_secs(1);
+        let delivery = deliver_within(&net, &format!("http://{server}/hook"), "{}".into(), deadline).await.unwrap();
+        assert_eq!(delivery, WebhookDelivery { status: None, reply: WebhookReply::Text("Failed to respond within 1 seconds".into()) });
+    }
+
+    /// A reply that inflates past the limit fails the delivery, having read little more than
+    /// the limit.
+    #[tokio::test]
+    async fn rejects_replies_over_the_limit() {
+        let bomb = gzip_bomb(MAX_REPLY_SIZE / 1024 / 1024 + 1);
+        let route = Route::new("POST", "*", "/hook", 200).header("Content-Type", "image/png").header("Content-Encoding", "gzip").body(bomb);
+        let server = FakeServer::start(vec![route]).await;
+        let net = crate::integrations::net::Network::system();
+        let outcome = deliver(&net, &format!("http://{}/hook", server.addr), "{}".into()).await;
+        assert!(matches!(outcome, Err(WebhookError::ReplyTooLarge)), "{outcome:?}");
     }
 
     #[test]

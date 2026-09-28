@@ -86,6 +86,11 @@ pub fn editable_value(body: &str, ctx: &RenderContext) -> Result<Option<String>,
     let root = dom.parse_fragment(strip(body)).map_err(Error::Parse)?;
     for node in attachment_nodes(&dom, root) {
         let attachment = attachables::attachment_from_node(&dom, node, ctx)?;
+        // A mention of a deleted user, say: nothing to edit, so it leaves the editor (Rails raises).
+        if matches!(attachment.attachable, attachables::Attachable::Missing { .. }) {
+            dom.detach(node);
+            continue;
+        }
         let content_type = attachment.attachable.attachable_content_type()?.to_string();
         let content = render_attachment_html(&attachment, ctx)?;
         dom.set_attr(node, "content-type", &content_type);

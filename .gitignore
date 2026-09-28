@@ -1,5 +1,7 @@
-/target
+target/
 /parity/node_modules
 /parity/out
 /parity/.seed
 /parity/.native
+/.claude
+/.cargo-home

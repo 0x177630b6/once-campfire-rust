@@ -1,8 +1,8 @@
 //! Test support: an insecure, transparent [`Crypto`] and a frozen clock.
 //!
 //! `TestCrypto` has the same *shape* as Rails' (signed values are `data--digest`, encrypted values
-//! are opaque, CSRF tokens are masked with a one-time pad) but none of the byte compatibility,
-//! which `rails_compat` owns. Never use it outside tests.
+//! are opaque) but none of the byte compatibility, which `rails_compat` owns. Only compiled for
+//! tests: this crate's own, and others' through the `test-support` feature.
 
 use std::sync::Arc;
 
@@ -44,7 +44,7 @@ impl TestCrypto {
             hasher.update(b"\0");
             hasher.update(part.as_bytes());
         }
-        hex(&hasher.finalize()[..16])
+        hex::encode(&hasher.finalize()[..16])
     }
 
     fn envelope(&self, kind: &str, name: &str, value: Value, expires_at: Option<Timestamp>) -> String {
@@ -89,8 +89,4 @@ impl Crypto for TestCrypto {
     fn decrypt_cookie(&self, name: &str, raw: &str, now: Timestamp) -> Option<Value> {
         self.open("encrypted", name, raw.get(8..)?, now)
     }
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }

@@ -25,7 +25,7 @@ protocol recordings all come from running the real Rails app.
 | `rails_compat` | Rails' signed and encrypted cookies, signed IDs, signed global IDs, Turbo stream names and bcrypt, byte-compatible with Rails so sessions carry over |
 | `kit` | Rack, Action Dispatch and Thruster, on Axum: Rails-style nested params, sessions, flash, format negotiation, forgery protection by `Sec-Fetch-Site`, ETags and gzip built from a page's cached parts, plus an in-process front server with TLS and ACME, HTTP/2 and Thruster's response cache |
 | `db` | Active Record over the existing schema (rusqlite), with the same callbacks, timestamps and STI values, and a Rails-compatible fixture loader |
-| `richtext` | The Action Text pipeline: sanitizing, mentions, opengraph embeds and autolinking, byte-identical to Rails on a 647-case corpus |
+| `richtext` | The Action Text pipeline: sanitizing, mentions, opengraph embeds and autolinking, byte-identical to Rails on a 647-case corpus apart from the deliberate differences below |
 | `storage` | Active Storage: the same blob keys, disk layout, variants (libvips) and video previews (ffmpeg), with byte-identical thumbnails |
 | `cable` | The Action Cable protocol server and pub/sub, frame-for-frame with Rails, on a WebSocket implementation of its own that shares and compresses broadcasts |
 | `assets` | Propshaft and importmap-rails, with identical fingerprinted filenames and tags |
@@ -221,18 +221,35 @@ come from different runs (the page-parts run on a busy host, which understates i
 It's a drop-in replacement for the Rails image: the same environment variables, ports and storage
 layout. Point it at an existing Campfire's storage and everyone stays signed in.
 
+With [ONCE](https://github.com/basecamp/once), on any server with Docker:
+
 ```sh
-docker build -t campfire-rust .
+once deploy ghcr.io/basecamp/once-campfire-rust --host chat.example.com
+```
+
+ONCE provides the secrets, TLS, backups and upgrades. The image is published for amd64 and arm64
+from `main` and from `v*` tags (see [`.github/workflows`](.github/workflows)).
+
+Or with Docker alone:
+
+```sh
 docker run -d -p 80:80 -p 443:443 \
   -e SECRET_KEY_BASE=... -e VAPID_PUBLIC_KEY=... -e VAPID_PRIVATE_KEY=... \
   -e TLS_DOMAIN=chat.example.com \
   -v campfire:/rails/storage \
-  campfire-rust
+  ghcr.io/basecamp/once-campfire-rust
 ```
 
 - **TLS:** with `TLS_DOMAIN` set, the app gets and renews its own Let's Encrypt certificate. It
   keeps certificates where Thruster did, so an existing install keeps its certificate.
 - **Plain HTTP:** set `DISABLE_SSL` instead, for running behind another proxy.
+- **Web Push:** `VAPID_PUBLIC_KEY` and `VAPID_PRIVATE_KEY` are a P-256 key pair in URL-safe Base64
+  (as the Rails image takes them). They're checked at boot; without a valid pair, push
+  notifications are off and the log says why. `VAPID_SUBJECT` is the contact push services see (a
+  `mailto:` or `https:` URL); it defaults to `https://` and your `TLS_DOMAIN`.
+- **The app port:** as with Puma behind Thruster, the app also answers on `TARGET_PORT` (3000)
+  without the front server's cache and compression, but only on loopback. Set `TARGET_BIND`
+  (e.g. `0.0.0.0`) to open it further; it trusts `X-Forwarded-*` from whoever reaches it.
 - **Storage:** everything lives under `/rails/storage`: the SQLite database, uploaded files and
   backups.
 - **Media:** the image builds libvips 8.16.1 (thumbnails and other variants) and ffmpeg 7.1.5
@@ -252,7 +269,8 @@ docker run -d -p 80:80 -p 443:443 \
 - **ONCE hooks:** `/hooks/pre-backup` runs `campfire backup`, which uses SQLite's online backup API.
 - **Other options:** see `crates/campfire/src/config.rs`.
 
-For development:
+To build the image yourself: `docker build -t campfire-rust .` (the `reference/` submodule must be
+checked out). For development:
 
 ```sh
 cargo test --workspace --exclude html5ever   # all crates
@@ -292,7 +310,22 @@ Deliberate:
   header (e.g. Safari before 16.4) can't submit forms over HTTPS. Tabs opened before an upgrade keep
   working: their tokens are ignored, and the header does the job.
 - **Redis and Resque are gone.** Jobs run in-process and are best-effort: a crash loses queued
-  webhooks and pushes, as a Redis restart would under Rails.
+  webhooks and pushes, as a Redis restart would under Rails. Each kind of job (pushes, webhooks,
+  purges, ...) has its own queue and `JOB_CONCURRENCY` workers, so a slow bot's webhooks can't hold
+  up push notifications.
+- **Push subscriptions are kept through our own failures.** Rails destroys a push subscription on
+  any OpenSSL error, which includes a bad VAPID key and any TLS failure (an empty CA store, a skewed
+  clock), so a configuration mistake deleted everyone's subscriptions on the next message. The
+  VAPID keys are now checked once at boot (Web Push is off, with a log line, when they're missing
+  or don't form a key pair), and a subscription is destroyed only when the push service answers
+  410 or 404 (RFC 8030; Rails keeps it on a 404) or its own key isn't a valid P-256 point.
+- **Long messages still get push notifications.** Rails puts the whole message in the notification,
+  and one over about 4 KB fails to encrypt (a Web Push message holds 4096 bytes), so nobody is
+  notified. The notification's body is now cut short with an ellipsis at 3 KB, and its title at 256
+  bytes.
+- **The VAPID subject is configurable.** Rails identifies every install to push services as
+  `mailto:support@37signals.com`; this uses `VAPID_SUBJECT`, or `https://` and the first
+  `TLS_DOMAIN`, or the project's URL.
 - **Cookies are only sent when they change.** Rails rewrites the session cookie, re-signs the
   `session_token` cookie and re-sets `last_room` on nearly every response. The session cookie is now
   written only when the session changed, and deleted once it's empty (it only holds the flash and a
@@ -315,9 +348,82 @@ Deliberate:
   modules (libopenmpt), game-console music (libgme), JPEG XL and SVG frames, codec2 speech,
   teletext subtitles, and DASH/IMF manifests. Tracker modules and game-console music attached to
   a message are now stored without duration or bit rate, which Campfire never shows.
-- **Not ported:** the duplicate `session_token` cookie Rails' Active Storage streaming sends; responses
-  to requests for multiple byte ranges; and legacy AES-CBC encrypted cookies, since Campfire started
-  on GCM.
+- **Limits where Rails had none, or raised.** Request bodies other than file uploads are capped at
+  16 MiB (a 413), and so are Active Storage direct uploads, which Campfire's editor doesn't use:
+  asking for a larger one is a 413. A QR code for more than a QR code can hold is a 422, not a 500. Page numbers are
+  capped at a billion. A WebSocket connection holds up to 64 subscriptions with identifiers of up to
+  4 KiB, and a client that doesn't read what it's sent for 30 seconds is disconnected. Deactivating
+  or banning a user closes their open connections once the change commits.
+- **Link unfurling is bounded in time.** Rails gives each connect and read of an unfurl 60
+  seconds, across up to 10 redirects and the image check. Now an unfurl gets 10 seconds in all and
+  5 per connect or read, and a page that takes longer unfurls nothing. At most 16 unfurls run at
+  once, and only a `meta` tag's first 256 attributes are read.
+- **Bot webhooks are bounded.** A delivery gets 60 seconds in all, on top of Rails' 7 per connect
+  or read; one that runs out answers "Failed to respond within 60 seconds", as a 7-second timeout
+  answers with its own. A reply larger than 100 MB (after decompression) fails the delivery and
+  posts nothing; Rails read replies of any size into memory.
+- **Push deliveries are bounded in time.** A push service gets 10 seconds per connect or read and 30
+  in all, where the web-push gem leaves `Net::HTTP`'s 60 seconds per step; a slow service would
+  otherwise hold one of the few push workers for minutes.
+- **The front server is stricter than Thruster.** The app's own listener on `TARGET_PORT` binds
+  loopback only (Puma bound every interface) and has the front's timeouts and `MAX_REQUEST_BODY`
+  (see [Running it](#running-it)). The response cache counts its keys toward `CACHE_SIZE`, skips
+  URIs longer than 2 KB, keys on the raw path (Thruster decoded it, so `/a%2Fb` and `/a/b` shared
+  an entry), and lets range requests through to the app instead of answering them with a whole
+  cached body.
+- **Media is processed off the database writer.** Rails saves a blob's row and then uploads its
+  file after commit; here the upload is copied into storage first, straight from the request's
+  tempfile, and deleted again if the save fails. Variants, video posters and analysis run on
+  background threads (at most four at a time), and only their rows are written in a transaction, so
+  a large image or video doesn't hold up other writes. A variant or poster is saved already
+  analyzed, where Rails analyzes it in a job after commit; the rows end up the same. Two requests for
+  the same missing variant may both transform it: the first to save wins and the other's file is
+  deleted. ffmpeg is stopped after 60 seconds of drawing a poster and ffprobe after 30 seconds of
+  reading a file, which Rails doesn't limit.
+- **Passwords are hashed and checked outside the database.** bcrypt (about 250 ms) runs before the
+  write that saves a password, and a sign-in looks the user up and then verifies the password after
+  releasing the database connection. An unknown email address still costs one bcrypt, as in Rails.
+- **Searches are for words.** Rails passes a search's words to SQLite's full-text `MATCH` as they
+  are, so `NOT`, `AND`, `OR` or `NEAR` in the wrong place is a 500. Each word is now matched as
+  itself.
+- **`/rooms/directs/:id` redirects to the room** instead of answering 500.
+- **Edge's install instructions render.** With an EdgeHTML user agent (`Edge/`), Rails answers
+  profile and room pages with a 500 because the partial names an image that isn't there
+  (`install-edge.svg`); the Rust app ships it.
+- **New-ping suggestions appear.** The user picker for a new ping asks for JSON; in Rails it asks
+  for anything, gets HTML, and never shows a suggestion.
+- **Autolinking can't break out of an attribute.** rails_autolink finds URLs and email addresses
+  with regular expressions over the sanitized HTML, which Nokogiri serializes with `<` and `>` left
+  raw in attribute values. A URL after a `>` in, say, a `title` was taken for text and linked, and
+  the inserted `<a href="...">` closed the attribute, turning the rest of its value into live
+  markup (a stored XSS; it affects the Rails app). The port escapes `<` and `>` in attribute values
+  before autolinking, so URLs inside attributes stay as they were. The same DOM otherwise.
+- **Cached markup doesn't carry the request's host.** A message's "Copy link" button held an
+  absolute URL built from the Host header, inside a fragment cached for everyone, so one request
+  with a forged Host changed the link everyone copied. The button now carries the message's path
+  (`data-copy-to-clipboard-url-value`), and the copy-to-clipboard controller (an override) makes it
+  absolute against the page. The bot API's cached JSON, whose URLs must be absolute, is cached per
+  base URL instead.
+- **Rich text drops `name` attributes.** Rails' default sanitizer allowlist keeps them, which lets
+  a message clobber the page's DOM globals (`<img name="body">` shadows `document.body`). Nothing
+  Campfire's composer writes has one.
+- **Rich text keeps only highlight colors in `style`.** Where Rails runs `style` through Loofah's
+  CSS scrubber, the sanitizer keeps only `color` and `background-color` with a plain color value
+  (a keyword, hex, `rgb()`/`hsl()`, or a custom property like Lexxy's `var(--highlight-1)`), which
+  is all Lexxy writes. It shows in the HTML body the bot API and webhooks send; message pages drop
+  `style` altogether, as they did.
+- **The web app manifest is valid JSON.** Rails HTML-escapes the account name and URLs into
+  `webmanifest.json`, so a name with `\` or `"` broke the manifest and the small logo's URL read
+  `?size=small&amp;v=...`. They're JSON strings now.
+- **Content attachments nest at most 8 deep.** An `<action-text-attachment>` carrying HTML in its
+  `content` renders that content, attachments included; each level parses and sanitizes
+  everything below it again, so a 336 KB body of nested ones took 10 seconds to render. Deeper
+  levels now render empty. Campfire's composer doesn't nest them at all.
+- **A mention of a deleted user shows ☒.** Rails can't find a "missing" partial for users, so
+  the mention raised and blanked the whole message, and editing the message raised too. The rest of
+  the message now shows with ☒ in the mention's place, and the editor leaves the mention out.
+- **Not ported:** the duplicate `session_token` cookie Rails' Active Storage streaming sends; and
+  legacy AES-CBC encrypted cookies, since Campfire started on GCM.
 
 Not fully covered:
 
@@ -326,15 +432,6 @@ Not fully covered:
 - In rich text, 11 of 9,247 fuzz cases differ, all in the edit form's value for malformed embed
   markup. Active Storage attachments embedded in a message body, which Campfire's composer can't
   create, render as ☒.
-
-**Rails bugs the port reproduces faithfully,** worth fixing upstream first:
-
-- Edge user agents get a 500 on profile and room pages (`install-edge.svg` is missing).
-- `/searches?q=NOT` raises.
-- New-ping autocomplete never shows suggestions (a plain fetch asks for JSON and gets HTML).
-- A mention of a deleted user blanks the whole message.
-- Editing a message with a missing attachment raises.
-- `directs#show` returns 500.
 
 ## How it was built
 

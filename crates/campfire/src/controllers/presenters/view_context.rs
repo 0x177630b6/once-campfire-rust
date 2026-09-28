@@ -58,9 +58,9 @@ impl Layout {
             current_user: user.as_ref().map(|user| current_user(&secrets, user)),
             account: account_summary(account.as_ref(), has_logo),
             custom_styles: account.and_then(|account| account.custom_styles),
-            platform: super::platform(c),
+            platform: super::accounts::platform(c),
             last_room_visited_id,
-            vapid_public_key: app.config.vapid_public_key.clone(),
+            vapid_public_key: app.vapid_public_key(),
             app_version: app.config.app_version.clone(),
         })
     }
@@ -102,7 +102,7 @@ impl Layout {
     pub fn page(&self, c: &mut Ctx, status: StatusCode, html: String) -> Response {
         let links = &stylesheet_tags().preload_links;
         let existing = c.headers.get("link").and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
-        c.set_header("link", &campfire_assets::append_preload_links(&existing, &links));
+        c.set_header("link", &campfire_assets::append_preload_links(&existing, links));
         c.render(status, &format::HTML, html)
     }
 
@@ -136,7 +136,7 @@ pub fn current_user(secrets: &rails_compat::Secrets, user: &User) -> CurrentUser
 pub fn account_summary(account: Option<&Account>, has_logo: bool) -> AccountSummary {
     AccountSummary {
         name: account.map(|account| account.name.clone()).unwrap_or_default(),
-        logo_url: super::fresh_account_logo_path(account, None),
+        logo_url: super::accounts::fresh_account_logo_path(account, None),
         has_logo,
     }
 }

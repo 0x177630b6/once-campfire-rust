@@ -8,7 +8,7 @@ use campfire_views::sessions;
 use crate::app::AppCtx;
 use crate::controllers::presenters::page::framed_page;
 use crate::concerns::{self, Before};
-use crate::controllers::presenters_a::{self};
+use crate::controllers::presenters;
 
 /// `allow_unauthenticated_access`: an auto-submitting form that PUTs back to this URL.
 pub async fn show(c: &mut Ctx) -> Result {
@@ -22,7 +22,7 @@ pub async fn show(c: &mut Ctx) -> Result {
 pub async fn update(c: &mut Ctx) -> Result {
     concerns::before_actions(c, Before::default().allow_unauthenticated_access()).await?;
     let transfer_id = c.param_str("id").unwrap_or_default().to_string();
-    let user_id = presenters_a::user_id_from_transfer_id(&c.app().secrets, &transfer_id, c.now());
+    let user_id = presenters::accounts::user_id_from_transfer_id(&c.app().secrets, &transfer_id, c.now());
     // `User.active.find_by_transfer_id(params[:id])`
     let user = match user_id {
         Some(id) => c.app().db.read(move |conn| Ok(User::find_by_id(conn, id)?.filter(User::is_active))).await.map_err(Error::internal)?,

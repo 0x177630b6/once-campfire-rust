@@ -368,7 +368,8 @@ mod tests {
         assert_eq!(r.remote_ip().unwrap(), "203.0.113.9");
         let r = request(&[], "198.51.100.7", &proxy);
         assert_eq!(r.remote_ip().unwrap(), "198.51.100.7");
-        // A public peer is the client even if it claims to forward for someone.
+        // As in Rails, a forwarded address is believed even from a public peer: `remote_ip` is
+        // only as trustworthy as the proxy in front.
         let r = request(&[("x-forwarded-for", "203.0.113.9")], "198.51.100.7", &proxy);
         assert_eq!(r.remote_ip().unwrap(), "203.0.113.9");
         let r = request(&[("x-forwarded-for", "10.0.0.3")], "127.0.0.1", &proxy);

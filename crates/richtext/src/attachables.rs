@@ -347,15 +347,10 @@ pub fn render_attachment(
     let html = match &attachment.attachable {
         Attachable::User(user) => render_mention(user),
         Attachable::OpengraphEmbed(embed) => render_opengraph_embed(embed),
-        Attachable::Missing { signed_model } => {
-            // MissingAttachable#to_partial_path asks the SGID's model for its missing partial, and
-            // only models that include ActionText::Attachable as a concern have one. User pulls it
-            // in through a plain module (User::Mentionable), so for users it raises.
-            if signed_model.as_deref().is_some_and(|m| m != "ActiveStorage::Blob") {
-                return Err(Error::Raised("NoMethodError: to_missing_attachable_partial_path"));
-            }
-            "☒".to_string()
-        }
+        // Rails asks the SGID's model for its missing partial, which only models that include
+        // ActionText::Attachable as a concern have. User doesn't, so a mention of a deleted user
+        // raised and blanked the whole message; every missing attachable is Action Text's ☒ here.
+        Attachable::Missing { .. } => "☒".to_string(),
         Attachable::Content { content } => {
             format!("<figure class=\"attachment attachment--content\">\n  {}\n</figure>\n", render_content(content)?)
         }

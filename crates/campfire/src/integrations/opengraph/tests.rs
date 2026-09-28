@@ -9,7 +9,7 @@ use base64::Engine;
 use serde_json::Value;
 
 use super::*;
-use crate::integrations::test_support::{FakeResolver, FakeServer, MappingDialer, Route, network};
+use crate::integrations::test_support::{FakeResolver, FakeServer, MappingDialer, Route, gzip_bomb, network, trickling_server};
 
 fn route(spec: &Value) -> Route {
     let s = |key: &str| spec[key].as_str().unwrap_or_default().to_string();
@@ -102,4 +102,43 @@ async fn unfurls_over_https() {
     // A certificate that doesn't verify is a failed fetch.
     let untrusted = Network { tls: crate::integrations::net::tls_config(rustls::RootCertStore::empty()), ..net };
     assert_eq!(unfurl(&untrusted, "https://www.example.com").await, Ok(Unfurl::NoContent));
+}
+
+/// www.example.com, at a fake public address that connects to `server`.
+fn network_to(server: std::net::SocketAddr) -> Network {
+    let resolver = Arc::new(FakeResolver::new([("www.example.com", vec!["93.184.216.34"])]));
+    let dialer = Arc::new(MappingDialer { public: HashSet::from(["93.184.216.34".parse().unwrap()]), to: server, dialed: Mutex::new(Vec::new()) });
+    network(resolver, dialer)
+}
+
+/// A page followed by a gigabyte of zeros, gzipped to a megabyte, is past the 5MB limit as soon
+/// as that much is inflated. The same page followed by less unfurls.
+#[tokio::test]
+async fn stops_reading_a_gzip_bomb_at_the_limit() {
+    use std::io::Write;
+    let page = "<meta property=\"og:title\" content=\"Hey!\"><meta property=\"og:url\" content=\"http://www.example.com/\"><meta property=\"og:description\" content=\"desc..\">";
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder.write_all(page.as_bytes()).unwrap();
+    let page = encoder.finish().unwrap();
+    let gzipped = |path: &str, zeros: Vec<u8>| {
+        Route::new("GET", "*", path, 200).header("Content-Type", "text/html").header("Content-Encoding", "gzip").body([page.clone(), zeros].concat())
+    };
+    let server = FakeServer::start(vec![gzipped("/", gzip_bomb(1024)), gzipped("/small", gzip_bomb(2))]).await;
+    let net = network_to(server.addr);
+
+    assert!(matches!(unfurl(&net, "http://www.example.com/small").await, Ok(Unfurl::Json(_))));
+    let started = std::time::Instant::now();
+    assert_eq!(unfurl(&net, "http://www.example.com/").await, Ok(Unfurl::NoContent));
+    assert!(started.elapsed() < std::time::Duration::from_secs(2), "{:?}", started.elapsed());
+}
+
+/// A server that keeps sending a byte at a time never trips a read timeout, but the unfurl as a
+/// whole gives up.
+#[tokio::test]
+async fn gives_up_on_a_trickling_page() {
+    let server = trickling_server("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\n\r\n").await;
+    let started = std::time::Instant::now();
+    let deadline = std::time::Duration::from_millis(500);
+    assert_eq!(unfurl_within(&network_to(server), "http://www.example.com/", deadline).await, Ok(Unfurl::NoContent));
+    assert!(started.elapsed() < deadline * 2, "{:?}", started.elapsed());
 }

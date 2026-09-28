@@ -89,7 +89,7 @@ impl Timestamp {
             return None;
         }
         let num = |range: std::ops::Range<usize>| whole.get(range)?.parse::<i32>().ok();
-        let date = jiff::civil::date(num(0..4)? as i16, num(5..7)? as i8, num(8..10)? as i8);
+        let date = jiff::civil::Date::new(num(0..4)? as i16, num(5..7)? as i8, num(8..10)? as i8).ok()?;
         let micros = match fraction.strip_prefix('.') {
             Some(digits) if !digits.is_empty() && digits.bytes().all(|d| d.is_ascii_digit()) => {
                 let mut padded: String = digits.chars().take(6).collect();
@@ -209,6 +209,12 @@ impl Clock for TestClock {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn impossible_dates_dont_parse() {
+        assert!(Timestamp::parse_db("2026-13-01 00:00:00").is_none());
+        assert!(Timestamp::parse_db("2026-02-30 00:00:00").is_none());
+    }
 
     #[test]
     fn encodes_like_active_record() {

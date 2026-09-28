@@ -14,13 +14,15 @@ const PUBLIC_IP: &str = "142.250.185.206";
 /// parity/.env.reference
 const VAPID_PUBLIC_KEY: &str = "BEYXTBB5_jNhNzXDmx5KEU55Vbbd-u--Lk9rM5OFQvUkPIBwZJ9QzAq0zdEzFw6yTV8cTriz_qYBVicY02_VxTQ=";
 const VAPID_PRIVATE_KEY: &str = "qfXLHghuG1rSHZUVo9SscNRI-0EIHRbIrfeGCqbAwak=";
+/// `WebPush::Notification#vapid_identification`, which the gem's vectors were made with.
+const REFERENCE_SUBJECT: &str = "mailto:support@37signals.com";
 
 fn expected() -> serde_json::Value {
     serde_json::from_str(include_str!("../testdata/web_push_expected.json")).unwrap()
 }
 
 fn vapid() -> VapidConfig {
-    VapidConfig::new(VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY)
+    VapidConfig::new(REFERENCE_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY).unwrap()
 }
 
 struct Receiver {
@@ -98,10 +100,26 @@ fn encodes_the_message_like_json_generate() {
 }
 
 #[test]
+fn the_longest_payload_fits_a_push_message() {
+    use campfire_db::{MAX_PAYLOAD_BODY_BYTES, MAX_PAYLOAD_TITLE_BYTES};
+    let receiver = Receiver::new();
+    let notification = Notification {
+        title: "\"".repeat(MAX_PAYLOAD_TITLE_BYTES / 2),
+        body: "\u{1}".repeat(MAX_PAYLOAD_BODY_BYTES / 6),
+        path: format!("/rooms/{}", i64::MIN),
+        badge: i64::MIN,
+        subscription: receiver.subscription(1, "https://fcm.googleapis.com/fcm/send/abc"),
+    };
+    let subscription = &notification.subscription;
+    let body = encryption::encrypt(notification.encoded_message().as_bytes(), subscription.p256dh_key.as_deref(), subscription.auth_key.as_deref());
+    assert_eq!(receiver.open(&body.unwrap()), notification.encoded_message());
+}
+
+#[test]
 fn signs_the_vapid_header_like_the_gem() {
     let expected = expected();
     let now = expected["now"].as_i64().unwrap();
-    let authorization = vapid().authorization("https://fcm.googleapis.com", now).unwrap();
+    let authorization = vapid().authorization("https://fcm.googleapis.com", now);
     let (t, k) = authorization.strip_prefix("vapid t=").unwrap().split_once(",k=").unwrap();
     assert_eq!(k, expected["authorization_k"].as_str().unwrap());
     let segments: Vec<&str> = t.split('.').collect();
@@ -111,6 +129,46 @@ fn signs_the_vapid_header_like_the_gem() {
     let key = VerifyingKey::from_sec1_bytes(&decode64(VAPID_PUBLIC_KEY).unwrap()).unwrap();
     let signature = Signature::from_slice(&decode64(segments[2]).unwrap()).unwrap();
     key.verify(format!("{}.{}", segments[0], segments[1]).as_bytes(), &signature).unwrap();
+}
+
+#[test]
+fn signs_with_the_configured_subject() {
+    let vapid = VapidConfig::new("mailto:ops@example.com", VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY).unwrap();
+    let authorization = vapid.authorization("https://fcm.googleapis.com", 0);
+    let jwt = authorization.strip_prefix("vapid t=").unwrap().split(',').next().unwrap();
+    let claims: serde_json::Value = serde_json::from_slice(&decode64(jwt.split('.').nth(1).unwrap()).unwrap()).unwrap();
+    assert_eq!(claims["sub"], "mailto:ops@example.com");
+}
+
+#[test]
+fn rejects_bad_vapid_keys_up_front() {
+    let other_public_key = encode64_nopad(Receiver::new().key.public_key().to_encoded_point(false).as_bytes());
+    let keys = |public_key: &str, private_key: &str| VapidConfig::new(REFERENCE_SUBJECT, public_key, private_key).map(|_| ());
+    assert_eq!(keys("", VAPID_PRIVATE_KEY), Err(VapidError::InvalidPublicKey));
+    assert_eq!(keys("dGVzdF9rZXk", VAPID_PRIVATE_KEY), Err(VapidError::InvalidPublicKey));
+    assert_eq!(keys(VAPID_PUBLIC_KEY, "not base64!"), Err(VapidError::InvalidPrivateKey));
+    assert_eq!(keys(VAPID_PUBLIC_KEY, &encode64_nopad(&[0xff; 32])), Err(VapidError::InvalidPrivateKey));
+    assert_eq!(keys(&other_public_key, VAPID_PRIVATE_KEY), Err(VapidError::Mismatched));
+    assert_eq!(keys(VAPID_PUBLIC_KEY.trim_end_matches('='), VAPID_PRIVATE_KEY.trim_end_matches('=')), Ok(()));
+}
+
+fn config(public_key: Option<&str>, private_key: Option<&str>) -> crate::config::Config {
+    crate::config::Config {
+        vapid_public_key: public_key.map(Into::into),
+        vapid_private_key: private_key.map(Into::into),
+        vapid_subject: REFERENCE_SUBJECT.into(),
+        ..crate::config::Config::from_lookup(|name| (name == "SECRET_KEY_BASE_DUMMY").then(|| "1".into())).unwrap()
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn web_push_is_off_without_a_valid_key_pair() {
+    let t = tokio::task::spawn_blocking(TestDb::new).await.unwrap();
+    let pool = |public_key, private_key| crate::integrations::web_push_pool(&config(public_key, private_key), &t.db);
+    assert!(pool(None, Some(VAPID_PRIVATE_KEY)).is_none());
+    assert!(pool(Some("dGVzdF9rZXk"), Some(VAPID_PRIVATE_KEY)).is_none());
+    assert!(pool(Some(VAPID_PUBLIC_KEY), Some(VAPID_PRIVATE_KEY)).is_some());
+    assert_eq!(VapidConfig::from_config(&config(Some(VAPID_PUBLIC_KEY), None)).map(|_| ()), Err(VapidError::Missing));
 }
 
 #[tokio::test]
@@ -176,7 +234,7 @@ async fn raises_what_the_gem_raises() {
     let subscription = receiver.subscription(1, "https://fcm.googleapis.com/fcm/send/abc");
     for (status, reason, kind, invalidates) in [
         (410, "Gone", "WebPush::ExpiredSubscription", true),
-        (404, "Not Found", "WebPush::InvalidSubscription", false),
+        (404, "Not Found", "WebPush::InvalidSubscription", true),
         (403, "Forbidden", "WebPush::Unauthorized", false),
         (400, "UnauthorizedRegistration", "WebPush::Unauthorized", false),
         (400, "Bad Request", "WebPush::ResponseError", false),
@@ -192,18 +250,18 @@ async fn raises_what_the_gem_raises() {
 }
 
 #[tokio::test]
-async fn openssl_errors_invalidate_the_subscription() {
-    // A key that isn't a point on the curve (as in the fixtures), and a push service whose
-    // certificate doesn't verify.
+async fn only_the_subscriptions_own_faults_invalidate_it() {
+    // A key that isn't a point on the curve (as in the fixtures) can never be delivered to.
     let service = push_service(201, "Created").await;
     let bad_key = PushSubscription::new(1, Some("https://fcm.googleapis.com/fcm/send/abc"), Some("dGVzdF9rZXk"), Some("dGVzdF9hdXRo"), None);
     let error = notification(bad_key).deliver(&service.net, &vapid()).await.unwrap_err();
-    assert!(error.invalidates_subscription(), "{error:?}");
+    assert_eq!((error.class_name(), error.invalidates_subscription()), ("OpenSSL::PKey::EC::Point::Error", true));
 
+    // A certificate that doesn't verify may be our fault (an empty CA store, a skewed clock).
     let untrusted = Network { tls: crate::integrations::net::tls_config(rustls::RootCertStore::empty()), ..service.net.clone() };
     let receiver = Receiver::new();
     let error = notification(receiver.subscription(1, "https://fcm.googleapis.com/fcm/send/abc")).deliver(&untrusted, &vapid()).await.unwrap_err();
-    assert!(error.invalidates_subscription(), "{error:?}");
+    assert_eq!((error.class_name(), error.invalidates_subscription()), ("OpenSSL::SSL::SSLError", false));
 
     let blank = PushSubscription::new(1, Some("https://fcm.googleapis.com/fcm/send/abc"), Some(""), Some("dGVzdF9hdXRo"), None);
     let error = notification(blank).deliver(&service.net, &vapid()).await.unwrap_err();
@@ -305,6 +363,21 @@ fn expected_endpoint_suffix(_t: &TestDb, id: i64) -> String {
     let endpoints = [("david_chrome", "123"), ("jason_chrome", "567"), ("jz_chrome", "456"), ("kevin_chrome", "789")];
     let label = endpoints.iter().find(|(label, _)| TestDb::id(label) == id).map(|(_, e)| *e).unwrap();
     format!("/fcm/send/{label}")
+}
+
+#[tokio::test]
+async fn the_pool_keeps_subscriptions_it_failed_to_reach() {
+    let service = push_service(201, "Created").await;
+    let untrusted = Network { tls: crate::integrations::net::tls_config(rustls::RootCertStore::empty()), ..service.net.clone() };
+    let destroyed = Arc::new(Mutex::new(Vec::new()));
+    let log = destroyed.clone();
+    let pool = Pool::new(untrusted, vapid(), move |id| -> Result<(), String> {
+        log.lock().unwrap().push(id);
+        Ok(())
+    });
+    pool.deliver_later(notification(Receiver::new().subscription(1, "https://fcm.googleapis.com/fcm/send/abc")));
+    pool.shutdown().await;
+    assert!(destroyed.lock().unwrap().is_empty());
 }
 
 #[tokio::test]

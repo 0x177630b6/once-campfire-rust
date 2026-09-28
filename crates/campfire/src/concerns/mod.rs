@@ -32,12 +32,11 @@
 //! with [`current_user`] / [`current_session`].
 
 // The frame later controller ports build on; parts are unused until they land.
-#![allow(dead_code)]
 
 pub mod platform;
 pub mod user_agent;
 
-use campfire_db::{Ban, Membership, Room, Session, User};
+use campfire_db::{Ban, Membership, PasswordDigest, Room, Session, User};
 use campfire_kit::{Cookie, Ctx, Error, Result, SameSite, StatusCode, halt};
 
 use crate::app::AppCtx;
@@ -254,6 +253,24 @@ pub fn redirect_signed_in_user_to_root(c: &mut Ctx) -> Result<()> {
     Ok(())
 }
 
+/// `has_secure_password`'s `password=`, hashed on the blocking pool ahead of the write that saves
+/// it, so bcrypt (about 250 ms) holds neither an async thread nor the database writer.
+pub async fn password_digest(c: &Ctx, password: Option<String>) -> Result<Option<PasswordDigest>> {
+    let Some(password) = password else { return Ok(None) };
+    PasswordDigest::hash(password, c.app().db.env().bcrypt_cost).await.map(Some).map_err(Error::internal)
+}
+
+/// `User.active.authenticate_by(email_address:, password:)`: the user is looked up on a reader,
+/// and the password checked once the reader is released.
+pub async fn authenticate_by(c: &Ctx, email_address: String, password: String) -> Result<Option<User>> {
+    // `authenticate_by` returns nil for a blank password before looking anything up.
+    if password.is_empty() {
+        return Ok(None);
+    }
+    let candidate = c.app().db.read(move |conn| User::find_active_by_email_address(conn, &email_address)).await.map_err(Error::internal)?;
+    tokio::task::spawn_blocking(move || User::authenticated(candidate, &password)).await.map_err(Error::internal)
+}
+
 /// `start_new_session_for(user)`
 pub async fn start_new_session_for(c: &mut Ctx, user: User) -> Result<Session> {
     let (user_agent, ip) = (c.request.user_agent().map(str::to_string), c.request.remote_ip()?.to_string());
@@ -390,7 +407,7 @@ async fn render_incompatible_browser(c: &mut Ctx) -> Result {
     let own_layout = c
         .current::<crate::controllers::MatchedRoute>()
         .is_some_and(|route| route.endpoint.starts_with("messages#") || route.endpoint.starts_with("messages/by_bots#"));
-    use crate::controllers::presenters_a::view_context::{page_in_any_format, page_or_frame_in_any_format};
+    use crate::controllers::presenters::view_context::{page_in_any_format, page_or_frame_in_any_format};
 
     // An explicit `render template:`, so no format lookup: a blocked browser gets this page for
     // /webmanifest.json, /service-worker.js or `Accept: application/json` alike (verified against

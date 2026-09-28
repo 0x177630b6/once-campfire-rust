@@ -8,7 +8,7 @@ use campfire_views::pwa;
 
 use crate::app::AppCtx;
 use crate::concerns::{self, Before};
-use crate::controllers::presenters_a;
+use crate::controllers::presenters;
 
 /// `allow_unauthenticated_access`, `skip_forgery_protection`
 fn before() -> Before {
@@ -30,8 +30,8 @@ pub async fn manifest(c: &mut Ctx) -> Result {
     let asset_path = |path: &str| campfire_assets::asset_path(path);
     let manifest = pwa::Manifest {
         account_name: account.as_ref().map(|account| account.name.clone()),
-        logo_path_small: presenters_a::fresh_account_logo_path(account.as_ref(), Some("small")),
-        logo_path: presenters_a::fresh_account_logo_path(account.as_ref(), None),
+        logo_path_small: presenters::accounts::fresh_account_logo_path(account.as_ref(), Some("small")),
+        logo_path: presenters::accounts::fresh_account_logo_path(account.as_ref(), None),
         base_url: c.url_for(""),
         asset_path: &asset_path,
     };

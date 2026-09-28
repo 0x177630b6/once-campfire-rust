@@ -11,9 +11,9 @@ use campfire_kit::{Ctx, Error, Param, Redirect, Result, StatusCode, format};
 use campfire_kit::params::Permit;
 use campfire_views::accounts;
 
-use super::presenters_a::attachments::{self, Assignment, Record};
-use super::presenters_a::pagination::Page;
-use super::presenters_a::{self};
+use super::presenters::attachments::{self, Assignment, Record};
+use super::presenters::pagination::Page;
+use super::presenters;
 use crate::app::AppCtx;
 use crate::controllers::presenters::page::framed_page;
 use crate::concerns::{self, Before, current_user};
@@ -27,12 +27,12 @@ pub async fn edit(c: &mut Ctx) -> Result {
     let account = current_account(c).await?;
     c.respond_to(&[&format::HTML])?;
     let can_administer = current_user(c).is_some_and(|user| user.can_administer(None, false));
-    let users = c.app().db.read(move |conn| presenters_a::account_users(conn, can_administer)).await.map_err(Error::internal)?;
+    let users = c.app().db.read(move |conn| presenters::accounts::account_users(conn, can_administer)).await.map_err(Error::internal)?;
     let page = Page::new(c.param_str("page"), users.len() as i64, PER_PAGE);
 
     let secrets = c.app().secrets.clone();
     let (administrators, members): (Vec<_>, Vec<_>) =
-        users.iter().map(|user| presenters_a::user_summary(&secrets, user)).partition(|user| user.administrator());
+        users.iter().map(|user| presenters::user_summary(&secrets, user)).partition(|user| user.administrator());
     let next_page = (!page.is_last()).then(|| page.next_param().to_string());
     let restrict_room_creation_to_administrators = account.settings().restrict_room_creation_to_administrators();
     framed_page!(c, StatusCode::OK, |ctx| accounts::Edit {
@@ -58,7 +58,7 @@ pub async fn update(c: &mut Ctx) -> Result {
     let settings: Option<Vec<(String, String)>> = params.get("settings").and_then(Param::as_hash).map(|settings| {
         settings.iter().map(|(key, value)| (key.clone(), value.to_s().unwrap_or_default())).collect()
     });
-    let logo = Assignment::from_params(&params, "logo")?;
+    let logo = Assignment::from_params(&params, "logo")?.stage(c.app()).await?;
 
     let pending = c
         .app()
@@ -66,11 +66,11 @@ pub async fn update(c: &mut Ctx) -> Result {
         .write(move |tx| {
             let settings: Option<Vec<(&str, &str)>> = settings.as_ref().map(|s| s.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect());
             account.update(tx, name.as_deref(), None, settings.as_deref())?;
-            attachments::assign(tx, Record::account(account.id), "logo", &logo)
+            attachments::assign(tx, Record::account(account.id), "logo", logo)
         })
         .await
         .map_err(Error::internal)?;
-    attachments::upload_and_analyze_later(c.app(), pending).await?;
+    attachments::analyze_later(c.app(), pending);
 
     let location = c.url_for(&campfire_routes::edit_account());
     c.redirect_to_with(&location, Redirect { notice: Some("✓".into()), ..Redirect::default() })

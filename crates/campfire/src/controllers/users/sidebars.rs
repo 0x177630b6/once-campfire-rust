@@ -9,7 +9,7 @@ use campfire_views::users;
 use crate::app::AppCtx;
 use crate::channels::user_gid;
 use crate::concerns::{self, Before};
-use crate::controllers::presenters_a::{self, view_context};
+use crate::controllers::presenters::{self, view_context};
 
 pub async fn show(c: &mut Ctx) -> Result {
     concerns::before_actions(c, Before::default()).await?;
@@ -22,7 +22,7 @@ pub async fn show(c: &mut Ctx) -> Result {
             .db
             .read(move |conn| {
                 // The direct rooms' fragments come from the store the render then uses.
-                let sidebar = campfire_views::fragment_cache::with(&fragments, || presenters_a::sidebar(conn, &secrets, &user))?;
+                let sidebar = campfire_views::fragment_cache::with(&fragments, || presenters::accounts::sidebar(conn, &secrets, &user))?;
                 let restricted = Account::first(conn)?.is_some_and(|account| account.settings().restrict_room_creation_to_administrators());
                 Ok((sidebar, restricted))
             })
@@ -31,7 +31,7 @@ pub async fn show(c: &mut Ctx) -> Result {
     };
 
     let data = SidebarData {
-        current_user: presenters_a::user_summary(&secrets, &user),
+        current_user: presenters::user_summary(&secrets, &user),
         // turbo_stream_from :rooms / turbo_stream_from Current.user, :rooms
         rooms_stream: rails_compat::turbo::signed_stream_name(&secrets, &["rooms"]),
         user_rooms_stream: rails_compat::turbo::signed_stream_name(&secrets, &[&user_gid(user.id).to_param(), "rooms"]),
@@ -55,7 +55,7 @@ struct SidebarData {
     current_user: campfire_views::users::UserSummary,
     rooms_stream: String,
     user_rooms_stream: String,
-    sidebar: presenters_a::Sidebar,
+    sidebar: presenters::accounts::Sidebar,
     can_create_rooms: bool,
 }
 

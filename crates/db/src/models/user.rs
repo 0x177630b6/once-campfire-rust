@@ -118,8 +118,8 @@ pub struct User {
 pub struct NewUser {
     pub name: String,
     pub email_address: Option<String>,
-    /// `has_secure_password`: hashed into `password_digest`.
-    pub password: Option<String>,
+    /// `has_secure_password`'s `password=`, already hashed.
+    pub password_digest: Option<PasswordDigest>,
     pub role: Role,
     pub bio: Option<String>,
     pub bot_token: Option<String>,
@@ -130,7 +130,7 @@ pub struct NewUser {
 pub struct UserChanges {
     pub name: Option<String>,
     pub email_address: Option<Option<String>>,
-    pub password: Option<String>,
+    pub password_digest: Option<PasswordDigest>,
     pub role: Option<Role>,
     pub status: Option<Status>,
     pub bio: Option<Option<String>>,
@@ -140,7 +140,8 @@ pub struct UserChanges {
 const INSERT: &str = r#"INSERT INTO "users" ("bio", "bot_token", "created_at", "email_address", "name", "password_digest", "role", "status", "updated_at") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING "id""#;
 
 impl User {
-    pub(crate) fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
+    /// A `SELECT "users".*` row.
+    pub fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
         Ok(Self {
             id: row.get("id")?,
             name: row.get("name")?,
@@ -263,28 +264,30 @@ impl User {
             .or_not_found("User")
     }
 
-    /// `User.active.authenticate_by(email_address:, password:)`
-    pub fn authenticate_by(
-        conn: &Connection,
-        email_address: &str,
-        password: &str,
-    ) -> Result<Option<Self>> {
-        if password.is_empty() {
-            return Ok(None);
-        }
-        let user = query_one(
+    /// `User.active.find_by(email_address:)`: the lookup half of `authenticate_by`.
+    pub fn find_active_by_email_address(conn: &Connection, email_address: &str) -> Result<Option<Self>> {
+        query_one(
             conn,
             r#"SELECT * FROM "users" WHERE "users"."status" = 0 AND "users"."email_address" = ? LIMIT 1"#,
             [email_address],
             Self::from_row,
-        )?;
-        match user {
-            Some(user) if user.authenticate(password) => Ok(Some(user)),
-            Some(_) => Ok(None),
+        )
+    }
+
+    /// The password half of `User.active.authenticate_by(email_address:, password:)`, given
+    /// what [`User::find_active_by_email_address`] found. Blocking (bcrypt), so it runs with no
+    /// connection held. A blank password returns nil before the lookup in Rails; callers skip
+    /// the lookup for one too.
+    pub fn authenticated(candidate: Option<Self>, password: &str) -> Option<Self> {
+        if password.is_empty() {
+            return None;
+        }
+        match candidate {
+            Some(user) => user.authenticate(password).then_some(user),
             None => {
                 // authenticate_by hashes anyway so a missing account takes as long as a wrong password.
                 let _ = bcrypt::verify(password, DUMMY_DIGEST);
-                Ok(None)
+                None
             }
         }
     }
@@ -309,11 +312,7 @@ impl User {
     /// `User.create!`: inserts, then grants memberships to every open room after commit.
     pub fn create(tx: &mut Tx<'_>, attributes: NewUser) -> Result<Self> {
         let now = tx.now();
-        let password_digest = attributes
-            .password
-            .as_deref()
-            .map(|p| password_digest(p, tx.env().bcrypt_cost))
-            .transpose()?;
+        let password_digest = attributes.password_digest.map(PasswordDigest::into_string);
         let id: i64 = tx.conn().query_row_cached(
             INSERT,
             params![
@@ -364,8 +363,7 @@ impl User {
             self.email_address = email.clone();
             sets.push(("email_address", Box::new(email)));
         }
-        if let Some(password) = changes.password {
-            let digest = password_digest(&password, tx.env().bcrypt_cost)?;
+        if let Some(digest) = changes.password_digest.map(PasswordDigest::into_string) {
             self.password_digest = Some(digest.clone());
             sets.push(("password_digest", Box::new(digest)));
         }
@@ -532,8 +530,10 @@ impl User {
         self.close_remote_connections(tx, true);
     }
 
-    fn close_remote_connections(&self, tx: &Tx<'_>, reconnect: bool) {
-        tx.emit_now(Event::DisconnectUser {
+    /// After commit: a connection authenticating meanwhile then either finds the sessions gone or
+    /// is already listening for this (see `campfire_cable`'s connection setup).
+    fn close_remote_connections(&self, tx: &mut Tx<'_>, reconnect: bool) {
+        tx.emit_after_commit(Event::DisconnectUser {
             user_id: self.id,
             reconnect,
         });
@@ -656,6 +656,29 @@ pub fn generate_bot_token() -> String {
     sql::alphanumeric(12)
 }
 
+/// A password hashed for `password_digest`. Hashing takes about 250 ms at cost 12, so it's done
+/// before the write that saves it, never on the writer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PasswordDigest(String);
+
+impl PasswordDigest {
+    /// `BCrypt::Password.create(password, cost:)`. Blocking.
+    pub fn create(password: &str, cost: u32) -> Result<Self> {
+        password_digest(password, cost).map(Self)
+    }
+
+    /// [`PasswordDigest::create`] on the blocking pool.
+    pub async fn hash(password: String, cost: u32) -> Result<Self> {
+        tokio::task::spawn_blocking(move || Self::create(&password, cost))
+            .await
+            .map_err(|e| crate::Error::Other(e.to_string()))?
+    }
+
+    pub fn into_string(self) -> String {
+        self.0
+    }
+}
+
 /// `BCrypt::Password.create(password, cost:)`, in the `$2a$` format bcrypt-ruby writes.
 pub fn password_digest(password: &str, cost: u32) -> Result<String> {
     bcrypt::hash_with_result(password, cost)
@@ -673,23 +696,19 @@ fn grant_membership_to_open_rooms(tx: &mut Tx<'_>, user_id: i64) -> Result<()> {
         ["Rooms::Open"],
         |r| r.get(0),
     )?;
-    if room_ids.is_empty() {
-        return Ok(());
+    for room_ids in room_ids.chunks(crate::models::room::MEMBERSHIP_INSERT_BATCH) {
+        let rows: Vec<String> = room_ids
+            .iter()
+            .map(|_| format!("({SQLITE_NOW}, ?, {SQLITE_NOW}, ?)"))
+            .collect();
+        let sql = format!(
+            r#"INSERT INTO "memberships" ("created_at","room_id","updated_at","user_id") VALUES {} ON CONFLICT  DO NOTHING RETURNING "id""#,
+            rows.join(", ")
+        );
+        let values: Vec<i64> = room_ids.iter().flat_map(|room_id| [*room_id, user_id]).collect();
+        let mut stmt = tx.conn().prepare(&sql)?;
+        let mut rows = stmt.query(rusqlite::params_from_iter(values))?;
+        while rows.next()?.is_some() {}
     }
-    let rows: Vec<String> = room_ids
-        .iter()
-        .map(|_| format!("({SQLITE_NOW}, ?, {SQLITE_NOW}, ?)"))
-        .collect();
-    let sql = format!(
-        r#"INSERT INTO "memberships" ("created_at","room_id","updated_at","user_id") VALUES {} ON CONFLICT  DO NOTHING RETURNING "id""#,
-        rows.join(", ")
-    );
-    let values: Vec<i64> = room_ids
-        .iter()
-        .flat_map(|room_id| [*room_id, user_id])
-        .collect();
-    let mut stmt = tx.conn().prepare(&sql)?;
-    let mut rows = stmt.query(rusqlite::params_from_iter(values))?;
-    while rows.next()?.is_some() {}
     Ok(())
 }

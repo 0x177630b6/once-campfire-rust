@@ -3,13 +3,15 @@
 //! Every function takes a `rusqlite::Connection` (a `Transaction` derefs to one), so callers
 //! decide the transaction boundaries the way the Rails models' callbacks would.
 
+use std::io::Read;
+use std::path::Path;
 use std::sync::LazyLock;
 
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
 use crate::filename::Filename;
 use crate::json::Json;
-use crate::key::{checksum, generate_key};
+use crate::key::{checksum, checksum_file, generate_key};
 use crate::{Result, content_types, marcel};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -43,19 +45,37 @@ impl NewBlob {
     /// computes the checksum, identifies the content type with Marcel (unless a declared type
     /// is given with `identify: false`) and marks the blob `identified`.
     pub fn unfurl(data: &[u8], filename: Filename, declared_type: Option<&str>, service_name: &str, identify: bool) -> NewBlob {
-        let content_type = if declared_type.is_none() || identify {
-            Some(marcel::identify(data, Some(&filename.sanitized()), declared_type))
+        let content_type = Self::content_type(data, &filename, declared_type, identify);
+        Self::build(filename, content_type, service_name, data.len() as u64, checksum(data))
+    }
+
+    /// [`NewBlob::unfurl`] for a file, reading only as much of it as identification needs, and
+    /// streaming it through the checksum.
+    pub fn unfurl_file(path: &Path, filename: Filename, declared_type: Option<&str>, service_name: &str, identify: bool) -> Result<NewBlob> {
+        let mut head = Vec::new();
+        std::fs::File::open(path)?.take(marcel::magic_prefix_len() as u64).read_to_end(&mut head)?;
+        let content_type = Self::content_type(&head, &filename, declared_type, identify);
+        let byte_size = std::fs::metadata(path)?.len();
+        Ok(Self::build(filename, content_type, service_name, byte_size, checksum_file(path)?))
+    }
+
+    fn content_type(head: &[u8], filename: &Filename, declared_type: Option<&str>, identify: bool) -> Option<String> {
+        if declared_type.is_none() || identify {
+            Some(marcel::identify(head, Some(&filename.sanitized()), declared_type))
         } else {
             declared_type.map(str::to_string)
-        };
+        }
+    }
+
+    fn build(filename: Filename, content_type: Option<String>, service_name: &str, byte_size: u64, checksum: String) -> NewBlob {
         NewBlob {
             key: generate_key(),
             filename,
             content_type,
             metadata: Json::Object(vec![("identified".into(), Json::Bool(true))]),
             service_name: service_name.to_string(),
-            byte_size: data.len() as i64,
-            checksum: checksum(data),
+            byte_size: byte_size as i64,
+            checksum,
         }
     }
 

@@ -1,7 +1,7 @@
 //! `Rack::Deflater` (rack 3.2), which the reference installs around the whole app in `config.ru`:
 //! it gzips every response with a body when the client accepts gzip, whatever its size or type,
-//! and adds `Accept-Encoding` to `Vary`. A gzipped body has no `Content-Length`, so Puma sends it
-//! chunked (and Thruster, in front, passes it through untouched).
+//! and adds `Accept-Encoding` to `Vary`. A gzipped body has no `Content-Length`, so it goes out
+//! chunked (and the front server's compression leaves it alone).
 
 use std::io::Write;
 
@@ -25,7 +25,7 @@ pub mod splice;
 pub struct StaticFile;
 
 /// A `Content-Length` the app set itself (`PublicExceptions`, `ShowExceptions#pass_response`),
-/// as opposed to the one the server adds after this middleware, as Puma does in the reference.
+/// as opposed to one hyper adds after this middleware from the body's size.
 #[derive(Debug, Clone, Copy)]
 pub struct AppContentLength;
 

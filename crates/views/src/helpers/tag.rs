@@ -235,11 +235,6 @@ pub fn content_tag_text(name: &str, attrs: impl Borrow<Attrs>, content: &str) ->
     content_tag(name, attrs, &escape(content))
 }
 
-/// The opening half of a block-form `content_tag`.
-pub fn open_tag(name: &str, attrs: impl Borrow<Attrs>) -> Html {
-    Safe(format!("<{name}{}>", attrs.borrow().render()))
-}
-
 /// `tag.name(**options)` from the tag builder: void elements have no closing tag and no slash,
 /// others render empty. Underscores in the name become dashes (`tag.turbo_frame`).
 pub fn builder_tag(name: &str, attrs: impl Borrow<Attrs>) -> Html {

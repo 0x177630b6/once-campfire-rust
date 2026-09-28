@@ -83,26 +83,3 @@ pub struct FrameLayout<'a> {
 pub fn frame(ctx: &crate::ViewContext, head: impl Template, content: impl Template) -> askama::Result<String> {
     FrameLayout { ctx, head: h::raw(head.render()?), content: h::raw(content.render()?) }.render()
 }
-
-/// `layouts/mailer.html.erb`.
-#[derive(Template)]
-#[template(path = "layouts/mailer.html")]
-pub struct MailerHtml {
-    /// The rendered, safe mail body.
-    pub content: h::Html,
-}
-
-/// `layouts/mailer.text.erb`.
-#[derive(Template)]
-#[template(path = "layouts/mailer.txt")]
-pub struct MailerText {
-    pub content: String,
-}
-
-/// `layouts/action_text/contents/_content.html.erb`: the wrapper around rendered rich text.
-#[derive(Template)]
-#[template(path = "layouts/action_text/contents/_content.html")]
-pub struct ActionTextContent {
-    /// The sanitized, rendered rich text (html_safe).
-    pub content: h::Html,
-}

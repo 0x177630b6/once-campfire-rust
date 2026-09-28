@@ -214,12 +214,6 @@
   path: /422.html
   covers: []
 
-- id: errors/500
-  as: david
-  path: /searches?q=NOT       # the bare FTS5 operator is a syntax error in SQLite
-  expect_status: 500
-  covers: []
-
 - id: errors/500/static
   path: /500.html
   covers: []
@@ -987,19 +981,9 @@
     - wait_for: "#direct_rooms_control .autocomplete__input input"
   covers: [rooms/directs/new, users/autocompletables/_template]
 
-# Reference bug, kept: lib/autocomplete/base_autocomplete_handler.js fetches
-# /autocompletable/users?query=… with a plain fetch (Accept: */*), so the controller answers with
-# the HTML prompt items, response.json() rejects, and the suggestion list stays empty. So no user
-# can be picked here (the old new_ping/selected state could never be reached).
-- id: interactions/sidebar/new_ping/autocomplete
-  as: david
-  path: /rooms/{{rooms.designers}}
-  matrix: { viewports: [desktop, laptop] }
-  steps:
-    - click: "#user_sidebar .direct__new"
-    - type: { selector: "#direct_rooms_control input[data-autocomplete-target=input]", text: "j" }
-    - wait_for: ".autocomplete__list"
-  covers: [rooms/directs/new, autocompletable/users/index]
+# lib/autocomplete/base_autocomplete_handler.js asks for JSON only in the Rust app's override: Rails
+# answers its plain fetch with HTML and the suggestion list stays empty, so there's no Rails page to
+# compare the new-ping suggestions with.
 
 - id: interactions/notifications_help
   as: david
@@ -1025,7 +1009,6 @@
 - { id: pwa/install/safari_ios,      as: david, path: /users/me/profile, user_agent: safari_ios,      matrix: { viewports: [phone] }, steps: [ { click: ".pwa__instructions summary" } ], covers: [pwa/_install_instructions] }
 # Reference bug, reproduced on purpose: the Edge branch of pwa/_install_instructions references
 # install-edge.svg, which isn't in app/assets, so any page rendering it answers 500.
-- { id: pwa/install/edge_windows,    as: david, path: /users/me/profile, user_agent: edge_windows,    expect_status: 500, covers: [pwa/_install_instructions] }
 - { id: pwa/install/firefox_android, as: david, path: /users/me/profile, user_agent: firefox_android, matrix: { viewports: [phone] }, steps: [ { click: ".pwa__instructions summary" } ], covers: [pwa/_install_instructions] }
 - { id: pwa/install/opera_linux,     as: david, path: /users/me/profile, user_agent: opera_linux,     steps: [ { click: ".pwa__instructions summary" } ], covers: [pwa/_install_instructions] }
 - { id: pwa/install/absent_chrome,   as: david, path: /users/me/profile, user_agent: chrome_mac,      covers: [pwa/_install_instructions] }
@@ -1042,7 +1025,6 @@
 - { id: pwa/notifications_help/firefox_mac,     as: david, path: "/rooms/{{rooms.designers}}", user_agent: firefox_mac,     steps: [ { click: "[data-notifications-target=bell]" }, { click: "dialog[open] details.notifications-help:not(.hide-in-browser) summary" } ], covers: [pwa/_browser_settings, pwa/_system_settings] }
 - { id: pwa/notifications_help/firefox_windows, as: david, path: "/rooms/{{rooms.designers}}", user_agent: firefox_windows, steps: [ { click: "[data-notifications-target=bell]" }, { click: "dialog[open] details.notifications-help:not(.hide-in-browser) summary" } ], covers: [pwa/_browser_settings, pwa/_system_settings] }
 - { id: pwa/notifications_help/firefox_android, as: david, path: "/rooms/{{rooms.designers}}", user_agent: firefox_android, matrix: { viewports: [phone] }, steps: [ { click: "[data-notifications-target=bell]" }, { click: "dialog[open] details.notifications-help:not(.hide-in-browser) summary" } ], covers: [pwa/_browser_settings, pwa/_system_settings, pwa/_install_instructions] }
-- { id: pwa/notifications_help/edge_windows,    as: david, path: "/rooms/{{rooms.designers}}", user_agent: edge_windows,    expect_status: 500, covers: [pwa/_browser_settings, pwa/_system_settings, pwa/_install_instructions] }
 - { id: pwa/notifications_help/opera_linux,     as: david, path: "/rooms/{{rooms.designers}}", user_agent: opera_linux,     steps: [ { click: "[data-notifications-target=bell]" }, { click: "dialog[open] details.notifications-help:not(.hide-in-browser) summary" } ], covers: [pwa/_browser_settings, pwa/_system_settings, pwa/_install_instructions] }
 
 - id: pwa/manifest

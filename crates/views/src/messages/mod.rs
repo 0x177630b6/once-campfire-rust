@@ -160,7 +160,7 @@ pub struct BoostView {
 #[derive(Clone, Debug, PartialEq)]
 pub enum MessageItem {
     Fragment { client_message_id: String, room_id: i64, html: fragment_cache::Fragment },
-    View(MessageView),
+    View(Box<MessageView>),
 }
 
 impl MessageItem {
@@ -196,14 +196,14 @@ impl MessageItem {
 
 impl From<MessageView> for MessageItem {
     fn from(message: MessageView) -> Self {
-        MessageItem::View(message)
+        MessageItem::View(Box::new(message))
     }
 }
 
 /// Deserializes a [`MessageView`] (fixtures describe views, never cached fragments).
 impl<'de> Deserialize<'de> for MessageItem {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        MessageView::deserialize(deserializer).map(MessageItem::View)
+        MessageView::deserialize(deserializer).map(|message| MessageItem::View(Box::new(message)))
     }
 }
 
@@ -327,11 +327,6 @@ fn message_fragment_key(id: i64, updated_at: Timestamp) -> String {
     )
 }
 
-/// `render partial: "messages/message", collection: messages`.
-pub fn message_collection(ctx: &ViewContext, messages: &[MessageView]) -> String {
-    messages.iter().map(|m| message(ctx, m)).collect()
-}
-
 /// `messages/boosts/_boost`, whose body is `cache boost`.
 pub fn boost(ctx: &ViewContext, boost: &BoostView) -> String {
     fragment_cache::fetch(
@@ -394,15 +389,6 @@ pub struct Show<'a> {
 pub struct PresentationPartial<'a> {
     pub ctx: &'a ViewContext<'a>,
     pub message: &'a MessageView,
-}
-
-/// `messages/_template`: the client-side template for messages being sent.
-#[derive(Template)]
-#[template(path = "messages/_template.html")]
-pub struct TemplatePartial<'a> {
-    pub ctx: &'a ViewContext<'a>,
-    /// `Current.user`.
-    pub user: &'a UserView,
 }
 
 /// `messages/_unrenderable`.
@@ -480,30 +466,4 @@ pub struct NewBoost<'a> {
     pub message: &'a MessageView,
     /// `Current.user`.
     pub user: &'a UserView,
-}
-
-/// The turbo streams the message and boost controllers broadcast to `[room, :messages]`.
-pub mod broadcasts {
-    use askama::Template;
-
-    use super::support::turbo_stream;
-    use super::{BoostView, MessageView, PresentationPartial};
-    use crate::ViewContext;
-
-    /// `MessagesController#update`: replaces the message's presentation, keeping the scroll.
-    pub fn replace_presentation(ctx: &ViewContext, message: &MessageView) -> String {
-        let content = PresentationPartial { ctx, message }.render().expect("messages/_presentation renders");
-        turbo_stream("replace", &message.dom_id("presentation"), &content, true)
-    }
-
-    /// `Messages::BoostsController#broadcast_create`.
-    pub fn append_boost(ctx: &ViewContext, boost: &BoostView, message_client_id: &str) -> String {
-        let content = super::boost(ctx, boost);
-        turbo_stream("append", &format!("boosts_message_{message_client_id}"), &content, true)
-    }
-
-    /// `Messages::BoostsController#broadcast_remove`.
-    pub fn remove_boost(boost: &BoostView) -> String {
-        turbo_stream("remove", &boost.dom_id(), "", false)
-    }
 }

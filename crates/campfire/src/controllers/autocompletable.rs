@@ -10,9 +10,9 @@ pub mod users {
 
     use crate::app::AppCtx;
     use crate::concerns::{self, Before, cast_integer};
-    use crate::controllers::presenters_a::pagination::Page;
-    use crate::controllers::presenters_a::view_context::Layout;
-    use crate::controllers::presenters_a;
+    use crate::controllers::presenters::pagination::Page;
+    use crate::controllers::presenters::view_context::Layout;
+    use crate::controllers::presenters;
 
     /// `set_page_and_extract_portion_from find_autocompletable_users.with_attached_avatar.ordered, per_page: 20`
     pub async fn index(c: &mut Ctx) -> Result {
@@ -38,7 +38,7 @@ pub mod users {
         let users = c.app().db.read(move |conn| autocompletable_users(conn, room_id, query.as_deref())).await.map_err(Error::internal)?;
         let page = Page::new(c.param_str("page"), users.len() as i64, &[20]);
         let secrets = c.app().secrets.clone();
-        let users: Vec<_> = page.records(&users).iter().map(|user| presenters_a::mention_user(&secrets, user)).collect();
+        let users: Vec<_> = page.records(&users).iter().map(|user| presenters::accounts::mention_user(&secrets, user)).collect();
 
         let format = c.respond_to(&[&format::HTML, &format::JSON])?;
         page.apply_headers(c);
@@ -55,7 +55,7 @@ pub mod users {
 
     /// `users_scope.active[.filtered_by(query)].ordered`
     fn autocompletable_users(conn: &Connection, room_id: Option<i64>, query: Option<&str>) -> campfire_db::Result<Vec<User>> {
-        let mut sql = String::from(r#"SELECT "users"."id" FROM "users""#);
+        let mut sql = String::from(r#"SELECT "users".* FROM "users""#);
         let mut values = Vec::new();
         if let Some(room_id) = room_id {
             sql.push_str(r#" INNER JOIN "memberships" ON "users"."id" = "memberships"."user_id" WHERE "memberships"."room_id" = ? AND"#);
@@ -69,8 +69,6 @@ pub mod users {
             values.push(Value::Text(format!("%{query}%")));
         }
         sql.push_str(" ORDER BY LOWER(name)");
-        let mut statement = conn.prepare_cached(&sql)?;
-        let ids: Vec<i64> = statement.query_map(rusqlite::params_from_iter(values), |row| row.get(0))?.collect::<Result<_, _>>()?;
-        ids.into_iter().map(|id| User::find(conn, id)).collect()
+        presenters::accounts::query_users(conn, &sql, rusqlite::params_from_iter(values))
     }
 }

@@ -10,9 +10,9 @@
 //! Golden vectors: `reference-tools/campfire/rqrcode.rb`.
 
 /// `RQRCode::QRCode.new(data).as_svg(viewbox: true, fill: :white, color: :black)`, for the binary
-/// string `Base64.urlsafe_decode64` returns.
-pub fn svg_bytes(data: &[u8]) -> String {
-    let modules = QrCode::new(data).modules;
+/// string `Base64.urlsafe_decode64` returns; `None` when it doesn't fit a version 40 code.
+pub fn svg_bytes(data: &[u8]) -> Option<String> {
+    let modules = QrCode::new(data)?.modules;
     let module_size = 11;
     let dimension = modules.len() * module_size;
     let mut out = String::with_capacity(256 + modules.len() * modules.len() * 30);
@@ -30,7 +30,7 @@ pub fn svg_bytes(data: &[u8]) -> String {
         }
     }
     out.push_str("</svg>");
-    out
+    Some(out)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -452,9 +452,9 @@ struct QrCode {
 type Grid = Vec<Vec<Option<bool>>>;
 
 impl QrCode {
-    fn new(data: &[u8]) -> Self {
+    fn new(data: &[u8]) -> Option<Self> {
         let segment = Segment::new(data);
-        let version = minimum_version(&segment);
+        let version = minimum_version(&segment)?;
         let count = version * 4 + 17;
 
         let mut common: Grid = vec![vec![None; count]; count];
@@ -483,15 +483,14 @@ impl QrCode {
                 best = (pattern, points);
             }
         }
-        Self { modules: make(false, best.0) }
+        Some(Self { modules: make(false, best.0) })
     }
 }
 
-/// `minimum_version`: the first version whose capacity is strictly greater than the bits needed.
-fn minimum_version(segment: &Segment) -> usize {
-    (1..=40)
-        .find(|&version| segment.size(version) < MAX_BITS_H[version - 1])
-        .expect("Data length exceed maximum capacity of version 40")
+/// `minimum_version`: the first version whose capacity is strictly greater than the bits needed,
+/// or `None` where rqrcode raises "Data length exceed maximum capacity of version 40".
+fn minimum_version(segment: &Segment) -> Option<usize> {
+    (1..=40).find(|&version| segment.size(version) < MAX_BITS_H[version - 1])
 }
 
 fn place_position_probe_pattern(grid: &mut Grid, row: usize, col: usize) {
@@ -712,16 +711,23 @@ mod tests {
         for vector in vectors {
             let input = decode_base64(&vector.input_base64);
             let segment = Segment::new(&input);
-            assert_eq!(minimum_version(&segment), vector.version, "version for {:?}", vector.input_base64);
+            assert_eq!(minimum_version(&segment), Some(vector.version), "version for {:?}", vector.input_base64);
             let modules: Vec<String> = QrCode::new(&input)
+                .unwrap()
                 .modules
                 .iter()
                 .map(|row| row.iter().map(|&m| if m { '1' } else { '0' }).collect())
                 .collect();
             assert_eq!(modules.join("\n"), vector.modules, "modules for {:?}", vector.input_base64);
             if let Some(svg) = vector.svg {
-                assert_eq!(svg_bytes(&input), svg, "svg for {:?}", vector.input_base64);
+                assert_eq!(svg_bytes(&input).as_deref(), Some(svg.as_str()), "svg for {:?}", vector.input_base64);
             }
         }
+    }
+
+    #[test]
+    fn data_too_long_for_version_40_is_none() {
+        assert!(svg_bytes(&vec![b'a'; 3_000]).is_none());
+        assert!(svg_bytes(b"http://campfire.test").is_some());
     }
 }

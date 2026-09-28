@@ -10,7 +10,7 @@ use campfire_views::{Platform, ViewContext};
 
 use crate::app::App;
 use crate::channels::Partials;
-use crate::controllers::presenters_a::view_context::{Layout, account_summary, find_template};
+use crate::controllers::presenters::view_context::{Layout, account_summary, find_template};
 
 /// A template that extends `layouts/application` itself (with `blocks = ["head", "content"]`):
 /// the full page, or for a Turbo-Frame request its `head` and `content` in turbo-rails' frame
@@ -19,7 +19,7 @@ use crate::controllers::presenters_a::view_context::{Layout, account_summary, fi
 /// `framed_page!(c, StatusCode::OK, |ctx| rooms::Show { ctx, show: &show }).await`
 macro_rules! framed_page {
     ($c:expr, $status:expr, |$ctx:ident| $page:expr) => {
-        $crate::controllers::presenters_a::view_context::page_or_frame(
+        $crate::controllers::presenters::view_context::page_or_frame(
             $c,
             $status,
             |$ctx| askama::Template::render(&$page),
@@ -91,14 +91,14 @@ pub fn renderer_base_url(c: &Ctx) -> String {
 /// `default_url_options` (`SetCurrentRequest`), see [`renderer_base_url`].
 pub fn render_detached_at<T>(app: &App, account: Option<&Account>, base_url: &str, render: impl FnOnce(&ViewContext) -> T) -> T {
     let asset_path = |path: &str| campfire_assets::asset_path(path);
-    let stylesheets = crate::controllers::presenters_a::view_context::stylesheet_tags();
+    let stylesheets = crate::controllers::presenters::view_context::stylesheet_tags();
     let ctx = ViewContext {
         current_user: None,
         account: account_summary(account, false),
         flash_notice: None,
         flash_alert: None,
         platform: Platform::default(),
-        vapid_public_key: app.config.vapid_public_key.clone(),
+        vapid_public_key: app.vapid_public_key(),
         asset_path: &asset_path,
         importmap_tags: campfire_assets::javascript_importmap_tags(),
         stylesheet_tags: &stylesheets.html,

@@ -13,7 +13,8 @@ pub async fn show(c: &mut Ctx) -> Result {
     // `Base64.urlsafe_decode64(params[:id])` raises ArgumentError (a 500) on malformed input.
     let id = c.param_str("id").unwrap_or_default().to_string();
     let url = urlsafe_decode64(&id).ok_or_else(|| Error::internal(anyhow::anyhow!("invalid base64")))?;
-    let qr_code = rqrcode::svg_bytes(&url);
+    // Too much to encode is the client's doing (rqrcode raises, a 500 in Rails).
+    let qr_code = rqrcode::svg_bytes(&url).ok_or(Error::Status(StatusCode::UNPROCESSABLE_ENTITY))?;
 
     // `expires_in 1.year, public: true`
     c.expires_in(31_556_952, ExpiresIn { public: true, ..ExpiresIn::default() });

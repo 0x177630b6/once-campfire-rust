@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
-use campfire_kit::{Ctx, Kit, KitConfig, Result};
+use campfire_kit::{Ctx, Kit, KitConfig, RailsCrypto, Result};
 use tower::ServiceExt;
 
 use super::*;
@@ -171,7 +171,7 @@ async fn whoami(c: &mut Ctx) -> Result {
 }
 
 fn whoami_router(app: &App) -> axum::Router {
-    let kit = Kit::new(KitConfig::production(true), app.crypto.clone(), app.clock.clone(), app.clone());
+    let kit = Kit::new(KitConfig::production(true), Arc::new(RailsCrypto::new(app.secrets.clone())), app.clock.clone(), app.clone());
     campfire_kit::app(axum::Router::new().route("/whoami", campfire_kit::get(whoami).post(campfire_kit::action(whoami))), kit)
 }
 
@@ -298,7 +298,9 @@ async fn cable_handshake_with_a_rails_session_cookie() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let router = test.booted.router.clone();
-    tokio::spawn(campfire_kit::server::serve(listener, router, std::future::pending()));
+    let service = campfire_kit::front::app_service(router);
+    let shutdown = campfire_kit::front::Shutdown::when(std::future::pending());
+    tokio::spawn(campfire_kit::front::serve_plain(listener, service, campfire_kit::front::Protocol::Http1, Default::default(), shutdown));
 
     let connect = |cookie: Option<String>| async move {
         let mut request = format!("ws://{address}/cable").into_client_request().unwrap();
@@ -324,6 +326,8 @@ async fn backup_snapshots_the_live_database() {
     let snapshot = rusqlite::Connection::open(config.storage.backup_file()).unwrap();
     let users: i64 = snapshot.query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0)).unwrap();
     assert!(users > 0);
+    let leftovers: Vec<_> = std::fs::read_dir(&config.storage.backups).unwrap().flatten().filter(|entry| entry.file_name().to_string_lossy().starts_with(".backup-")).collect();
+    assert!(leftovers.is_empty(), "{leftovers:?}");
 }
 
 #[tokio::test]
@@ -426,4 +430,71 @@ async fn concurrent_message_posts_all_complete() {
         .await
         .expect("the server stopped answering");
     assert_eq!(after.status, StatusCode::OK);
+}
+
+/// Variants are transformed off the database writer: other writes go through while one is.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn writes_proceed_while_a_variant_is_transformed() {
+    use campfire_storage::{Blob, Variation};
+
+    let Some(test) = boot_seeded().await else { return };
+    let app = test.booted.app.clone();
+    let blob = app.db.read(|conn| Ok(Blob::find(conn, 5).unwrap().unwrap())).await.unwrap();
+    let variation = app.storage.variation_for(&blob, &Variation::resize_to_limit(37, 37, None)).unwrap();
+
+    let (entered, transforming) = tokio::sync::oneshot::channel();
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    let processing = tokio::spawn({
+        let (app, blob, variation) = (app.clone(), blob.clone(), variation.clone());
+        async move {
+            crate::active_storage::processed_variant_with(&app, blob, variation, move |storage, blob, variation| {
+                let _ = entered.send(());
+                let _ = released.recv();
+                storage.transform_variant(blob, variation)
+            })
+            .await
+        }
+    });
+    transforming.await.unwrap();
+
+    let write = app.db.write(|tx| Ok(tx.conn().execute("UPDATE accounts SET name = name", [])?));
+    tokio::time::timeout(std::time::Duration::from_secs(5), write).await.expect("the write waited on the transform").unwrap();
+
+    release.send(()).unwrap();
+    let image = processing.await.unwrap().unwrap();
+    assert!(app.storage.path_for(&image).exists());
+    let storage = app.storage.clone();
+    let recorded = app.db.read(move |conn| Ok(storage.existing_variant(conn, &blob, &variation).unwrap())).await.unwrap();
+    assert_eq!(recorded.map(|b| b.id), Some(image.id));
+}
+
+#[tokio::test]
+async fn blob_byte_ranges_are_served_from_the_file() {
+    let Some(test) = boot_seeded().await else { return };
+    let router = &test.booted.router;
+    let proxy_path = vectors().blobs[0].redirect_path.replacen("/redirect/", "/proxy/", 1);
+    let blob = test.booted.app.db.read(|conn| Ok(campfire_storage::Blob::find(conn, 5).unwrap().unwrap())).await.unwrap();
+    let file = std::fs::read(test.booted.app.storage.path_for(&blob)).unwrap();
+    let ranged = |range: &str| Request::get(&proxy_path).header(header::HOST, "campfire.test").header("range", range).body(Body::empty()).unwrap();
+
+    let single = send(router, ranged("bytes=100-")).await;
+    assert_eq!(single.status, StatusCode::PARTIAL_CONTENT);
+    assert_eq!(single.header("content-range"), Some(format!("bytes 100-{}/{}", file.len() - 1, file.len()).as_str()));
+    assert_eq!(single.header("content-length"), Some((file.len() - 100).to_string().as_str()));
+    assert_eq!(single.body, &file[100..]);
+
+    let multiple = send(router, ranged("bytes=0-9,20-29")).await;
+    assert_eq!(multiple.status, StatusCode::PARTIAL_CONTENT);
+    let boundary = multiple.header("content-type").unwrap().strip_prefix("multipart/byteranges; boundary=").unwrap().to_string();
+    let part = |start: usize, end: usize| {
+        let mut part = format!("\r\n--{boundary}\r\nContent-Type: image/jpeg\r\nContent-Range: bytes {start}-{end}/{}\r\n\r\n", file.len()).into_bytes();
+        part.extend_from_slice(&file[start..=end]);
+        part
+    };
+    let expected = [part(0, 9), part(20, 29), format!("\r\n--{boundary}--\r\n").into_bytes()].concat();
+    assert_eq!(multiple.header("content-length"), Some(expected.len().to_string().as_str()));
+    assert_eq!(multiple.body, expected);
+
+    let unsatisfiable = send(router, ranged(&format!("bytes={}-", file.len() + 10))).await;
+    assert_eq!(unsatisfiable.status, StatusCode::RANGE_NOT_SATISFIABLE);
 }

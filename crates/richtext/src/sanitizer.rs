@@ -5,6 +5,10 @@
 //! attribute allowlists, so it is written once here rather than expressed through ammonia, whose
 //! URL, comment, foreign-content and attribute-escaping rules differ from Loofah's.
 
+use std::sync::LazyLock;
+
+use regex::Regex;
+
 use crate::dom::{Dom, NodeId, ParseError};
 
 /// `Rails::HTML::Concern::Scrubber::SafeList::DEFAULT_ALLOWED_TAGS`
@@ -14,9 +18,11 @@ pub const DEFAULT_ALLOWED_TAGS: &[&str] = &[
     "pre", "samp", "small", "span", "strong", "sub", "sup", "time", "tt", "ul", "var",
 ];
 
-/// `Rails::HTML::Concern::Scrubber::SafeList::DEFAULT_ALLOWED_ATTRIBUTES`
+/// `Rails::HTML::Concern::Scrubber::SafeList::DEFAULT_ALLOWED_ATTRIBUTES` without `name`, which let
+/// a message clobber the page's DOM globals (`<img name="body">` shadows `document.body`). Nothing
+/// Campfire's composer writes has one.
 pub const DEFAULT_ALLOWED_ATTRIBUTES: &[&str] =
-    &["abbr", "alt", "cite", "class", "datetime", "height", "href", "lang", "name", "src", "title", "width", "xml:lang"];
+    &["abbr", "alt", "cite", "class", "datetime", "height", "href", "lang", "src", "title", "width", "xml:lang"];
 
 /// `ContentFilters::EDITOR_FORMATTING_TAGS` (reference/app/helpers/content_filters.rb)
 pub const EDITOR_FORMATTING_TAGS: &[&str] = &["s", "u", "mark", "table", "thead", "tbody", "tfoot", "tr", "th", "td"];
@@ -114,12 +120,28 @@ pub fn sanitize(html: &str, list: &SafeList) -> Result<String, ParseError> {
     if html.is_empty() {
         return Ok(String::new());
     }
+    let (dom, fragment) = scrubbed(html, list)?;
+    Ok(dom.to_html(fragment))
+}
+
+/// `sanitize`, serialized with `<` and `>` escaped in attribute values too, so that the result can
+/// be scanned with regular expressions (auto_link) without mistaking an attribute for text.
+/// Rails serializes them raw; the two are the same DOM.
+pub fn sanitize_with_escaped_attribute_brackets(html: &str, list: &SafeList) -> Result<String, ParseError> {
+    if html.is_empty() {
+        return Ok(String::new());
+    }
+    let (dom, fragment) = scrubbed(html, list)?;
+    Ok(dom.to_html_with_escaped_attribute_brackets(fragment))
+}
+
+fn scrubbed(html: &str, list: &SafeList) -> Result<(Dom, NodeId), ParseError> {
     let mut dom = Dom::new();
     let fragment = dom.parse_fragment(html)?;
     for child in dom.children(fragment).to_vec() {
         scrub_bottom_up(&mut dom, child, list);
     }
-    Ok(dom.to_html(fragment))
+    Ok((dom, fragment))
 }
 
 /// `Loofah::Scrubber#traverse_conditionally_bottom_up`: children (as they were before any of them
@@ -172,9 +194,45 @@ fn scrub_attributes(dom: &mut Dom, node: NodeId, list: &SafeList) {
         }
         force_correct_attribute_escaping(dom, node);
     }
-    // `scrub_css_attribute` rewrites `style` through Loofah's CSS scrubber here. Its result never
-    // reaches any output this crate produces: every rendered path ends in auto_link's sanitizer,
-    // whose allowlist has no `style`, and plain text drops attributes. So the value passes through.
+    scrub_style(dom, node);
+}
+
+/// Where Loofah's `scrub_css_attribute` runs `style` through its CSS scrubber, this keeps only what
+/// Lexxy writes: highlight colors (`color` and `background-color`, which Lexxy's own paste filter
+/// also limits `style` to) with plain color values. A message's presentation drops `style` in
+/// auto_link anyway, but the HTML body bots and webhooks get (`Presenter::body_html`) keeps it.
+fn scrub_style(dom: &mut Dom, node: NodeId) {
+    let Some(style) = dom.attr(node, "style") else { return };
+    let declarations: Vec<(String, &str)> = style
+        .split(';')
+        .filter(|declaration| !declaration.trim().is_empty())
+        .map(|declaration| {
+            let (property, value) = declaration.split_once(':').unwrap_or((declaration, ""));
+            (property.trim().to_ascii_lowercase(), value.trim())
+        })
+        .collect();
+    let allowed = |(property, value): &(String, &str)| ALLOWED_STYLE_PROPERTIES.contains(&property.as_str()) && is_plain_color(value);
+    if declarations.iter().all(allowed) && !declarations.is_empty() {
+        return;
+    }
+    let scrubbed: String = declarations.iter().filter(|d| allowed(d)).map(|(property, value)| format!("{property}: {value};")).collect();
+    if scrubbed.is_empty() {
+        dom.remove_attr(node, "style");
+    } else {
+        dom.set_attr(node, "style", &scrubbed);
+    }
+}
+
+/// Lexxy's `ALLOWED_STYLE_PROPERTIES`.
+const ALLOWED_STYLE_PROPERTIES: &[&str] = &["color", "background-color"];
+
+/// A color keyword, a hex color, a custom property (`var(--highlight-1)`, as Lexxy's highlights
+/// are), or an `rgb()`/`hsl()` color: nothing that can load a URL, escape, or run an expression.
+fn is_plain_color(value: &str) -> bool {
+    static PLAIN_COLOR: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?i)\A(?:[a-z]+|#[0-9a-f]{3,8}|var\(\s*--[a-z0-9_-]+\s*\)|(?:rgb|rgba|hsl|hsla)\([0-9a-z.,%\s/+-]*\))\z").unwrap()
+    });
+    PLAIN_COLOR.is_match(value)
 }
 
 /// `Loofah::HTML5::SafeList::ATTR_VAL_IS_URI`
@@ -387,6 +445,32 @@ mod tests {
         assert_eq!(sanitize("<a href=\"data:text/html,pwned\">x</a>", &list).unwrap(), "<a>x</a>");
         assert_eq!(sanitize("<a href=\"a b\">x</a><!-- c -->", &list).unwrap(), "<a href=\"a%20b\">x</a>");
         assert_eq!(sanitize("<svg><a>x</a></svg>y<script>z</script>", &list).unwrap(), "yz");
+    }
+
+    #[test]
+    fn keeps_only_lexxys_highlight_colors_in_style() {
+        let list = SafeList::action_text();
+        let highlight = "<mark style=\"color: var(--highlight-1);background-color: var(--highlight-bg-2);\">x</mark>";
+        assert_eq!(sanitize(highlight, &list).unwrap(), highlight);
+        assert_eq!(
+            sanitize("<span style=\"color: #f00; position: fixed; top: 0\">x</span>", &list).unwrap(),
+            "<span style=\"color: #f00;\">x</span>"
+        );
+        let rgb = "<span style=\"COLOR: rgb(1 2 3 / 50%)\">x</span>";
+        assert_eq!(sanitize(rgb, &list).unwrap(), rgb);
+        for hostile in [
+            "background-color: url(https://evil.test/beacon)",
+            "color: expression(alert(1))",
+            "background-color: red; background-image: url(x)",
+            "color: \\72 ed",
+            "color: red /* */",
+            "width: 100000px",
+            "",
+        ] {
+            let html = sanitize(&format!("<span style=\"{hostile}\">x</span>"), &list).unwrap();
+            assert!(!html.contains("url") && !html.contains("expression") && !html.contains('\\') && !html.contains("width"), "{hostile}: {html}");
+        }
+        assert_eq!(sanitize("<span style=\"position: fixed\">x</span>", &list).unwrap(), "<span>x</span>");
     }
 
     #[test]

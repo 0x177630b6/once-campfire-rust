@@ -12,8 +12,8 @@ use campfire_db::{Account, NewUser, User};
 use campfire_kit::{Ctx, Error, ParamMap, Result, StatusCode, format, halt, permit_keys};
 use campfire_views::users;
 
-use super::presenters_a::attachments::{self, Assignment, Record};
-use super::presenters_a::{self, view_context};
+use super::presenters::attachments::{self, Assignment, Record};
+use super::presenters::{self, view_context};
 use crate::app::AppCtx;
 use crate::controllers::presenters::page::framed_page;
 use crate::concerns::{self, Before, cast_integer};
@@ -23,7 +23,7 @@ pub async fn new(c: &mut Ctx) -> Result {
     concerns::before_actions(c, Before::default().require_unauthenticated_access()).await?;
     let account = verify_join_code(c).await?;
     c.respond_to(&[&format::HTML])?;
-    let help_contact = c.app().db.read(presenters_a::help_contact).await.map_err(Error::internal)?;
+    let help_contact = c.app().db.read(presenters::accounts::help_contact).await.map_err(Error::internal)?;
     let join_code = account.join_code;
     framed_page!(c, StatusCode::OK, |ctx| users::New { ctx, join_code: join_code.clone(), help_contact: help_contact.clone() }).await
 }
@@ -37,10 +37,10 @@ pub async fn create(c: &mut Ctx) -> Result {
         // users.name is NOT NULL: a missing name fails the insert, as in Rails.
         name: params.get("name").and_then(|p| p.to_s()).ok_or_else(|| Error::internal(anyhow::anyhow!("NOT NULL constraint failed: users.name")))?,
         email_address: email_address.clone(),
-        password: params.get("password").and_then(|p| p.to_s()).filter(|password| !password.is_empty()),
+        password_digest: concerns::password_digest(c, params.get("password").and_then(|p| p.to_s()).filter(|password| !password.is_empty())).await?,
         ..NewUser::default()
     };
-    let avatar = Assignment::from_params(&params, "avatar")?;
+    let avatar = Assignment::from_params(&params, "avatar")?.stage(c.app()).await?;
 
     // `User.create!(user_params)`
     let result = c
@@ -48,22 +48,22 @@ pub async fn create(c: &mut Ctx) -> Result {
         .db
         .write(move |tx| {
             let user = User::create(tx, attributes)?;
-            let pending = attachments::assign(tx, Record::user(user.id), "avatar", &avatar)?;
+            let pending = attachments::assign(tx, Record::user(user.id), "avatar", avatar)?;
             Ok((user, pending))
         })
         .await;
     match result {
         Ok((user, pending)) => {
-            attachments::upload_and_analyze_later(c.app(), pending).await?;
+            attachments::analyze_later(c.app(), pending);
             concerns::start_new_session_for(c, user).await?;
             let root = c.url_for(&campfire_routes::root());
             c.redirect_to(&root)
         }
         // rescue ActiveRecord::RecordNotUnique: `redirect_to new_session_url(email_address: user_params[:email_address])`
-        Err(error) if presenters_a::is_record_not_unique(&error) => {
+        Err(error) if presenters::accounts::is_record_not_unique(&error) => {
             let mut location = c.url_for(&campfire_routes::new_session());
             if let Some(email_address) = email_address {
-                location.push_str(&format!("?email_address={}", presenters_a::cgi_escape(&email_address)));
+                location.push_str(&format!("?email_address={}", presenters::accounts::cgi_escape(&email_address)));
             }
             c.redirect_to(&location)
         }
@@ -77,8 +77,8 @@ pub async fn show(c: &mut Ctx) -> Result {
     let user = find_user(c, "id").await?;
     c.respond_to(&[&format::HTML])?;
     let secrets = c.app().secrets.clone();
-    let transfer_id = presenters_a::transfer_id(&secrets, user.id, c.now());
-    let user = presenters_a::user_summary(&secrets, &user);
+    let transfer_id = presenters::accounts::transfer_id(&secrets, user.id, c.now());
+    let user = presenters::user_summary(&secrets, &user);
     view_context::page_or_frame(
         c,
         StatusCode::OK,

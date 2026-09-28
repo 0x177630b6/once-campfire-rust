@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::{
-    Ban, Membership, Message, NewUser, PushSubscription, Role, Room, RoomType, Search, Session,
+    Ban, Membership, Message, NewUser, PasswordDigest, PushSubscription, Role, Room, RoomType, Search, Session,
     Status, User, UserChanges, Webhook,
 };
 
@@ -18,7 +18,7 @@ fn create_new_user(t: &TestDb) -> User {
             NewUser {
                 name: "User".into(),
                 email_address: Some("user@example.com".into()),
-                password: Some("secret123456".into()),
+                password_digest: Some(PasswordDigest::create("secret123456", 4).unwrap()),
                 ..Default::default()
             },
         )
@@ -33,7 +33,7 @@ fn user_does_not_prevent_very_long_passwords() {
         david.update(
             tx,
             UserChanges {
-                password: Some("secret".repeat(50)),
+                password_digest: Some(PasswordDigest::create(&"secret".repeat(50), 4).unwrap()),
                 ..Default::default()
             },
         )

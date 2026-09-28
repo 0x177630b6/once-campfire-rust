@@ -484,24 +484,12 @@ impl Ctx {
             let flashes: Vec<String> = flash.keys().map(|k| format!("{k}={:?}", flash.get(k))).collect();
             parts.push(flashes.join("&"));
         }
-        let digest = Sha256::digest(parts.join("/"));
-        digest.iter().map(|b| format!("{b:02x}")).collect::<String>()[..32].to_string()
+        hex::encode(&Sha256::digest(parts.join("/"))[..16])
     }
 
-    /// `request.fresh?(response)` with `strict_freshness` (the 8.0 default).
     fn is_fresh(&self) -> bool {
-        if let Some(if_none_match) = self.request.header("if-none-match") {
-            let Some(etag) = self.headers.get(header::ETAG).and_then(|v| v.to_str().ok()) else { return false };
-            if_none_match.split(',').map(str::trim).any(|v| v == etag || v == "*")
-        } else if let Some(since) = self.request.header("if-modified-since").and_then(clock::parse_httpdate) {
-            self.headers
-                .get(header::LAST_MODIFIED)
-                .and_then(|v| v.to_str().ok())
-                .and_then(clock::parse_httpdate)
-                .is_some_and(|last_modified| since >= last_modified)
-        } else {
-            false
-        }
+        let header = |name| self.headers.get(name).and_then(|v: &HeaderValue| v.to_str().ok());
+        is_fresh(&self.request, header(header::ETAG), header(header::LAST_MODIFIED))
     }
 
     /// `expires_in seconds, public:, stale_while_revalidate:, ...`
@@ -550,7 +538,7 @@ impl Ctx {
     // --- Finishing -----------------------------------------------------------------------------
 
     /// Turn the action's result into the response Rails would send: halts and errors resolved,
-    /// flash/CSRF/session committed into cookies, cache headers, ETag and 304, HEAD bodies dropped.
+    /// flash and session committed into cookies, cache headers, ETag and 304, HEAD bodies dropped.
     pub(crate) fn finish(mut self, result: Result<Response>) -> Response {
         let mut response = match result {
             Ok(response) => response,
@@ -615,16 +603,10 @@ impl Ctx {
         if self.session.is_loaded() && self.session.contains_key("flash") && self.session.get("flash").is_none() {
             self.session.remove("flash");
         }
-        // A Live response writes the cookie jar when it commits (`Live::Response#before_committed`),
-        // and the Cookies middleware writes it again after the session store has added its
-        // cookie: the action's cookies go out twice.
-        let mut set_cookies =
-            if self.live { self.cookies.set_cookie_headers(self.request.is_ssl(), &self.request.host()) } else { Vec::new() };
         let now = self.now();
         self.session.commit(&mut self.cookies, now)?;
 
-        set_cookies.extend(self.cookies.set_cookie_headers(self.request.is_ssl(), &self.request.host()));
-        for cookie in set_cookies {
+        for cookie in self.cookies.set_cookie_headers(self.request.is_ssl(), &self.request.host()) {
             response.headers.append(header::SET_COOKIE, HeaderValue::from_str(&cookie).map_err(Error::internal)?);
         }
         Ok(())
@@ -651,17 +633,7 @@ impl Ctx {
         if !matches!(self.request.method, Method::GET | Method::HEAD) || response.status != StatusCode::OK {
             return;
         }
-        let fresh = if let Some(none_match) = self.request.header("if-none-match") {
-            response.get_header(header::ETAG) == Some(none_match)
-        } else if let Some(since) = self.request.header("if-modified-since").filter(|s| s.len() >= 16) {
-            match (clock::parse_httpdate(since), response.get_header(header::LAST_MODIFIED).and_then(clock::parse_httpdate)) {
-                (Some(since), Some(last_modified)) => since >= last_modified,
-                _ => false,
-            }
-        } else {
-            false
-        };
-        if fresh {
+        if is_fresh(&self.request, response.get_header(header::ETAG), response.get_header(header::LAST_MODIFIED)) {
             response.status = StatusCode::NOT_MODIFIED;
             response.headers.remove(header::CONTENT_TYPE);
             response.headers.remove(header::CONTENT_LENGTH);
@@ -677,7 +649,22 @@ impl Ctx {
             tracing::info!(error = %error, path = self.request.path(), "request rejected");
         }
         let formats = self.formats().unwrap_or_default();
-        crate::exceptions::render(self.kit.config(), error.status(), formats.first().copied(), self.request.is_head())
+        crate::exceptions::render(self.kit.error_pages(), error.status(), formats.first().copied(), self.request.is_head())
+    }
+}
+
+/// `request.fresh?(response)` with `strict_freshness` (the 8.0 default), which `fresh_when` and
+/// `Rack::ConditionalGet` both go by here: an `If-None-Match` list naming the ETag (or `*`), or
+/// else an `If-Modified-Since` no earlier than `Last-Modified`. (Rack's own check wants the whole
+/// `If-None-Match` to equal the ETag.)
+fn is_fresh(request: &Request, etag: Option<&str>, last_modified: Option<&str>) -> bool {
+    if let Some(if_none_match) = request.header("if-none-match") {
+        let Some(etag) = etag else { return false };
+        if_none_match.split(',').map(str::trim).any(|v| v == etag || v == "*")
+    } else if let Some(since) = request.header("if-modified-since").and_then(clock::parse_httpdate) {
+        last_modified.and_then(clock::parse_httpdate).is_some_and(|last_modified| since >= last_modified)
+    } else {
+        false
     }
 }
 
@@ -699,7 +686,7 @@ fn rack_etag(response: &mut Response, digestible: bool) {
                 // A page of cached fragments hashes its parts' digests rather than the whole body.
                 let hex = match &response.page_parts {
                     Some(parts) => parts.etag(bytes),
-                    None => Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect(),
+                    None => hex::encode(Sha256::digest(bytes)),
                 };
                 response.headers.insert(header::ETAG, HeaderValue::from_str(&format!("W/\"{}\"", &hex[..32])).unwrap());
                 digested = true;

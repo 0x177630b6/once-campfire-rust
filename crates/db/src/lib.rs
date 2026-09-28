@@ -9,6 +9,7 @@
 pub mod database;
 pub mod error;
 pub mod events;
+#[cfg(feature = "test-support")]
 pub mod fixtures;
 pub mod models;
 pub mod rich_text;

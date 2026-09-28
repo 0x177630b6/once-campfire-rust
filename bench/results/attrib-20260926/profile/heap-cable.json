@@ -47,14 +47,14 @@
   }
  },
  "phase_dumps": {
-  "connect": "/home/dhh/Work/basecamp/once-campfire-rust/bench/results/attrib-20260926/profile/raw/heap.300215.366.u366.heap",
-  "connected": "/home/dhh/Work/basecamp/once-campfire-rust/bench/results/attrib-20260926/profile/raw/heap.300215.2451.u2451.heap",
-  "paced": "/home/dhh/Work/basecamp/once-campfire-rust/bench/results/attrib-20260926/profile/raw/heap.300215.2451.u2451.heap",
-  "paced_drained": "/home/dhh/Work/basecamp/once-campfire-rust/bench/results/attrib-20260926/profile/raw/heap.300215.5663.u5663.heap",
-  "saturated": "/home/dhh/Work/basecamp/once-campfire-rust/bench/results/attrib-20260926/profile/raw/heap.300215.5704.u5704.heap",
-  "saturated_posted": "/home/dhh/Work/basecamp/once-campfire-rust/bench/results/attrib-20260926/profile/raw/heap.300215.9338.u9338.heap",
-  "saturated_drained": "/home/dhh/Work/basecamp/once-campfire-rust/bench/results/attrib-20260926/profile/raw/heap.300215.9338.u9338.heap",
-  "done": "/home/dhh/Work/basecamp/once-campfire-rust/bench/results/attrib-20260926/profile/raw/heap.300215.9338.u9338.heap"
+  "connect": "./bench/results/attrib-20260926/profile/raw/heap.300215.366.u366.heap",
+  "connected": "./bench/results/attrib-20260926/profile/raw/heap.300215.2451.u2451.heap",
+  "paced": "./bench/results/attrib-20260926/profile/raw/heap.300215.2451.u2451.heap",
+  "paced_drained": "./bench/results/attrib-20260926/profile/raw/heap.300215.5663.u5663.heap",
+  "saturated": "./bench/results/attrib-20260926/profile/raw/heap.300215.5704.u5704.heap",
+  "saturated_posted": "./bench/results/attrib-20260926/profile/raw/heap.300215.9338.u9338.heap",
+  "saturated_drained": "./bench/results/attrib-20260926/profile/raw/heap.300215.9338.u9338.heap",
+  "done": "./bench/results/attrib-20260926/profile/raw/heap.300215.9338.u9338.heap"
  },
- "peak_dump": "/home/dhh/Work/basecamp/once-campfire-rust/bench/results/attrib-20260926/profile/raw/heap.300215.9338.u9338.heap"
+ "peak_dump": "./bench/results/attrib-20260926/profile/raw/heap.300215.9338.u9338.heap"
 }

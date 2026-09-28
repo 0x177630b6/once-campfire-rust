@@ -200,7 +200,8 @@ pub fn json_value_inspect(v: &Value) -> String {
 
 fn string_inspect(s: &str) -> String {
     let mut out = String::from("\"");
-    for c in s.chars() {
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
         match c {
             '"' => out.push_str("\\\""),
             '\\' => out.push_str("\\\\"),
@@ -212,7 +213,8 @@ fn string_inspect(s: &str) -> String {
             '\u{08}' => out.push_str("\\b"),
             '\u{07}' => out.push_str("\\a"),
             '\u{1b}' => out.push_str("\\e"),
-            '#' => out.push('#'),
+            // What would start an interpolation in a double-quoted literal: `#{`, `#$`, `#@`
+            '#' if chars.peek().is_some_and(|next| matches!(next, '{' | '$' | '@')) => out.push_str("\\#"),
             c if (c as u32) < 0x20 || c == '\u{7f}' => out.push_str(&format!("\\x{:02X}", c as u32)),
             c => out.push(c),
         }
@@ -273,6 +275,7 @@ mod tests {
             to_json_string("<a href=\"x\">&'\u{2028}é\n\t\u{1}\u{7f}/</a>"),
             "\"\\u003ca href=\\\"x\\\"\\u003e\\u0026'\u{2028}é\\n\\t\\u0001\u{7f}/\\u003c/a\\u003e\""
         );
+        assert_eq!(string_inspect("#{a} #$b #@c # #"), r##""\#{a} \#$b \#@c # #""##);
         assert_eq!(json_parse("{\"a\":1/*c*/}").unwrap()["a"], 1);
         assert!(json_parse("{\"a\":1,}").is_none());
         assert_eq!(truncate(&"a".repeat(300), 280, "…").chars().count(), 280);

@@ -2,7 +2,7 @@
 //! `test/models/push/subscription_test.rb` (validation and endpoint pinning).
 
 use super::*;
-use crate::models::push_subscription::PushSubscription;
+use crate::models::push_subscription::{MAX_PAYLOAD_BODY_BYTES, PushSubscription};
 use crate::rich_text::mention_attachment_for;
 use crate::{Membership, Message, NewMessage};
 
@@ -111,6 +111,27 @@ fn payloads() {
         (payload.title.as_str(), payload.body.as_str()),
         ("David", "Hi")
     );
+}
+
+#[test]
+fn long_payloads_are_cut_short_to_fit_a_push_message() {
+    let t = TestDb::new();
+    let body = format!("{}\"{}", "é".repeat(1000), "x".repeat(2000));
+    let attributes = NewMessage {
+        room_id: id("designers"),
+        creator_id: id("david"),
+        body: Some(body),
+        ..Default::default()
+    };
+    let message = t.write(move |tx| Message::create(tx, attributes));
+    let room = t.read(|c| message.room(c));
+    let payload = t.read(|c| PushSubscription::payload_for(c, &BasicRichText, &room, &message));
+
+    let json_len = |text: &str| serde_json::to_string(text).unwrap().len() - 2;
+    assert!(payload.body.starts_with("David: éé"));
+    assert!(payload.body.ends_with("xx…"));
+    assert!(json_len(&payload.body) <= MAX_PAYLOAD_BODY_BYTES);
+    assert!(json_len(&payload.body) > MAX_PAYLOAD_BODY_BYTES - 4);
 }
 
 fn build(endpoint: &str) -> PushSubscription {

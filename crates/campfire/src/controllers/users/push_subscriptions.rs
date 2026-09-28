@@ -14,7 +14,7 @@ use rusqlite::types::Value;
 use crate::app::AppCtx;
 use crate::controllers::presenters::page::framed_page;
 use crate::concerns::{self, Before, cast_integer};
-use crate::controllers::presenters_a::{self};
+use crate::controllers::presenters;
 use crate::integrations::net::{Network, guard};
 
 pub async fn index(c: &mut Ctx) -> Result {
@@ -22,7 +22,7 @@ pub async fn index(c: &mut Ctx) -> Result {
     c.respond_to(&[&format::HTML])?;
     let user_id = concerns::require_current_user(c)?.id;
     let subscriptions = c.app().db.read(move |conn| PushSubscription::for_user(conn, user_id)).await.map_err(Error::internal)?;
-    let push_subscriptions: Vec<_> = subscriptions.iter().map(presenters_a::push_subscription).collect();
+    let push_subscriptions: Vec<_> = subscriptions.iter().map(presenters::accounts::push_subscription).collect();
     framed_page!(c, StatusCode::OK, |ctx| users::PushSubscriptionsIndex { ctx, push_subscriptions: push_subscriptions.clone() }).await
 }
 
@@ -41,7 +41,7 @@ pub async fn create(c: &mut Ctx) -> Result {
         Some(subscription) => {
             if validate(&subscription).await.is_empty() {
                 let id = subscription.id;
-                c.app().db.write(move |tx| presenters_a::touch(tx.conn(), "push_subscriptions", id, tx.now())).await.map_err(Error::internal)?;
+                c.app().db.write(move |tx| presenters::accounts::touch(tx.conn(), "push_subscriptions", id, tx.now())).await.map_err(Error::internal)?;
                 Ok(c.head(StatusCode::OK))
             } else {
                 Ok(c.head(StatusCode::UNPROCESSABLE_ENTITY))

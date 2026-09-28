@@ -5,6 +5,7 @@
 use std::collections::BTreeMap;
 
 use campfire_richtext::dom::Dom;
+use campfire_richtext::sanitizer::SafeList;
 use campfire_richtext::{
     AttachableResolver, GidLookup, MentionUser, Presentation, RenderContext, SignedLookup, editable_value,
     mentioned_users, present_message, to_plain_text,
@@ -126,6 +127,60 @@ fn normalize_into(dom: &Dom, node: usize, out: &mut String) {
     }
 }
 
+// --- Deliberate differences ----------------------------------------------------------------------
+
+/// Rails' presentation as the port renders it on purpose (see "Known differences" in README.md):
+/// `<` and `>` are escaped in attribute values, and the links rails_autolink inserted inside an
+/// attribute value (its stored XSS) are left as the text they replaced; `name` attributes are dropped.
+fn with_port_divergences(rails: &str) -> String {
+    const INSERTED_LINK: &str = "<a target=\"_blank\" href=\"";
+    enum State {
+        Text,
+        Tag,
+        Value,
+    }
+    let mut out = String::with_capacity(rails.len());
+    let mut state = State::Text;
+    let mut rest = rails;
+    while let Some(c) = rest.chars().next() {
+        if matches!(state, State::Value) && rest.starts_with(INSERTED_LINK) {
+            let text_start = rest.find("\">").unwrap() + 2;
+            let text_end = text_start + rest[text_start..].find("</a>").unwrap();
+            out.push_str(&rest[text_start..text_end].replace('>', "&gt;"));
+            rest = &rest[text_end + 4..];
+            continue;
+        }
+        if matches!(state, State::Tag) && rest.starts_with(" name=\"") {
+            let value_end = " name=\"".len() + rest[" name=\"".len()..].find('"').unwrap();
+            rest = &rest[value_end + 1..];
+            continue;
+        }
+        match (&state, c) {
+            (State::Text, '<') => state = State::Tag,
+            (State::Tag, '>') => state = State::Text,
+            (State::Tag, '"') => state = State::Value,
+            (State::Value, '"') => state = State::Tag,
+            _ => {}
+        }
+        match (&state, c) {
+            (State::Value, '<') => out.push_str("&lt;"),
+            (State::Value, '>') => out.push_str("&gt;"),
+            _ => out.push(c),
+        }
+        rest = &rest[c.len_utf8()..];
+    }
+    out
+}
+
+#[test]
+fn port_divergences_apply_to_attribute_values_only() {
+    assert_eq!(
+        with_port_divergences("<p title=\"a>b <a target=\"_blank\" href=\"http://x.test/\">http://x.test/</a>\">c > <a target=\"_blank\" href=\"http://y.test/\">y</a></p>"),
+        "<p title=\"a&gt;b http://x.test/\">c > <a target=\"_blank\" href=\"http://y.test/\">y</a></p>"
+    );
+    assert_eq!(with_port_divergences("<a name=\"x y\" title=\"name=\">n</a>"), "<a title=\"name=\">n</a>");
+}
+
 // --- Security assertions -------------------------------------------------------------------------
 
 const DANGEROUS_ELEMENTS: &[&str] = &[
@@ -161,7 +216,15 @@ fn security_violations(html: &str, allow_style: bool) -> Vec<String> {
         if DANGEROUS_ELEMENTS.contains(&name) {
             violations.push(format!("<{name}> element"));
         }
+        // Nothing auto_link inserts may escape its own sanitizer's allowlist
+        let allowed = SafeList::auto_link();
+        if !allowed.tags.contains(&name) {
+            violations.push(format!("<{name}> not in the allowlist"));
+        }
         for (attr, value) in dom.attrs(node) {
+            if !allowed.attributes.contains(&attr.as_str()) && attr != "target" && !(attr == "style" && allow_style) {
+                violations.push(format!("{attr} on <{name}> not in the allowlist"));
+            }
             let lower = attr.to_lowercase();
             if lower.starts_with("on") {
                 violations.push(format!("{attr} attribute on <{name}>"));
@@ -228,12 +291,19 @@ fn corpus_matches_rails() {
 
         // presentation
         let expected = match outcome_str(&case["presentation"]) {
-            Ok(html) => Presentation::Html(html.unwrap_or_default()),
+            Ok(html) => Presentation::Html(with_port_divergences(&html.unwrap_or_default())),
             Err(_) => Presentation::Unrenderable,
         };
         let actual = present_message(body, &ctx);
         let label = format!("[presentation] {name}");
+        // Deliberate: a missing attachable Rails can't find a partial for (a deleted user's
+        // mention) renders ☒ instead of raising and blanking the message.
+        let missing_partial = case["presentation_raised_message"].as_str().is_some_and(|m| m.contains("to_missing_attachable_partial_path"));
         match (&expected, &actual) {
+            (Presentation::Html(_), Presentation::Html(a)) if missing_partial => {
+                assert!(a.contains('☒'), "{label}: {a}");
+                tallies.entry("presentation").or_default().exact += 1;
+            }
             (Presentation::Html(e), Presentation::Html(a)) => tallies.entry("presentation").or_default().record(label, e, a),
             _ => tallies.entry("presentation").or_default().record(label, &format!("{expected:?}"), &format!("{actual:?}")),
         }
@@ -255,7 +325,10 @@ fn corpus_matches_rails() {
         // editable value
         let actual = editable_value(body, &ctx);
         let label = format!("[editable] {name}");
+        // Deliberate: missing attachables leave the editor, where Rails raises.
+        let missing_in_editor = case["editable"]["message"].as_str().is_some_and(|m| m.contains("MissingAttachable"));
         match (outcome_str(&case["editable"]), &actual) {
+            (Err(_), Ok(_)) if missing_in_editor => tallies.entry("editable").or_default().exact += 1,
             (Ok(e), Ok(a)) => tallies.entry("editable").or_default().record(label, &format!("{e:?}"), &format!("{a:?}")),
             (Err(_), Err(_)) => tallies.entry("editable").or_default().exact += 1,
             (e, _) => tallies.entry("editable").or_default().record(label, &format!("{e:?}"), &render(&actual)),
@@ -306,14 +379,15 @@ fn corpus_matches_rails() {
 }
 
 /// The oracle's own outputs must pass the security assertions too: two implementations can agree
-/// on something unsafe.
+/// on something unsafe. (They do: rails_autolink breaks out of attribute values, which is why the
+/// port diverges there, so the assertions run on the output as the port means to render it.)
 #[test]
 fn rails_outputs_pass_security_assertions() {
     let corpus = Corpus::load();
     let mut violations = Vec::new();
     for case in corpus.json["cases"].as_array().unwrap() {
         if let Ok(Some(html)) = outcome_str(&case["presentation"]) {
-            for v in security_violations(&html, false) {
+            for v in security_violations(&with_port_divergences(&html), false) {
                 violations.push(format!("{}: {v}", case["name"].as_str().unwrap()));
             }
         }
@@ -336,6 +410,8 @@ fn security_assertions_catch_planted_defects() {
         ("<span style=\"color: red\">x</span>", "style attribute"),
         ("<svg><a xlink:href=\"javascript:1\">x</a></svg>", "svg"),
         ("<span data-controller=\"x\">x</span>", "data attribute"),
+        ("<p title=\"a\" _blank\"=\"\">x</p>", "attribute outside the allowlist"),
+        ("<details>x</details>", "element outside the allowlist"),
     ] {
         assert!(!security_violations(html, false).is_empty(), "missed {what} in {html}");
     }

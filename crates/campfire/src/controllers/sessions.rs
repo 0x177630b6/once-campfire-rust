@@ -5,12 +5,12 @@ pub mod transfers;
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
 
-use campfire_db::{PushSubscription, User};
+use campfire_db::PushSubscription;
 use campfire_kit::{Ctx, Error, Result, StatusCode, format, halt};
 use campfire_views::sessions;
 use jiff::{SignedDuration, Timestamp};
 
-use super::presenters_a::{self};
+use super::presenters;
 use crate::app::AppCtx;
 use crate::controllers::presenters::page::framed_page;
 use crate::concerns::{self, Before, current_user};
@@ -34,16 +34,10 @@ pub async fn create(c: &mut Ctx) -> Result {
 
     let email_address = c.param_str("email_address").map(str::to_string);
     let password = c.param_str("password").map(str::to_string);
-    let user = c
-        .app()
-        .db
-        .read(move |conn| match (email_address, password) {
-            // `authenticate_by` returns nil for a blank password before looking anything up.
-            (Some(email_address), Some(password)) => User::authenticate_by(conn, &email_address, &password),
-            _ => Ok(None),
-        })
-        .await
-        .map_err(Error::internal)?;
+    let user = match (email_address, password) {
+        (Some(email_address), Some(password)) => concerns::authenticate_by(c, email_address, password).await?,
+        _ => None,
+    };
 
     match user {
         Some(user) => {
@@ -65,7 +59,7 @@ pub async fn destroy(c: &mut Ctx) -> Result {
 
 /// `redirect_to first_run_url if User.none?`
 async fn ensure_user_exists(c: &mut Ctx) -> Result<()> {
-    let none = c.app().db.read(presenters_a::no_users).await.map_err(Error::internal)?;
+    let none = c.app().db.read(presenters::accounts::no_users).await.map_err(Error::internal)?;
     if none {
         let first_run = c.url_for(&campfire_routes::first_run());
         return halt(c.redirect_to(&first_run)?);
@@ -82,7 +76,7 @@ async fn render_rejection(c: &mut Ctx, status: StatusCode) -> Result {
 async fn render_new(c: &mut Ctx, status: StatusCode) -> Result {
     c.respond_to(&[&format::HTML])?;
     let email_address = c.param_str("email_address").map(str::to_string);
-    let help_contact = c.app().db.read(presenters_a::help_contact).await.map_err(Error::internal)?;
+    let help_contact = c.app().db.read(presenters::accounts::help_contact).await.map_err(Error::internal)?;
     framed_page!(c, status, |ctx| sessions::New { ctx, email_address: email_address.clone(), help_contact: help_contact.clone() }).await
 }
 

@@ -9,8 +9,8 @@ use campfire_views::accounts;
 use crate::app::AppCtx;
 use crate::controllers::presenters::page::framed_page;
 use crate::concerns::{self, Before, cast_integer};
-use crate::controllers::presenters_a::attachments::{self, Assignment, Record};
-use crate::controllers::presenters_a::{self};
+use crate::controllers::presenters::attachments::{self, Assignment, Record};
+use crate::controllers::presenters;
 
 /// `@bots = User.active_bots.ordered`
 pub async fn index(c: &mut Ctx) -> Result {
@@ -20,7 +20,7 @@ pub async fn index(c: &mut Ctx) -> Result {
     let bots: Vec<_> = c
         .app()
         .db
-        .read(move |conn| User::active_bots_ordered(conn)?.iter().map(|bot| presenters_a::bot(conn, &secrets, bot)).collect())
+        .read(move |conn| User::active_bots_ordered(conn)?.iter().map(|bot| presenters::accounts::bot(conn, &secrets, bot)).collect())
         .await
         .map_err(Error::internal)?;
     framed_page!(c, StatusCode::OK, |ctx| accounts::BotsIndex { ctx, bots: bots.clone() }).await
@@ -40,17 +40,17 @@ pub async fn create(c: &mut Ctx) -> Result {
     let name = params.get("name").and_then(Param::to_s).ok_or_else(|| Error::internal(anyhow::anyhow!("NOT NULL constraint failed: users.name")))?;
     // `create_webhook!(url: webhook_url) if webhook_url`: any non-nil value, "" included.
     let webhook_url = params.get("webhook_url").and_then(Param::to_s);
-    let avatar = Assignment::from_params(&params, "avatar")?;
+    let avatar = Assignment::from_params(&params, "avatar")?.stage(c.app()).await?;
     let pending = c
         .app()
         .db
         .write(move |tx| {
             let bot = User::create_bot(tx, &name, webhook_url.as_deref())?;
-            attachments::assign(tx, Record::user(bot.id), "avatar", &avatar)
+            attachments::assign(tx, Record::user(bot.id), "avatar", avatar)
         })
         .await
         .map_err(Error::internal)?;
-    attachments::upload_and_analyze_later(c.app(), pending).await?;
+    attachments::analyze_later(c.app(), pending);
     redirect_to_bots(c)
 }
 
@@ -59,7 +59,7 @@ pub async fn edit(c: &mut Ctx) -> Result {
     let bot = set_bot(c).await?;
     c.respond_to(&[&format::HTML])?;
     let (storage, base_url, bot_id) = (c.app().storage.clone(), c.url_for(""), bot.id);
-    let form = c.app().db.read(move |conn| presenters_a::bot_form(conn, &storage, &base_url, &bot)).await.map_err(Error::internal)?;
+    let form = c.app().db.read(move |conn| presenters::accounts::bot_form(conn, &storage, &base_url, &bot)).await.map_err(Error::internal)?;
     framed_page!(c, StatusCode::OK, |ctx| accounts::BotsEdit { ctx, bot_id, bot: form.clone() }).await
 }
 
@@ -70,17 +70,17 @@ pub async fn update(c: &mut Ctx) -> Result {
     let params = bot_params(c)?;
     let changes = UserChanges { name: params.get("name").and_then(Param::to_s), ..UserChanges::default() };
     let webhook_url = params.get("webhook_url").and_then(Param::to_s);
-    let avatar = Assignment::from_params(&params, "avatar")?;
+    let avatar = Assignment::from_params(&params, "avatar")?.stage(c.app()).await?;
     let pending = c
         .app()
         .db
         .write(move |tx| {
             bot.update_bot(tx, changes, webhook_url.as_deref())?;
-            attachments::assign(tx, Record::user(bot.id), "avatar", &avatar)
+            attachments::assign(tx, Record::user(bot.id), "avatar", avatar)
         })
         .await
         .map_err(Error::internal)?;
-    attachments::upload_and_analyze_later(c.app(), pending).await?;
+    attachments::analyze_later(c.app(), pending);
     redirect_to_bots(c)
 }
 

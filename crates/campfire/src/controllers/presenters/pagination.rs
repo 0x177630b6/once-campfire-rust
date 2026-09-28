@@ -79,8 +79,8 @@ impl Page {
 
 /// `param.to_i > 0 ? param.to_i : 1`
 fn page_number_from(param: Option<&str>) -> i64 {
-    let number = param.map(ruby_to_i).unwrap_or(0);
-    if number > 0 { number } else { 1 }
+    // Capped, so the page arithmetic can't overflow on a huge `?page=`.
+    param.map(ruby_to_i).unwrap_or(0).clamp(1, 1_000_000_000)
 }
 
 /// `String#to_i`: leading whitespace, an optional sign, then digits (underscores between digits
@@ -190,6 +190,14 @@ mod tests {
         assert_eq!((page("3").offset(), page("3").limit()), (45, 50));
         assert_eq!((page("5").offset(), page("5").limit()), (195, 100));
         assert_eq!((page("6").offset(), page("6").limit()), (295, 100));
+    }
+
+    #[test]
+    fn huge_page_numbers_are_capped() {
+        let page = Page::new(Some("99999999999999999999"), 10, &[5]);
+        assert_eq!(page.number, 1_000_000_000);
+        assert_eq!(page.next_param(), 1_000_000_001);
+        assert!(page.offset() > 0);
     }
 
     #[test]
