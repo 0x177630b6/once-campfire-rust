@@ -379,6 +379,11 @@ Deliberate:
   (`data-copy-to-clipboard-url-value`), and the copy-to-clipboard controller (an override) makes it
   absolute against the page. The bot API's cached JSON, whose URLs must be absolute, is cached per
   base URL instead.
+- **Rich text keeps only highlight colors in `style`.** Where Rails runs `style` through Loofah's
+  CSS scrubber, the sanitizer keeps only `color` and `background-color` with a plain color value
+  (a keyword, hex, `rgb()`/`hsl()`, or a custom property like Lexxy's `var(--highlight-1)`), which
+  is all Lexxy writes. It shows in the HTML body the bot API and webhooks send; message pages drop
+  `style` altogether, as they did.
 - **Content attachments nest at most 8 deep.** An `<action-text-attachment>` carrying HTML in its
   `content` renders that content, attachments included; each level parses and sanitizes
   everything below it again, so a 336 KB body of nested ones took 10 seconds to render. Deeper
