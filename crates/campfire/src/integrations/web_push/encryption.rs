@@ -18,7 +18,7 @@ pub enum EncryptionError {
     Argument(String),
     /// `OpenSSL::PKey::EC::Point::Error` and friends: the subscription's key isn't a P-256 point.
     #[error("{0}")]
-    OpenSsl(String),
+    InvalidKey(String),
 }
 
 /// Encrypts `message` for the subscription's `p256dh` key and `auth` secret (both urlsafe
@@ -63,7 +63,7 @@ pub fn encrypt_with(
     // OpenSSL::BN.new(bytes, 2) drops leading zero bytes before the point is decoded
     let client_public_bytes = strip_leading_zeros(decode64(p256dh.unwrap())?);
     let client_public = PublicKey::from_sec1_bytes(&client_public_bytes)
-        .map_err(|_| EncryptionError::OpenSsl("invalid encoding".into()))?;
+        .map_err(|_| EncryptionError::InvalidKey("invalid encoding".into()))?;
     let auth = decode64(auth.unwrap())?;
 
     let server_public = server_key.public_key().to_encoded_point(false);
@@ -188,7 +188,7 @@ mod tests {
         assert!(matches!(encrypt(b"m", None, Some("YXV0aA")), Err(EncryptionError::Argument(_))));
         assert!(matches!(encrypt(b"m", Some(&ok), Some("")), Err(EncryptionError::Argument(_))));
         assert!(matches!(encrypt(b"m", Some("not base64!"), Some("YXV0aA")), Err(EncryptionError::Argument(_))));
-        assert!(matches!(encrypt(b"m", Some("dGVzdF9rZXk"), Some("YXV0aA")), Err(EncryptionError::OpenSsl(_))));
+        assert!(matches!(encrypt(b"m", Some("dGVzdF9rZXk"), Some("YXV0aA")), Err(EncryptionError::InvalidKey(_))));
         assert!(matches!(encrypt(&[b'x'; 4100], Some(&ok), Some("YXV0aA")), Err(EncryptionError::Argument(_))));
     }
 }

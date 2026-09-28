@@ -1,6 +1,6 @@
 //! `WebPush::Pool` (reference/lib/web_push/pool.rb) with the invalid-subscription handler from
 //! reference/config/initializers/web_push.rb: up to 50 deliveries at once and 10,000 waiting
-//! (more are dropped silently, like `Concurrent::RejectedExecutionError`), and one worker that
+//! (more are dropped, like `Concurrent::RejectedExecutionError`, and logged), and one worker that
 //! destroys expired or unusable subscriptions in order.
 
 use std::fmt::Display;
@@ -31,6 +31,8 @@ struct Inner {
     runtime: tokio::runtime::Handle,
     running: Semaphore,
     pending: AtomicUsize,
+    /// Deliveries dropped since the queue was last accepting them.
+    dropped: AtomicUsize,
     idle: Notify,
     shut_down: AtomicBool,
     invalidations: Mutex<Option<mpsc::Sender<i64>>>,
@@ -71,6 +73,7 @@ impl Pool {
                 runtime: tokio::runtime::Handle::current(),
                 running: Semaphore::new(MAX_THREADS),
                 pending: AtomicUsize::new(0),
+                dropped: AtomicUsize::new(0),
                 idle: Notify::new(),
                 shut_down: AtomicBool::new(false),
                 invalidations: Mutex::new(Some(sender)),
@@ -92,11 +95,19 @@ impl Pool {
     pub fn deliver_later(&self, notification: Notification) {
         let inner = &self.inner;
         if inner.shut_down.load(Ordering::SeqCst) {
+            tracing::warn!("WebPush::Pool is shut down, dropping a notification");
             return;
         }
         if inner.pending.fetch_add(1, Ordering::SeqCst) >= MAX_THREADS + MAX_QUEUE {
             inner.pending.fetch_sub(1, Ordering::SeqCst);
+            if inner.dropped.fetch_add(1, Ordering::SeqCst) == 0 {
+                tracing::error!("WebPush::Pool is full, dropping notifications");
+            }
             return;
+        }
+        let dropped = inner.dropped.swap(0, Ordering::SeqCst);
+        if dropped > 0 {
+            tracing::error!("WebPush::Pool dropped {dropped} notifications while it was full");
         }
         let pool = self.inner.clone();
         inner.runtime.spawn(async move {
@@ -131,7 +142,12 @@ impl Pool {
         }
     }
 
+    pub fn vapid(&self) -> &VapidConfig {
+        &self.inner.vapid
+    }
+
     /// Queued or running deliveries.
+    #[cfg(test)]
     pub fn pending(&self) -> usize {
         self.inner.pending.load(Ordering::SeqCst)
     }

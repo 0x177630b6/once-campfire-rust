@@ -13,9 +13,6 @@
 //! plans/rust-conversion.md, "HTTP clients: three distinct policies"). Oracles for the tests
 //! (Ruby scripts run in the reference) live in testdata/oracle.
 
-// Parts of the API are for controllers that haven't switched over yet.
-#![allow(dead_code)]
-
 mod jobs;
 pub mod net;
 pub mod opengraph;
@@ -26,4 +23,4 @@ pub mod webhook;
 #[cfg(test)]
 mod test_support;
 
-pub use jobs::register_jobs;
+pub use jobs::{register_jobs, web_push_pool};

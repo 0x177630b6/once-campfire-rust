@@ -7,7 +7,7 @@ use campfire_kit::{Ctx, Error, Result};
 use crate::app::AppCtx;
 use crate::concerns::{self, Before, cast_integer};
 use crate::integrations::net::Network;
-use crate::integrations::web_push::{self, VapidConfig};
+use crate::integrations::web_push;
 
 /// `@push_subscription.notification(title: "Campfire Test", body: Random.uuid, path: user_push_subscriptions_url).deliver`
 pub async fn create(c: &mut Ctx) -> Result {
@@ -28,9 +28,8 @@ pub async fn create(c: &mut Ctx) -> Result {
         .ok_or(Error::NotFound)?;
 
     let location = c.url_for(&campfire_routes::user_push_subscriptions());
-    let config = &c.app().config;
-    let vapid = VapidConfig::new(config.vapid_public_key.clone().unwrap_or_default(), config.vapid_private_key.clone().unwrap_or_default());
-    web_push::deliver_test_notification(&Network::system(), &vapid, &subscription, badge, &location).await
+    let web_push = c.app().web_push.as_ref().ok_or_else(|| Error::internal(anyhow::anyhow!("Web Push is off (no valid VAPID keys)")))?;
+    web_push::deliver_test_notification(&Network::system(), web_push.vapid(), &subscription, badge, &location).await
         .map_err(|error| Error::internal(anyhow::anyhow!("{error:?}")))?;
     c.redirect_to(&location)
 }

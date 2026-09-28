@@ -3,16 +3,15 @@
 //! (reference/app/jobs/bot/webhook_job.rb), including what `Webhook#deliver` does with a reply
 //! (create the bot's message, process an attachment, `broadcast_create`).
 
-use std::sync::{Arc, OnceLock};
-
 use anyhow::{Context as _, anyhow};
-use campfire_db::{Event, Message, NewMessage, PushSubscription, Room, User, Webhook};
+use campfire_db::{Database, Event, Message, NewMessage, PushSubscription, Room, User, Webhook};
 use campfire_views::messages as views;
 
 use super::net::Network;
-use super::web_push::{self, VapidConfig};
+use super::web_push::{self, VapidConfig, VapidError};
 use super::webhook::{self, WebhookReply};
 use crate::app::App;
+use crate::config::Config;
 use crate::controllers::presenters::page::{self, Rendered};
 use crate::controllers::messages::{canonical_body, process_attachment};
 use crate::controllers::presenters::{Presenter, storage_error};
@@ -20,19 +19,15 @@ use crate::jobs::{JobKind, Registry};
 
 /// Registers the handlers for `Event::PushMessage` and `Event::DeliverWebhook`.
 pub fn register_jobs(registry: &mut Registry) {
-    // `config.x.web_push_pool`: one pool for the process, made on first use (inside the runtime).
-    let pool: Arc<OnceLock<web_push::Pool>> = Arc::new(OnceLock::new());
-    registry.handle(JobKind::PushMessage, move |app: App, event: Event| {
-        let pool = pool.clone();
-        async move { push_message(app, &pool, event).await }
-    });
+    registry.handle(JobKind::PushMessage, push_message);
     registry.handle(JobKind::DeliverWebhook, deliver_webhook);
 }
 
-/// `Room::PushMessageJob#perform(room, message)`: `Room::MessagePusher.new(room:, message:).push`
-async fn push_message(app: App, pool: &OnceLock<web_push::Pool>, event: Event) -> anyhow::Result<()> {
+/// `Room::PushMessageJob#perform(room, message)`: `Room::MessagePusher.new(room:, message:).push`,
+/// unless Web Push is off.
+async fn push_message(app: App, event: Event) -> anyhow::Result<()> {
     let Event::PushMessage { message_id, .. } = event else { return Ok(()) };
-    let pool = pool.get_or_init(|| web_push_pool(&app)).clone();
+    let Some(pool) = app.web_push.clone() else { return Ok(()) };
     let db = app.db.clone();
     app.db
         .read(move |conn| {
@@ -43,21 +38,30 @@ async fn push_message(app: App, pool: &OnceLock<web_push::Pool>, event: Event) -
     Ok(())
 }
 
-/// config/initializers/web_push.rb: the pool, whose invalid subscription handler destroys the
-/// subscription (`Push::Subscription.find_by(id:)&.destroy`).
-fn web_push_pool(app: &App) -> web_push::Pool {
-    let vapid = VapidConfig::new(
-        app.config.vapid_public_key.clone().unwrap_or_default(),
-        app.config.vapid_private_key.clone().unwrap_or_default(),
-    );
-    let db = app.db.clone();
-    web_push::Pool::new(Network::system(), vapid, move |id| {
+/// config/initializers/web_push.rb (`config.x.web_push_pool`): the pool, whose invalid
+/// subscription handler destroys the subscription (`Push::Subscription.find_by(id:)&.destroy`).
+/// `None`, and Web Push is off, when the VAPID keys are missing or invalid. Call from inside the
+/// runtime.
+pub fn web_push_pool(config: &Config, db: &Database) -> Option<web_push::Pool> {
+    let vapid = match VapidConfig::from_config(config) {
+        Ok(vapid) => vapid,
+        Err(error @ VapidError::Missing) => {
+            tracing::warn!("Web Push is off: {error}");
+            return None;
+        }
+        Err(error) => {
+            tracing::error!("Web Push is off: {error}");
+            return None;
+        }
+    };
+    let db = db.clone();
+    Some(web_push::Pool::new(Network::system(), vapid, move |id| {
         db.write_blocking(move |tx| match PushSubscription::find(tx.conn(), id) {
             Ok(subscription) => subscription.destroy(tx),
             Err(campfire_db::Error::RecordNotFound(_)) => Ok(()),
             Err(error) => Err(error),
         })
-    })
+    }))
 }
 
 /// `Bot::WebhookJob#perform(bot, message)`: `bot.deliver_webhook(message)`, i.e.

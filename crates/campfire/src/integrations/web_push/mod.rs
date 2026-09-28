@@ -20,7 +20,7 @@ use crate::integrations::net::{Network, guard};
 
 pub use encryption::EncryptionError;
 pub use pool::Pool;
-pub use vapid::VapidConfig;
+pub use vapid::{VapidConfig, VapidError};
 
 /// `WebPush::Request#default_options[:ttl]`: four weeks.
 const TTL_SECONDS: u64 = 60 * 60 * 24 * 7 * 4;
@@ -81,37 +81,45 @@ impl Notification {
 /// What `WebPush.payload_send` raised.
 #[derive(Debug, thiserror::Error)]
 pub enum DeliveryError {
-    /// `WebPush::ExpiredSubscription` (410)
-    #[error("host: {host}, status: {status}")]
-    ExpiredSubscription { host: String, status: u16 },
-    /// `WebPush::InvalidSubscription` (404) and the gem's other `ResponseError`s: 401/403 and
-    /// 400 "UnauthorizedRegistration" (`Unauthorized`), 413, 429, 5xx, and any other non-2xx.
+    /// `WebPush::ExpiredSubscription` (410) and `WebPush::InvalidSubscription` (404): the push
+    /// service doesn't know the subscription (any more).
+    #[error("{kind}: host: {host}, status: {status}")]
+    SubscriptionGone { kind: &'static str, host: String, status: u16 },
+    /// The gem's other `ResponseError`s: 401/403 and 400 "UnauthorizedRegistration"
+    /// (`Unauthorized`), 413, 429, 5xx, and any other non-2xx.
     #[error("{kind}: host: {host}, status: {status}")]
     Response { kind: &'static str, host: String, status: u16 },
-    /// `OpenSSL::OpenSSLError`: a key that isn't a P-256 point, or a failed TLS session.
+    /// `OpenSSL::PKey::EC::Point::Error`: the subscription's key isn't a P-256 point.
     #[error("{0}")]
-    OpenSsl(String),
+    InvalidSubscriptionKey(String),
     /// `ArgumentError`: blank or malformed keys, an oversized payload.
     #[error("{0}")]
     Argument(String),
+    /// `OpenSSL::SSL::SSLError`: a failed TLS session, which may well be our side's fault (a
+    /// clock or CA store problem).
+    #[error("{0}")]
+    Tls(String),
     /// Connection failures and timeouts.
     #[error("{0}")]
     Http(HttpError),
 }
 
 impl DeliveryError {
-    /// `WebPush::Pool#deliver` rescues these and destroys the subscription.
+    /// Whether the subscription can never be delivered to, so the pool destroys it.
+    /// `WebPush::Pool#deliver` also destroys it for a 410 and any `OpenSSL::OpenSSLError`,
+    /// which includes TLS failures and a bad VAPID key; those say nothing about the
+    /// subscription, and a 404 does (RFC 8030, section 7.3).
     pub fn invalidates_subscription(&self) -> bool {
-        matches!(self, DeliveryError::ExpiredSubscription { .. } | DeliveryError::OpenSsl(_))
+        matches!(self, DeliveryError::SubscriptionGone { .. } | DeliveryError::InvalidSubscriptionKey(_))
     }
 
     /// The Ruby exception class, for the pool's log line.
     pub fn class_name(&self) -> &'static str {
         match self {
-            DeliveryError::ExpiredSubscription { .. } => "WebPush::ExpiredSubscription",
-            DeliveryError::Response { kind, .. } => kind,
-            DeliveryError::OpenSsl(_) => "OpenSSL::OpenSSLError",
+            DeliveryError::SubscriptionGone { kind, .. } | DeliveryError::Response { kind, .. } => kind,
+            DeliveryError::InvalidSubscriptionKey(_) => "OpenSSL::PKey::EC::Point::Error",
             DeliveryError::Argument(_) => "ArgumentError",
+            DeliveryError::Tls(_) => "OpenSSL::SSL::SSLError",
             DeliveryError::Http(HttpError::OpenTimeout) => "Net::OpenTimeout",
             DeliveryError::Http(HttpError::ReadTimeout) => "Net::ReadTimeout",
             DeliveryError::Http(_) => "SystemCallError",
@@ -123,7 +131,7 @@ impl From<EncryptionError> for DeliveryError {
     fn from(error: EncryptionError) -> Self {
         match error {
             EncryptionError::Argument(message) => DeliveryError::Argument(message),
-            EncryptionError::OpenSsl(message) => DeliveryError::OpenSsl(message),
+            EncryptionError::InvalidKey(message) => DeliveryError::InvalidSubscriptionKey(message),
         }
     }
 }
@@ -131,7 +139,7 @@ impl From<EncryptionError> for DeliveryError {
 impl From<HttpError> for DeliveryError {
     fn from(error: HttpError) -> Self {
         match error {
-            HttpError::Tls(message) => DeliveryError::OpenSsl(message),
+            HttpError::Tls(message) => DeliveryError::Tls(message),
             other => DeliveryError::Http(other),
         }
     }
@@ -160,7 +168,7 @@ async fn payload_send(
         ("Content-Length".to_string(), payload.len().to_string()),
     ];
     let audience = format!("{}://{}", uri.scheme.as_deref().unwrap_or("").to_ascii_lowercase(), host);
-    headers.push(("Authorization".to_string(), vapid.authorization(&audience, now)?));
+    headers.push(("Authorization".to_string(), vapid.authorization(&audience, now)));
 
     let endpoint = Endpoint { https: true, host: host.clone(), port: uri.port.unwrap_or(443) as u16, pinned_ip: Some(endpoint_ip) };
     let mut request = http::Request::net_http(hyper::Method::POST, http::request_uri(&uri), None, headers).transport(true, &endpoint);
@@ -172,9 +180,10 @@ async fn payload_send(
 /// `WebPush::Request#verify_response`
 fn verify_response(status: u16, reason: &str, host: &str) -> Result<u16, DeliveryError> {
     let error = |kind| Err(DeliveryError::Response { kind, host: host.to_string(), status });
+    let gone = |kind| Err(DeliveryError::SubscriptionGone { kind, host: host.to_string(), status });
     match status {
-        410 => Err(DeliveryError::ExpiredSubscription { host: host.to_string(), status }),
-        404 => error("WebPush::InvalidSubscription"),
+        410 => gone("WebPush::ExpiredSubscription"),
+        404 => gone("WebPush::InvalidSubscription"),
         401 | 403 => error("WebPush::Unauthorized"),
         400 if reason == "UnauthorizedRegistration" => error("WebPush::Unauthorized"),
         413 => error("WebPush::PayloadTooLarge"),

@@ -187,6 +187,26 @@ fn typing_stream_name(room: &campfire_db::Room) -> String {
     campfire_cable::naming::broadcasting_for("TypingNotificationsChannel", &[&room_gid(room).to_param()])
 }
 
+/// A subscription whose `subscribed` failed has no room: typing there is an error, not a panic
+/// that takes the whole connection down.
+#[tokio::test]
+async fn typing_on_a_failed_subscription_leaves_the_connection_up() {
+    let app = start().await;
+    let rename = |from: &'static str, to: &'static str| {
+        app.db.write(move |tx| tx.conn().execute_batch(&format!("ALTER TABLE {from} RENAME TO {to}")).map_err(Into::into))
+    };
+    let mut client = app.connect("jz").await;
+    let typing = room_identifier("TypingNotificationsChannel", id("designers"));
+
+    rename("rooms", "rooms_away").await.unwrap();
+    client.subscribe(&typing).await;
+    client.confirm(&identifier(json!({ "channel": "HeartbeatChannel" }))).await;
+    rename("rooms_away", "rooms").await.unwrap();
+
+    client.perform(&typing, json!({ "action": "start" })).await;
+    client.confirm(&identifier(json!({ "channel": "ApplicationCable::Channel" }))).await;
+}
+
 #[tokio::test]
 async fn typing_notifications_reject_non_members() {
     let app = start().await;
