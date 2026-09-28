@@ -1,5 +1,5 @@
 //! `TypingNotificationsChannel` (reference/app/channels/typing_notifications_channel.rb).
-use campfire_cable::{Channel, ChannelResult, Params, Subscription};
+use campfire_cable::{Channel, ChannelError, ChannelResult, Params, Subscription};
 use campfire_db::{Database, Room};
 use serde::Serialize;
 
@@ -16,11 +16,13 @@ impl TypingNotificationsChannel {
     }
 
     /// `broadcast_to @room, action:, user: current_user.slice(:id, :name)`.
-    fn broadcast(&self, action: &'static str, sub: &Subscription<CableUser>) {
-        let room = self.room.as_ref().expect("performing on a confirmed subscription");
+    fn broadcast(&self, action: &'static str, sub: &Subscription<CableUser>) -> ChannelResult {
+        // `@room` is only nil when `subscribed` failed, and Rails raises NoMethodError.
+        let room = self.room.as_ref().ok_or_else(|| ChannelError("undefined method 'to_gid_param' for nil".into()))?;
         let user = sub.current_user();
         let payload = Payload { action, user: UserAttributes { id: user.id, name: &user.name } };
         sub.broadcast_to(&[&room_gid(room).to_param()], &payload);
+        Ok(())
     }
 }
 
@@ -48,8 +50,8 @@ impl Channel<CableUser> for TypingNotificationsChannel {
             return Ok(false);
         }
         match action {
-            "start" => self.broadcast("start", sub),
-            "stop" => self.broadcast("stop", sub),
+            "start" => self.broadcast("start", sub)?,
+            "stop" => self.broadcast("stop", sub)?,
             "subscribed" => self.room = room::subscribe(&self.db, sub).await?,
             _ => return Ok(false),
         }
