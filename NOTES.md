@@ -296,10 +296,11 @@ Add requests under the owning crate's heading. The owner removes an entry once i
 - (from campfire) Static-asset `Last-Modified` differs by design: the reference's is its image's
   file mtimes, the candidate's the Rust build's. Neither is stable across builds; mask it if a
   header layer ever compares it.
-- (from storage) Byte-identical variants/posters need the runtime image to ship the reference
-  image's Debian trixie packages: `libvips42t64=8.16.1-1+deb13u1` and `ffmpeg=7:7.1.5-0+deb13u1`
-  (verified by running `cargo test -p campfire_storage --test vectors` in `rust:1-trixie` with
-  those packages). Don't install poppler-utils or mupdf-tools: the reference has neither, so
+- (from storage) Byte-identical variants/posters need the reference image's libvips and ffmpeg:
+  Debian trixie's `vips 8.16.1-1+deb13u1` and `ffmpeg 7:7.1.5-0+deb13u1`. The Dockerfile builds
+  both from those source packages with Debian's flags against Debian's libraries, trimmed to what
+  Campfire reaches (verified by running `cargo test -p campfire_storage --test vectors` against
+  the trimmed builds: every variant and poster byte-identical). Don't install poppler-utils or mupdf-tools: the reference has neither, so
   PDFs aren't previewable. Regenerate vectors with `reference-tools/storage/run.sh`.
 - (from parity/candidate) `parity/bin/candidate` runs the Rust image (`campfire-candidate`, built
   from /Dockerfile + parity/docker/candidate) with the same seed copy, env file, CPU cap and
