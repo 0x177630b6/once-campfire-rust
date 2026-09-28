@@ -10,7 +10,6 @@
 //! the railtie sets from `config.encoding` (verified against the reference).
 
 use std::collections::HashMap;
-use std::path::Path;
 
 use axum::body::Bytes;
 use axum::http::{StatusCode, header};
@@ -20,22 +19,13 @@ use crate::response::Response;
 
 const CHARSET: &str = "charset=UTF-8";
 
-/// The `public/<status>.html` pages, read once at boot rather than on every error.
-#[derive(Debug, Default)]
+/// The `public/<status>.html` pages, held in memory.
+#[derive(Debug, Clone, Default)]
 pub struct ErrorPages(HashMap<u16, Bytes>);
 
 impl ErrorPages {
-    pub fn load(public_path: Option<&Path>) -> Self {
-        let Some(entries) = public_path.and_then(|dir| std::fs::read_dir(dir).ok()) else { return Self::default() };
-        let pages = entries
-            .flatten()
-            .filter_map(|entry| {
-                let name = entry.file_name();
-                let status = name.to_str()?.strip_suffix(".html")?.parse::<u16>().ok()?;
-                Some((status, Bytes::from(std::fs::read(entry.path()).ok()?)))
-            })
-            .collect();
-        Self(pages)
+    pub fn new(pages: impl IntoIterator<Item = (u16, Bytes)>) -> Self {
+        Self(pages.into_iter().collect())
     }
 
     fn get(&self, status: StatusCode) -> Option<Bytes> {
@@ -104,13 +94,8 @@ mod tests {
     }
 
     #[test]
-    fn html_pages_from_public() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("404.html"), "<h1>404</h1>").unwrap();
-        std::fs::write(dir.path().join("notes.html"), "not an error page").unwrap();
-        let pages = ErrorPages::load(Some(dir.path()));
-        std::fs::remove_file(dir.path().join("404.html")).unwrap();
-        assert_eq!(pages.0.len(), 1);
+    fn html_pages() {
+        let pages = ErrorPages::new([(404, Bytes::from("<h1>404</h1>"))]);
         let response = render(&pages, StatusCode::NOT_FOUND, Some(&format::HTML), false);
         assert_eq!(response.status, StatusCode::NOT_FOUND);
         assert_eq!(response.body_bytes().unwrap().as_ref(), b"<h1>404</h1>");

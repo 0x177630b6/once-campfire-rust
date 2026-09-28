@@ -1,7 +1,6 @@
 //! The shared, per-process part of the HTTP layer: configuration, crypto, clock and app state.
 
 use std::any::Any;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -25,9 +24,8 @@ pub struct KitConfig {
     pub forgery_protection_origin_check: bool,
     /// `action_dispatch.default_headers` (`load_defaults 7.1`).
     pub default_headers: Vec<(HeaderName, HeaderValue)>,
-    /// Where `404.html`, `422.html`, `500.html` live (`Rails.public_path`), read when the `Kit`
-    /// is made.
-    pub public_path: Option<PathBuf>,
+    /// `public/404.html`, `422.html`, `500.html`, ... (`ActionDispatch::PublicExceptions`).
+    pub error_pages: ErrorPages,
     /// Largest request body accepted; `None` is unlimited, like Puma.
     pub max_body_bytes: Option<usize>,
     /// Per-request timeout (`408` when exceeded); `None` disables it.
@@ -43,7 +41,7 @@ impl Default for KitConfig {
             session: SessionConfig::default(),
             forgery_protection_origin_check: true,
             default_headers: rails_default_headers(),
-            public_path: None,
+            error_pages: ErrorPages::default(),
             max_body_bytes: None,
             request_timeout: None,
         }
@@ -85,7 +83,6 @@ pub(crate) struct KitInner {
     pub crypto: SharedCrypto,
     pub clock: SharedClock,
     pub state: Arc<dyn Any + Send + Sync>,
-    pub error_pages: ErrorPages,
 }
 
 impl std::fmt::Debug for Kit {
@@ -98,8 +95,7 @@ impl Kit {
     /// `state` is the application's own state (database handles etc.), reachable from actions
     /// with [`crate::Ctx::state`].
     pub fn new<S: Send + Sync + 'static>(config: KitConfig, crypto: SharedCrypto, clock: SharedClock, state: S) -> Self {
-        let error_pages = ErrorPages::load(config.public_path.as_deref());
-        Self { inner: Arc::new(KitInner { config, crypto, clock, state: Arc::new(state), error_pages }) }
+        Self { inner: Arc::new(KitInner { config, crypto, clock, state: Arc::new(state) }) }
     }
 
     pub fn config(&self) -> &KitConfig {
@@ -115,7 +111,7 @@ impl Kit {
     }
 
     pub(crate) fn error_pages(&self) -> &ErrorPages {
-        &self.inner.error_pages
+        &self.inner.config.error_pages
     }
 
     pub fn state<S: Send + Sync + 'static>(&self) -> &S {

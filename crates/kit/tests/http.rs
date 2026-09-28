@@ -3,6 +3,7 @@
 use std::net::SocketAddr;
 
 use axum::Router;
+use campfire_kit::exceptions::ErrorPages;
 use axum::body::Body as AxumBody;
 use axum::extract::ConnectInfo;
 use axum::http::{Request as HttpRequest, header};
@@ -224,10 +225,8 @@ fn app_with(config: KitConfig) -> Router {
 }
 
 fn app() -> Router {
-    let public = tempfile::tempdir().unwrap().keep();
-    std::fs::write(public.join("404.html"), "<h1>Not found</h1>").unwrap();
-    std::fs::write(public.join("422.html"), "<h1>Unprocessable</h1>").unwrap();
-    app_with(KitConfig { public_path: Some(public), ..KitConfig::default() })
+    let error_pages = ErrorPages::new([(404, "<h1>Not found</h1>".into()), (422, "<h1>Unprocessable</h1>".into())]);
+    app_with(KitConfig { error_pages, ..KitConfig::default() })
 }
 
 struct Reply {
@@ -403,9 +402,8 @@ async fn missing_required_param_is_400() {
 
 /// The test app as Campfire runs it in production: behind TLS (`assume_ssl`) with `force_ssl`.
 fn ssl_app() -> Router {
-    let public = tempfile::tempdir().unwrap().keep();
-    std::fs::write(public.join("422.html"), "<h1>Unprocessable</h1>").unwrap();
-    let mut config = KitConfig { public_path: Some(public), force_ssl: true, ..KitConfig::default() };
+    let error_pages = ErrorPages::new([(422, "<h1>Unprocessable</h1>".into())]);
+    let mut config = KitConfig { error_pages, force_ssl: true, ..KitConfig::default() };
     config.proxy.assume_ssl = true;
     app_with(config)
 }

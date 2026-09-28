@@ -15,6 +15,7 @@ use std::time::Duration;
 use axum::Router;
 use axum::middleware::Next;
 use campfire_db::Database;
+use campfire_kit::exceptions::ErrorPages;
 use campfire_kit::{Ctx, Kit, KitConfig, RailsCrypto, SharedClock, SharedCrypto};
 use campfire_storage::{DiskService, Storage};
 use campfire_views::fragment_cache::{FragmentCache, Scoped};
@@ -41,8 +42,6 @@ pub struct AppState {
     /// `Rails.cache` for view fragments (`cache message do`), current during every request
     /// and every render outside one.
     pub fragment_cache: Arc<FragmentCache>,
-    /// Holds `public/{404,422,500,502}.html` for the exception pages kit renders.
-    _public_pages: tempfile::TempDir,
 }
 
 impl AppState {
@@ -97,9 +96,8 @@ pub async fn boot(config: Config) -> anyhow::Result<Booted> {
     let deps = channels::Deps { db: db.clone(), secrets: secrets.clone(), crypto: crypto.clone(), clock: clock.clone() };
     let cable = channels::server(deps, cable_config);
 
-    let public_pages = public_pages()?;
     let mut kit_config = KitConfig::production(config.disable_ssl);
-    kit_config.public_path = Some(public_pages.path().to_path_buf());
+    kit_config.error_pages = error_pages();
 
     let fragment_cache = FragmentCache::new(config.fragment_cache_bytes);
     let web_push = crate::integrations::web_push_pool(&config, &db);
@@ -114,7 +112,6 @@ pub async fn boot(config: Config) -> anyhow::Result<Booted> {
         jobs,
         web_push,
         fragment_cache,
-        _public_pages: public_pages,
     });
 
     let mut registry = jobs::Registry::with_core_jobs();
@@ -188,18 +185,13 @@ fn static_response(request: &axum::extract::Request) -> Option<axum::response::R
     Some(response)
 }
 
-/// The error pages kit renders (`ActionDispatch::PublicExceptions`) live in the embedded
-/// `public/`; kit reads them from a directory.
-fn public_pages() -> anyhow::Result<tempfile::TempDir> {
-    let dir = tempfile::Builder::new().prefix("campfire-public-").tempdir()?;
-    for status in [404, 422, 500, 502] {
+/// The error pages kit renders (`ActionDispatch::PublicExceptions`), from the embedded `public/`.
+fn error_pages() -> ErrorPages {
+    ErrorPages::new([404, 422, 500, 502].into_iter().filter_map(|status| {
         let path = format!("/{status}.html");
         let request = campfire_assets::StaticRequest { method: "GET", path: &path, ..Default::default() };
-        if let Some(page) = campfire_assets::serve(&request) {
-            std::fs::write(dir.path().join(format!("{status}.html")), &page.body)?;
-        }
-    }
-    Ok(dir)
+        campfire_assets::serve(&request).map(|page| (status, page.body.into_owned().into()))
+    }))
 }
 
 /// `Rails.application.message_verifier("ActiveStorage")` for campfire_storage.
@@ -316,27 +308,37 @@ pub fn backup(config: &Config) -> anyhow::Result<()> {
     if let Some(dir) = destination.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let source = rusqlite::Connection::open_with_flags(&config.storage.database, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-    source.busy_timeout(Duration::from_secs(5))?;
-    let mut target = rusqlite::Connection::open(&destination)?;
-    {
-        let backup = rusqlite::backup::Backup::new(&source, &mut target)?;
-        // `backup.step(-1)`: every page in one step; a busy or locked source is retried.
-        let mut attempts = 0;
-        loop {
-            match backup.step(-1)? {
-                rusqlite::backup::StepResult::Done => break,
-                _ if attempts < 50 => {
-                    attempts += 1;
-                    std::thread::sleep(Duration::from_millis(100));
-                }
-                other => anyhow::bail!("backup did not finish: {other:?}"),
-            }
-        }
+    // Written beside the destination and renamed over it, so a failed or interrupted backup never
+    // leaves a torn file where ONCE (and `post-restore`) expect the last good one.
+    let partial = destination.with_extension("sqlite3.partial");
+    let _ = std::fs::remove_file(&partial);
+    if let Err(error) = copy_database(&config.storage.database, &partial) {
+        let _ = std::fs::remove_file(&partial);
+        return Err(error);
     }
-    drop(target);
+    std::fs::rename(&partial, &destination)?;
     tracing::info!(path = %destination.display(), "backup written");
     Ok(())
+}
+
+/// SQLite's online backup of the live database at `source` into a new file at `target`.
+fn copy_database(source: &std::path::Path, target: &std::path::Path) -> anyhow::Result<()> {
+    let source = rusqlite::Connection::open_with_flags(source, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    source.busy_timeout(Duration::from_secs(5))?;
+    let mut target = rusqlite::Connection::open(target)?;
+    let backup = rusqlite::backup::Backup::new(&source, &mut target)?;
+    // `backup.step(-1)`: every page in one step; a busy or locked source is retried.
+    let mut attempts = 0;
+    loop {
+        match backup.step(-1)? {
+            rusqlite::backup::StepResult::Done => return Ok(()),
+            _ if attempts < 50 => {
+                attempts += 1;
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            other => anyhow::bail!("backup did not finish: {other:?}"),
+        }
+    }
 }
 
 #[cfg(test)]
