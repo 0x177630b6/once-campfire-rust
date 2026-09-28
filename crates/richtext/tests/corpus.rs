@@ -131,7 +131,7 @@ fn normalize_into(dom: &Dom, node: usize, out: &mut String) {
 
 /// Rails' presentation as the port renders it on purpose (see "Known differences" in README.md):
 /// `<` and `>` are escaped in attribute values, and the links rails_autolink inserted inside an
-/// attribute value (its stored XSS) are left as the text they replaced.
+/// attribute value (its stored XSS) are left as the text they replaced; `name` attributes are dropped.
 fn with_port_divergences(rails: &str) -> String {
     const INSERTED_LINK: &str = "<a target=\"_blank\" href=\"";
     enum State {
@@ -148,6 +148,11 @@ fn with_port_divergences(rails: &str) -> String {
             let text_end = text_start + rest[text_start..].find("</a>").unwrap();
             out.push_str(&rest[text_start..text_end].replace('>', "&gt;"));
             rest = &rest[text_end + 4..];
+            continue;
+        }
+        if matches!(state, State::Tag) && rest.starts_with(" name=\"") {
+            let value_end = " name=\"".len() + rest[" name=\"".len()..].find('"').unwrap();
+            rest = &rest[value_end + 1..];
             continue;
         }
         match (&state, c) {
@@ -173,6 +178,7 @@ fn port_divergences_apply_to_attribute_values_only() {
         with_port_divergences("<p title=\"a>b <a target=\"_blank\" href=\"http://x.test/\">http://x.test/</a>\">c > <a target=\"_blank\" href=\"http://y.test/\">y</a></p>"),
         "<p title=\"a&gt;b http://x.test/\">c > <a target=\"_blank\" href=\"http://y.test/\">y</a></p>"
     );
+    assert_eq!(with_port_divergences("<a name=\"x y\" title=\"name=\">n</a>"), "<a title=\"name=\">n</a>");
 }
 
 // --- Security assertions -------------------------------------------------------------------------

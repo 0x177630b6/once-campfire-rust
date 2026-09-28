@@ -72,6 +72,12 @@ fn an_email_address_after_a_greater_than_sign_in_an_attribute_cannot_break_out_o
 }
 
 #[test]
+fn name_attributes_cant_clobber_the_pages_globals() {
+    let html = presentation(r#"<p><a name="body" href="/x">x</a><span name="cookie">y</span></p>"#);
+    assert_eq!(parsed_markup(&html), ["p", "a", "a[href]", "span"], "{html}");
+}
+
+#[test]
 fn urls_in_text_are_still_linked() {
     let html = presentation("<p>see http://example.com/a?b=1&amp;c=2 and me@example.com</p>");
     assert!(html.contains(

@@ -379,6 +379,9 @@ Deliberate:
   (`data-copy-to-clipboard-url-value`), and the copy-to-clipboard controller (an override) makes it
   absolute against the page. The bot API's cached JSON, whose URLs must be absolute, is cached per
   base URL instead.
+- **Rich text drops `name` attributes.** Rails' default sanitizer allowlist keeps them, which lets
+  a message clobber the page's DOM globals (`<img name="body">` shadows `document.body`). Nothing
+  Campfire's composer writes has one.
 - **Rich text keeps only highlight colors in `style`.** Where Rails runs `style` through Loofah's
   CSS scrubber, the sanitizer keeps only `color` and `background-color` with a plain color value
   (a keyword, hex, `rgb()`/`hsl()`, or a custom property like Lexxy's `var(--highlight-1)`), which

@@ -18,9 +18,11 @@ pub const DEFAULT_ALLOWED_TAGS: &[&str] = &[
     "pre", "samp", "small", "span", "strong", "sub", "sup", "time", "tt", "ul", "var",
 ];
 
-/// `Rails::HTML::Concern::Scrubber::SafeList::DEFAULT_ALLOWED_ATTRIBUTES`
+/// `Rails::HTML::Concern::Scrubber::SafeList::DEFAULT_ALLOWED_ATTRIBUTES` without `name`, which let
+/// a message clobber the page's DOM globals (`<img name="body">` shadows `document.body`). Nothing
+/// Campfire's composer writes has one.
 pub const DEFAULT_ALLOWED_ATTRIBUTES: &[&str] =
-    &["abbr", "alt", "cite", "class", "datetime", "height", "href", "lang", "name", "src", "title", "width", "xml:lang"];
+    &["abbr", "alt", "cite", "class", "datetime", "height", "href", "lang", "src", "title", "width", "xml:lang"];
 
 /// `ContentFilters::EDITOR_FORMATTING_TAGS` (reference/app/helpers/content_filters.rb)
 pub const EDITOR_FORMATTING_TAGS: &[&str] = &["s", "u", "mark", "table", "thead", "tbody", "tfoot", "tr", "th", "td"];
