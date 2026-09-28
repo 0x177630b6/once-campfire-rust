@@ -14,22 +14,18 @@ pub fn opengraph_attributes(body: Option<&[u8]>) -> Vec<(&'static str, String)> 
     let metas = html::meta_elements(&html);
     let meta_encoding = html::meta_encoding(&metas);
 
-    let mut found: Vec<(String, String)> = Vec::new();
+    // Only the `ATTRIBUTES` keys are sliced out, so only they are kept.
+    let mut found: [Option<String>; ATTRIBUTES.len()] = Default::default();
     for meta in metas.iter().filter(|m| is_opengraph_tag(m)) {
         let key = if meta.has_attr("property") { "property" } else { "name" };
         let name = meta.attr(key).unwrap_or("").replace("og:", "");
+        let Some(index) = ATTRIBUTES.iter().position(|a| *a == name) else { continue };
         let Some(content) = meta.attr("content").filter(|c| !is_blank(c)) else { continue };
         let content = if meta_encoding.is_some() { content.to_string() } else { content.chars().filter(char::is_ascii).collect() };
-        match found.iter_mut().find(|(k, _)| *k == name) {
-            Some(existing) => existing.1 = content,
-            None => found.push((name, content)),
-        }
+        found[index] = Some(content);
     }
 
-    ATTRIBUTES
-        .iter()
-        .filter_map(|key| found.iter().find(|(k, _)| k == key).map(|(_, v)| (*key, v.clone())))
-        .collect()
+    ATTRIBUTES.into_iter().zip(found).filter_map(|(key, value)| Some((key, value?))).collect()
 }
 
 /// `//*/meta[starts-with(@property, "og:") or starts-with(@name, "og:")]`
@@ -63,5 +59,33 @@ mod tests {
         let attributes = opengraph_attributes(Some(html.as_bytes()));
         assert_eq!(attributes[3], ("description", "Hello World".to_string()));
         assert!(opengraph_attributes(None).is_empty());
+    }
+
+    /// Pages as large as a fetch allows, built to make a parser do quadratic work, parse in time
+    /// proportional to their size.
+    #[test]
+    fn parses_pathological_pages_quickly() {
+        let limit = super::super::fetch::MAX_BODY_SIZE;
+        let fill = |open: &str, item: &dyn Fn(usize) -> String, close: &str| {
+            let mut page = String::from(open);
+            for i in 0.. {
+                if page.len() > limit - close.len() - 64 {
+                    break;
+                }
+                page.push_str(&item(i));
+            }
+            page + close
+        };
+        let pages = [
+            fill("<meta property=\"og:title\" content=\"x\" ", &|i| format!("a{i:07} "), ">"),
+            fill("<meta charset=utf-8>", &|i| format!("<meta property=\"og:t{i}\" content=\"x\">"), "<meta property=\"og:title\" content=\"x\">"),
+            fill("<meta property=\"og:title\" content=\"", &|_| "&amp;é".to_string(), "\">"),
+        ];
+        for page in pages {
+            let started = std::time::Instant::now();
+            let found = opengraph_attributes(Some(page.as_bytes()));
+            assert_eq!(found[0].0, "title");
+            assert!(started.elapsed() < std::time::Duration::from_secs(1), "{:?} for {}…", started.elapsed(), &page[..60]);
+        }
     }
 }

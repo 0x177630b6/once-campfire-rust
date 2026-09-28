@@ -331,6 +331,14 @@ Deliberate:
   capped at a billion. A WebSocket connection holds up to 64 subscriptions with identifiers of up to
   4 KiB, and a client that doesn't read what it's sent for 30 seconds is disconnected. Deactivating
   or banning a user closes their open connections once the change commits.
+- **Link unfurling is bounded in time.** Rails gives each connect and read of an unfurl 60
+  seconds, across up to 10 redirects and the image check. Now an unfurl gets 10 seconds in all and
+  5 per connect or read, and a page that takes longer unfurls nothing. At most 16 unfurls run at
+  once, and only a `meta` tag's first 256 attributes are read.
+- **Bot webhooks are bounded.** A delivery gets 60 seconds in all, on top of Rails' 7 per connect
+  or read; one that runs out answers "Failed to respond within 60 seconds", as a 7-second timeout
+  answers with its own. A reply larger than 100 MB (after decompression) fails the delivery and
+  posts nothing; Rails read replies of any size into memory.
 - **Not ported:** the duplicate `session_token` cookie Rails' Active Storage streaming sends; responses
   to requests for multiple byte ranges; and legacy AES-CBC encrypted cookies, since Campfire started
   on GCM.

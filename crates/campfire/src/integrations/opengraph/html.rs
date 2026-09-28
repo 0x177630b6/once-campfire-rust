@@ -8,6 +8,9 @@
 //! repeated attribute wins, and attribute values decode HTML 4 entities only when terminated by
 //! `;` and numeric references with or without one (an invalid one cuts the value short, as the
 //! NUL it produces ends libxml2's C string).
+//!
+//! The scanner steps through bytes: everything it matches is ASCII, so it only ever splits the
+//! text between characters.
 
 use super::entities::ENTITIES;
 
@@ -47,21 +50,25 @@ pub fn decode(bytes: &[u8]) -> String {
     out
 }
 
+/// How many attributes of one tag are kept; the rest are parsed and dropped. Real tags have a
+/// handful, and a page with thousands in one tag gains nothing from them.
+const MAX_ATTRIBUTES: usize = 256;
+
 /// The `<meta>` elements of the document, in document order.
 pub fn meta_elements(html: &str) -> Vec<Element> {
     // A NUL ends libxml2's input
     let html = &html[..html.find('\0').unwrap_or(html.len())];
-    let mut scanner = Scanner { chars: html.chars().collect(), pos: 0 };
+    let mut scanner = Scanner { bytes: html.as_bytes(), pos: 0 };
     let mut metas = Vec::new();
     while let Some(c) = scanner.peek(0) {
-        if c != '<' {
+        if c != b'<' {
             scanner.pos += 1;
             continue;
         }
         match scanner.peek(1) {
-            Some('/') => scanner.end_tag(),
-            Some('!') => scanner.markup_declaration(),
-            Some('?') => scanner.skip_past('>'),
+            Some(b'/') => scanner.end_tag(),
+            Some(b'!') => scanner.markup_declaration(),
+            Some(b'?') => scanner.skip_past(b'>'),
             Some(c) if c.is_ascii_alphabetic() => {
                 let (name, element, self_closing) = scanner.start_tag();
                 if name == "meta" {
@@ -76,22 +83,27 @@ pub fn meta_elements(html: &str) -> Vec<Element> {
     metas
 }
 
-struct Scanner {
-    chars: Vec<char>,
+struct Scanner<'a> {
+    bytes: &'a [u8],
     pos: usize,
 }
 
-fn is_blank(c: char) -> bool {
-    matches!(c, ' ' | '\t' | '\n' | '\r')
+fn is_blank(c: u8) -> bool {
+    matches!(c, b' ' | b'\t' | b'\n' | b'\r')
 }
 
-impl Scanner {
-    fn peek(&self, ahead: usize) -> Option<char> {
-        self.chars.get(self.pos + ahead).copied()
+impl Scanner<'_> {
+    fn peek(&self, ahead: usize) -> Option<u8> {
+        self.bytes.get(self.pos + ahead).copied()
     }
 
     fn starts_with_ignore_case(&self, text: &str) -> bool {
-        text.chars().enumerate().all(|(i, t)| self.peek(i).is_some_and(|c| c.eq_ignore_ascii_case(&t)))
+        self.bytes.get(self.pos..self.pos + text.len()).is_some_and(|b| b.eq_ignore_ascii_case(text.as_bytes()))
+    }
+
+    /// The text from `start` to here, which begins and ends at ASCII bytes.
+    fn text_from(&self, start: usize) -> &str {
+        std::str::from_utf8(&self.bytes[start..self.pos]).expect("split at ASCII")
     }
 
     fn skip_blanks(&mut self) {
@@ -101,7 +113,7 @@ impl Scanner {
     }
 
     /// Moves past the next `c` (or to the end).
-    fn skip_past(&mut self, c: char) {
+    fn skip_past(&mut self, c: u8) {
         while let Some(next) = self.peek(0) {
             self.pos += 1;
             if next == c {
@@ -113,38 +125,37 @@ impl Scanner {
     /// `htmlParseHTMLName`: `[A-Za-z_:.][A-Za-z0-9:_.-]*`, lowercased.
     fn html_name(&mut self) -> Option<String> {
         let first = self.peek(0)?;
-        if !(first.is_ascii_alphabetic() || matches!(first, '_' | ':' | '.')) {
+        if !(first.is_ascii_alphabetic() || matches!(first, b'_' | b':' | b'.')) {
             return None;
         }
-        let mut name = String::new();
-        while let Some(c) = self.peek(0).filter(|c| c.is_ascii_alphanumeric() || matches!(c, ':' | '-' | '_' | '.')) {
-            name.push(c.to_ascii_lowercase());
+        let start = self.pos;
+        while self.peek(0).is_some_and(|c| c.is_ascii_alphanumeric() || matches!(c, b':' | b'-' | b'_' | b'.')) {
             self.pos += 1;
         }
-        Some(name)
+        Some(self.text_from(start).to_ascii_lowercase())
     }
 
     fn end_tag(&mut self) {
         self.pos += 2;
         if self.html_name().is_some() {
-            self.skip_past('>');
+            self.skip_past(b'>');
         }
     }
 
     /// `<!--…-->` (with `<!-->` and `<!--->` closing at once, and `--!>` accepted), `<!DOCTYPE…>`,
     /// and any other `<!…>` skipped as a bogus comment.
     fn markup_declaration(&mut self) {
-        if self.peek(2) == Some('-') && self.peek(3) == Some('-') {
+        if self.peek(2) == Some(b'-') && self.peek(3) == Some(b'-') {
             self.pos += 4;
-            if self.peek(0) == Some('>') {
+            if self.peek(0) == Some(b'>') {
                 self.pos += 1;
                 return;
             }
-            if self.peek(0) == Some('-') && self.peek(1) == Some('>') {
+            if self.peek(0) == Some(b'-') && self.peek(1) == Some(b'>') {
                 self.pos += 2;
                 return;
             }
-            while self.pos < self.chars.len() {
+            while self.pos < self.bytes.len() {
                 if self.starts_with_ignore_case("-->") {
                     self.pos += 3;
                     return;
@@ -156,7 +167,7 @@ impl Scanner {
                 self.pos += 1;
             }
         } else {
-            self.skip_past('>');
+            self.skip_past(b'>');
         }
     }
 
@@ -169,28 +180,28 @@ impl Scanner {
         loop {
             match self.peek(0) {
                 None => break,
-                Some('>') => break,
-                Some('/') if self.peek(1) == Some('>') => break,
+                Some(b'>') => break,
+                Some(b'/') if self.peek(1) == Some(b'>') => break,
                 _ => {}
             }
             match self.html_name() {
                 Some(attribute) => {
                     self.skip_blanks();
-                    let value = if self.peek(0) == Some('=') {
+                    let value = if self.peek(0) == Some(b'=') {
                         self.pos += 1;
                         self.skip_blanks();
                         self.attribute_value()
                     } else {
                         String::new()
                     };
-                    if !attributes.iter().any(|(n, _)| *n == attribute) {
+                    if attributes.len() < MAX_ATTRIBUTES && !attributes.iter().any(|(n, _)| *n == attribute) {
                         attributes.push((attribute, value));
                     }
                 }
                 None => {
                     // Dump the bogus attribute string up to the next blank or the end of the tag
                     while let Some(c) = self.peek(0) {
-                        if is_blank(c) || c == '>' || (c == '/' && self.peek(1) == Some('>')) {
+                        if is_blank(c) || c == b'>' || (c == b'/' && self.peek(1) == Some(b'>')) {
                             break;
                         }
                         self.pos += 1;
@@ -199,10 +210,10 @@ impl Scanner {
             }
             self.skip_blanks();
         }
-        let self_closing = self.peek(0) == Some('/');
+        let self_closing = self.peek(0) == Some(b'/');
         if self_closing {
             self.pos += 2;
-        } else if self.peek(0) == Some('>') {
+        } else if self.peek(0) == Some(b'>') {
             self.pos += 1;
         }
         (name, Element { attributes }, self_closing)
@@ -211,7 +222,7 @@ impl Scanner {
     /// `htmlParseAttValue`
     fn attribute_value(&mut self) -> String {
         match self.peek(0) {
-            Some(quote @ ('"' | '\'')) => {
+            Some(quote @ (b'"' | b'\'')) => {
                 self.pos += 1;
                 let value = self.attribute_text(Some(quote));
                 if self.peek(0) == Some(quote) {
@@ -224,21 +235,22 @@ impl Scanner {
     }
 
     /// `htmlParseHTMLAttribute`: up to the quote, or (unquoted) a blank or `>`.
-    fn attribute_text(&mut self, stop: Option<char>) -> String {
+    fn attribute_text(&mut self, stop: Option<u8>) -> String {
+        let ends_text = |c: u8| c == b'&' || Some(c) == stop || (stop.is_none() && (c == b'>' || is_blank(c)));
         let mut out = String::new();
         let mut truncated = false;
-        while let Some(c) = self.peek(0) {
-            if Some(c) == stop || (stop.is_none() && (c == '>' || is_blank(c))) {
+        loop {
+            let start = self.pos;
+            while self.peek(0).is_some_and(|c| !ends_text(c)) {
+                self.pos += 1;
+            }
+            if !truncated {
+                out.push_str(self.text_from(start));
+            }
+            if self.peek(0) != Some(b'&') {
                 break;
             }
-            if c != '&' {
-                if !truncated {
-                    out.push(c);
-                }
-                self.pos += 1;
-                continue;
-            }
-            let decoded = if self.peek(1) == Some('#') { self.char_ref().map(|c| c.to_string()) } else { Some(self.entity_ref()) };
+            let decoded = if self.peek(1) == Some(b'#') { self.char_ref().map(|c| c.to_string()) } else { Some(self.entity_ref()) };
             match decoded {
                 Some(text) if !truncated => out.push_str(&text),
                 Some(_) => {}
@@ -250,16 +262,16 @@ impl Scanner {
 
     /// `htmlParseCharRef`: `None` for a value that isn't a valid XML character.
     fn char_ref(&mut self) -> Option<char> {
-        let hex = matches!(self.peek(2), Some('x' | 'X'));
+        let hex = matches!(self.peek(2), Some(b'x' | b'X'));
         self.pos += if hex { 3 } else { 2 };
         let radix = if hex { 16 } else { 10 };
         let mut value: u32 = 0;
         while let Some(c) = self.peek(0) {
-            if c == ';' {
+            if c == b';' {
                 self.pos += 1;
                 break;
             }
-            let Some(digit) = c.to_digit(radix) else { break };
+            let Some(digit) = char::from(c).to_digit(radix) else { break };
             if value < 0x110000 {
                 value = value * radix + digit;
             }
@@ -273,15 +285,15 @@ impl Scanner {
     fn entity_ref(&mut self) -> String {
         self.pos += 1;
         let start = self.pos;
-        if self.peek(0).is_some_and(|c| c.is_ascii_alphabetic() || matches!(c, '_' | ':')) {
-            while self.peek(0).is_some_and(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | ':' | '.' | '-')) {
+        if self.peek(0).is_some_and(|c| c.is_ascii_alphabetic() || matches!(c, b'_' | b':')) {
+            while self.peek(0).is_some_and(|c| c.is_ascii_alphanumeric() || matches!(c, b'_' | b':' | b'.' | b'-')) {
                 self.pos += 1;
             }
         }
-        let name: String = self.chars[start..self.pos].iter().collect();
+        let name = self.text_from(start);
         if !name.is_empty()
-            && self.peek(0) == Some(';')
-            && let Ok(index) = ENTITIES.binary_search_by(|(n, _)| (*n).cmp(name.as_str()))
+            && self.peek(0) == Some(b';')
+            && let Ok(index) = ENTITIES.binary_search_by(|(n, _)| (*n).cmp(name))
         {
             self.pos += 1;
             return char::from_u32(ENTITIES[index].1).map(String::from).unwrap_or_default();
@@ -292,7 +304,7 @@ impl Scanner {
     /// `htmlParseScript`: everything up to `</name` (any case) is text.
     fn raw_text(&mut self, name: &str) {
         let end = format!("</{name}");
-        while self.pos < self.chars.len() && !self.starts_with_ignore_case(&end) {
+        while self.pos < self.bytes.len() && !self.starts_with_ignore_case(&end) {
             self.pos += 1;
         }
     }

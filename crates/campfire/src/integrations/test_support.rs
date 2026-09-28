@@ -262,6 +262,33 @@ async fn serve<S: AsyncRead + AsyncWrite + Unpin>(stream: S, routes: &[Route], l
     stream.shutdown().await
 }
 
+/// A server that answers every request with `head` and then a byte of body every 50 ms, until
+/// the client hangs up.
+pub async fn trickling_server(head: &'static str) -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let _ = stream.read(&mut [0; 4096]).await;
+                let _ = stream.write_all(head.as_bytes()).await;
+                while stream.write_all(b" ").await.is_ok() {
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
+            });
+        }
+    });
+    addr
+}
+
+/// A gzip bomb:`megabytes` gzip members of a megabyte of zeros each, about 1 KB apiece.
+pub fn gzip_bomb(megabytes: usize) -> Vec<u8> {
+    use std::io::Write;
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
+    encoder.write_all(&vec![0; 1024 * 1024]).unwrap();
+    encoder.finish().unwrap().repeat(megabytes)
+}
+
 /// The reference fixtures in a fresh database (like `fixtures :all`).
 pub struct TestDb {
     pub db: campfire_db::Database,
