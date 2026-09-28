@@ -130,13 +130,26 @@ fn without_forgery_tokens(expected: Vec<String>) -> Vec<String> {
             || (t.starts_with("<meta ") && (t.contains(r#"name="csrf-token""#) || t.contains(r#"name="csrf-param""#)))
     };
     let mut out = Vec::with_capacity(expected.len());
-    for token in expected.into_iter().filter(|t| !is_token(t)) {
+    for token in expected.into_iter().filter(|t| !is_token(t)).map(with_relative_copy_link) {
         match token.strip_prefix('#') {
             Some(text) => push_text(&mut out, text),
             None => out.push(token),
         }
     }
     out
+}
+
+/// A message's "Copy link" button carries the message's path, which the browser makes absolute,
+/// rather than an absolute URL built from the request's host (README, Known differences).
+fn with_relative_copy_link(token: String) -> String {
+    const ABSOLUTE: &str = "data-copy-to-clipboard-content-value=\"http";
+    let Some(start) = token.find(ABSOLUTE).filter(|_| token.contains("title=\"Copy link\"")) else { return token };
+    let value_start = start + "data-copy-to-clipboard-content-value=\"".len();
+    let value_end = value_start + token[value_start..].find('"').unwrap();
+    let url = &token[value_start..value_end];
+    let path = &url[url.find("://").unwrap() + 3..];
+    let path = &path[path.find('/').unwrap()..];
+    format!("{}data-copy-to-clipboard-url-value=\"{path}\"{}", &token[..start], &token[value_end + 1..])
 }
 
 fn assert_same(label: &str, expected: &[String], actual: &[String]) {

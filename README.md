@@ -373,6 +373,12 @@ Deliberate:
   the inserted `<a href="...">` closed the attribute, turning the rest of its value into live
   markup (a stored XSS; it affects the Rails app). The port escapes `<` and `>` in attribute values
   before autolinking, so URLs inside attributes stay as they were. The same DOM otherwise.
+- **Cached markup doesn't carry the request's host.** A message's "Copy link" button held an
+  absolute URL built from the Host header, inside a fragment cached for everyone, so one request
+  with a forged Host changed the link everyone copied. The button now carries the message's path
+  (`data-copy-to-clipboard-url-value`), and the copy-to-clipboard controller (an override) makes it
+  absolute against the page. The bot API's cached JSON, whose URLs must be absolute, is cached per
+  base URL instead.
 - **Content attachments nest at most 8 deep.** An `<action-text-attachment>` carrying HTML in its
   `content` renders that content, attachments included; each level parses and sanitizes
   everything below it again, so a 336 KB body of nested ones took 10 seconds to render. Deeper

@@ -53,3 +53,13 @@ test("decodes consecutive tokens in one URL", () => {
   const url = "/rails/active_storage/representations/redirect/eyJfcmFpbHMiOnsiZGF0YSI6NSwicHVyIjoiYmxvYl9pZCJ9fQ==--4ceb3a7460a929db324ca5fd0dffee9c8527bfad/eyJfcmFpbHMiOnsiZGF0YSI6eyJmb3JtYXQiOiJqcGciLCJyZXNpemVfdG9fbGltaXQiOlsxMjAwLDgwMF19LCJwdXIiOiJ2YXJpYXRpb24ifX0=--28426ca1e33b0fea71b8b10b7f52a844de5886cf/moon.jpg"
   assert.equal(maskText(url, { seedTime }), `/rails/active_storage/representations/redirect/«signed_id:blob_id:5»/«signed_id:variation:{"format":"jpg","resize_to_limit":[1200,800]}»/moon.jpg`)
 })
+
+test("compares a message's copy link by its path", () => {
+  const button = (attr: string) => `<button title="Copy link" data-controller="copy-to-clipboard" ${attr}></button>`
+  const rails = normalizeDocument(button(`data-copy-to-clipboard-content-value="http://reference.test:3000/rooms/1/@2"`))
+  const port = normalizeDocument(button(`data-copy-to-clipboard-url-value="/rooms/1/@2"`))
+  assert.equal(rails, port)
+  assert.match(port, /data-copy-to-clipboard-url-value="\/rooms\/1\/@2"/)
+  const invite = normalizeDocument(`<button title="Copy" data-copy-to-clipboard-content-value="http://a.test/join/x"></button>`)
+  assert.match(invite, /content-value="http:\/\/a.test\/join\/x"/)
+})

@@ -53,7 +53,8 @@ function walk(node: any, depth: number, out: string[], options: NormalizeOptions
   }
   const tag = node.tagName as string
   if (isForgeryToken(tag, node.attrs)) return
-  const attrs = [...node.attrs]
+  const attrs = node.attrs
+    .map((a: any) => relativeCopyLink(node.attrs, a))
     .sort((a: any, b: any) => a.name.localeCompare(b.name))
     .map((a: any) => formatAttr(tag, a.name, maskAttr(tag, a.name, a.value, node.attrs, options)))
   out.push(`${indent}<${tag}${attrs.join("")}>`)
@@ -96,6 +97,16 @@ function normalizeJson(text: string): string {
 function isForgeryToken(tag: string, attrs: any[]): boolean {
   const name = attrs.find((a: any) => a.name === "name")?.value
   return (tag === "input" && name === "authenticity_token") || (tag === "meta" && (name === "csrf-token" || name === "csrf-param"))
+}
+
+// A message's "Copy link" button: Rails puts the absolute URL, built from the request's host, in
+// the content value; the Rust app caches that markup for every request, so it carries the path in
+// a url value that its copy-to-clipboard controller makes absolute (README, Known differences).
+function relativeCopyLink(attrs: any[], attr: any): any {
+  const title = attrs.find((a: any) => a.name === "title")?.value
+  const url = /^https?:\/\/[^\/]+(\/.*)$/.exec(attr.value)
+  if (title !== "Copy link" || attr.name !== "data-copy-to-clipboard-content-value" || !url) return attr
+  return { name: "data-copy-to-clipboard-url-value", value: url[1] }
 }
 
 function maskAttr(tag: string, name: string, value: string, attrs: any[], options: NormalizeOptions): string {

@@ -72,15 +72,17 @@ pub fn user_view(secrets: &Secrets, user: &User) -> UserView {
 
 /// `users/_user.json.jbuilder` (`json.cache! user`).
 fn cached_user_json(secrets: &Secrets, base_url: &str, user: &User) -> UserJson {
-    let key = || jbuilder_key("users/_user", &cache_key_with_version("users", user.id, user.updated_at.jiff()));
+    let key = || jbuilder_key("users/_user", &cache_key_with_version("users", user.id, user.updated_at.jiff()), base_url);
     fragment_cache::try_fetch_value(key, || Ok::<_, std::convert::Infallible>(user_json(secrets, base_url, user)))
         .unwrap_or_else(|never| match never {})
 }
 
 /// Jbuilder's `json.cache!` key: `jbuilder/views/<template>:<digest>/<record key>`. The digest
-/// is the Rust build's (templates can't change while the process runs).
-fn jbuilder_key(template: &str, record: &str) -> String {
-    format!("jbuilder/views/{template}:{}/{record}", env!("CARGO_PKG_VERSION"))
+/// is the Rust build's (templates can't change while the process runs). The JSON carries absolute
+/// URLs built from the request's `base_url`, which comes from its Host header, so the key does too:
+/// Rails' key doesn't, and one request with a forged Host fed its URLs to every bot.
+fn jbuilder_key(template: &str, record: &str, base_url: &str) -> String {
+    format!("jbuilder/views/{template}:{}/{record}/{base_url}", env!("CARGO_PKG_VERSION"))
 }
 
 /// `users/_user.json.jbuilder`.
@@ -345,7 +347,7 @@ impl<'a> Presenter<'a> {
 
     /// `messages/_message.json.jbuilder` (`json.cache! message`).
     pub fn message_json(&self, message: &Message, base_url: &str) -> Result<MessageJson> {
-        let key = || jbuilder_key("messages/_message", &cache_key_with_version("messages", message.id, message.updated_at.jiff()));
+        let key = || jbuilder_key("messages/_message", &cache_key_with_version("messages", message.id, message.updated_at.jiff()), base_url);
         fragment_cache::try_fetch_value(key, || self.render_message_json(message, base_url))
     }
 
@@ -362,7 +364,7 @@ impl<'a> Presenter<'a> {
 
     /// `messages/boosts/_boost.json.jbuilder` (`json.cache! boost`).
     pub fn boost_json(&self, boost: &Boost, message: &Message, base_url: &str) -> Result<BoostJson> {
-        let key = || jbuilder_key("messages/boosts/_boost", &cache_key_with_version("boosts", boost.id, boost.updated_at.jiff()));
+        let key = || jbuilder_key("messages/boosts/_boost", &cache_key_with_version("boosts", boost.id, boost.updated_at.jiff()), base_url);
         fragment_cache::try_fetch_value(key, || self.render_boost_json(boost, message, base_url))
     }
 
