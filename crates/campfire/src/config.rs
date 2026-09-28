@@ -11,17 +11,15 @@
 //!   `https://` and the first `TLS_DOMAIN`, or the project's URL without one.
 //! - `DISABLE_SSL`: `config/environments/production.rb` (`assume_ssl`/`force_ssl` unless present).
 //! - `APP_VERSION`, `GIT_REVISION`: `config/initializers/version.rb` (`X-Version`, `X-Rev`).
-//! - `PORT`: `config/puma.rb` (default 3000). Unused by `campfire server`, which (like Thruster,
-//!   which set `PORT` for Puma) puts the app on `TARGET_PORT`.
 //! - `RAILS_ENV`: names the database file (`storage/db/<env>.sqlite3`, `config/database.yml`).
 //! - `RAILS_MAX_THREADS`: `config/database.yml` pool size, used for the reader pool.
 //! - `JOB_CONCURRENCY`: Resque worker count (`config/puma.rb`), used for job concurrency.
 //! - `RAILS_LOG_LEVEL`: `config/environments/production.rb` log level.
-//! - `SENTRY_DSN`, `SKIP_TELEMETRY`: `config/initializers/sentry.rb`. Read but not acted on: the
-//!   port sends no telemetry.
 //! - Thruster's (`TLS_DOMAIN`, `HTTP_PORT`, `HTTP_*_TIMEOUT`, `TARGET_PORT`, ...): read by
 //!   `campfire_kit::front::FrontConfig`, which does Thruster's job in this binary.
-//! - `REDIS_URL`, `WEB_CONCURRENCY`: not applicable (no Redis, one process).
+//! - Not applicable: `REDIS_URL` and `WEB_CONCURRENCY` (no Redis, one process), `PORT` (Puma's;
+//!   the app listens on Thruster's `TARGET_PORT`), and `SENTRY_DSN` and `SKIP_TELEMETRY` (the app
+//!   sends no telemetry).
 //! - `CAMPFIRE_FRAGMENT_CACHE_MB`: the fragment store's limit in megabytes (default 32). The
 //!   reference caches fragments in Redis (`redis_cache_store`) with no `maxmemory`; this store is
 //!   in the process, so it's bounded like Rails' `MemoryStore` (default `size` 32 MB), evicting the
@@ -34,7 +32,6 @@ use std::path::PathBuf;
 
 use anyhow::{Context, bail};
 
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct Config {
     pub secret_key_base: String,
@@ -48,23 +45,17 @@ pub struct Config {
     pub app_version: String,
     /// `Rails.application.config.git_revision`
     pub git_revision: Option<String>,
-    pub bind: String,
-    pub port: u16,
     pub environment: String,
     pub storage: StoragePaths,
     pub db_readers: usize,
     pub job_concurrency: usize,
     pub log_level: String,
-    pub sentry_dsn: Option<String>,
     /// The fragment store's limit in bytes (`CAMPFIRE_FRAGMENT_CACHE_MB`).
     pub fragment_cache_bytes: usize,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct StoragePaths {
-    /// `Rails.root.join("storage")`
-    pub root: PathBuf,
     /// `storage/db/<env>.sqlite3`
     pub database: PathBuf,
     /// The `local` Disk service root, `storage/files`.
@@ -80,7 +71,6 @@ impl StoragePaths {
             database: root.join("db").join(format!("{environment}.sqlite3")),
             files: root.join("files"),
             backups: root.join("backups"),
-            root,
         }
     }
 
@@ -132,8 +122,6 @@ impl Config {
                 None => Ok(default),
             }
         };
-        let port = number("PORT", 3000)?;
-        let port = u16::try_from(port).with_context(|| format!("PORT={port} is out of range"))?;
 
         Ok(Self {
             secret_key_base,
@@ -143,14 +131,11 @@ impl Config {
             disable_ssl: present("DISABLE_SSL").is_some(),
             app_version: present("APP_VERSION").or_else(|| present("GIT_REVISION")).unwrap_or_else(|| "0".into()),
             git_revision: get("GIT_REVISION"),
-            bind: present("BIND").unwrap_or_else(|| "0.0.0.0".into()),
-            port,
             environment,
             storage,
             db_readers: number("RAILS_MAX_THREADS", 5)?.max(1),
             job_concurrency: number("JOB_CONCURRENCY", 2)?.max(1),
             log_level: present("RAILS_LOG_LEVEL").unwrap_or_else(|| "info".into()),
-            sentry_dsn: present("SENTRY_DSN"),
             fragment_cache_bytes: number("CAMPFIRE_FRAGMENT_CACHE_MB", campfire_views::fragment_cache::DEFAULT_MAX_BYTES >> 20)?
                 .saturating_mul(1 << 20),
         })
@@ -194,7 +179,6 @@ mod tests {
         assert!(!config.disable_ssl);
         assert_eq!(config.app_version, "0");
         assert_eq!(config.git_revision, None);
-        assert_eq!(config.port, 3000);
         assert_eq!(config.storage.database, PathBuf::from("storage/db/production.sqlite3"));
         assert_eq!(config.storage.files, PathBuf::from("storage/files"));
         assert_eq!(config.storage.backup_file(), PathBuf::from("storage/backups/production.sqlite3"));

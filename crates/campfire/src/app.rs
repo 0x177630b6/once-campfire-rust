@@ -28,11 +28,9 @@ use crate::{channels, controllers, jobs};
 pub use crate::channels::{Cable, CableUser};
 
 /// Everything that outlives a request. Cheap to share as [`App`].
-#[allow(dead_code)]
 pub struct AppState {
     pub config: Config,
     pub secrets: Arc<Secrets>,
-    pub crypto: SharedCrypto,
     pub clock: SharedClock,
     pub db: Database,
     pub storage: Arc<Storage>,
@@ -109,7 +107,6 @@ pub async fn boot(config: Config) -> anyhow::Result<Booted> {
     let app = Arc::new(AppState {
         config,
         secrets,
-        crypto: crypto.clone(),
         clock: clock.clone(),
         db,
         storage,
@@ -244,6 +241,10 @@ const USAGE: &str = "usage: campfire [server|backup]";
 /// `-shm` files; the next boot's `db:prepare` picks it up.
 pub fn run() -> anyhow::Result<()> {
     let command = std::env::args().nth(1);
+    if matches!(command.as_deref(), Some("-h" | "--help")) {
+        println!("{USAGE}");
+        return Ok(());
+    }
     let config = Config::from_env()?;
     init_logging(&config);
     match command.as_deref() {
@@ -254,10 +255,6 @@ pub fn run() -> anyhow::Result<()> {
             tokio::runtime::Runtime::new()?.block_on(serve(config))
         }
         Some("backup") => backup(&config),
-        Some("-h" | "--help") => {
-            println!("{USAGE}");
-            Ok(())
-        }
         Some(other) => anyhow::bail!("unknown command {other:?}\n{USAGE}"),
     }
 }

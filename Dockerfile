@@ -164,7 +164,7 @@ WORKDIR /rails
 COPY --from=build /out/campfire /usr/local/bin/campfire
 
 # bin/boot: what the reference's `thrust bin/start-app` did, in one process: HTTP_PORT (80) and,
-# with TLS_DOMAIN, HTTPS_PORT (443), with the app itself also on TARGET_PORT (3000). Thruster's
+# with TLS_DOMAIN, HTTPS_PORT (443), with the app itself also on TARGET_PORT (3000, loopback only unless TARGET_BIND says otherwise). Thruster's
 # environment (HTTP_*_TIMEOUT, TLS_DOMAIN, ACME_DIRECTORY, CACHE_SIZE, ... and their THRUSTER_
 # forms) means the same.
 COPY --chmod=755 <<'EOF' /rails/bin/boot
