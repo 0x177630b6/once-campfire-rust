@@ -179,10 +179,18 @@ impl From<String> for Param {
     }
 }
 
-/// An insertion-ordered string-keyed map, like the Ruby `Hash` behind Rails params.
-#[derive(Debug, Clone, Default, PartialEq)]
+/// An insertion-ordered string-keyed map, like the Ruby `Hash` behind Rails params. Indexed, so
+/// params with many keys (a large JSON body, a long query string) cost linear time, not quadratic.
+#[derive(Debug, Clone, Default)]
 pub struct ParamMap {
-    entries: Vec<(String, Param)>,
+    entries: indexmap::IndexMap<String, Param>,
+}
+
+/// Equal when the same keys map to equal values in the same order, as Ruby hashes compare.
+impl PartialEq for ParamMap {
+    fn eq(&self, other: &Self) -> bool {
+        self.entries.len() == other.entries.len() && self.entries.iter().eq(other.entries.iter())
+    }
 }
 
 impl ParamMap {
@@ -191,11 +199,11 @@ impl ParamMap {
     }
 
     pub fn get(&self, key: &str) -> Option<&Param> {
-        self.entries.iter().find(|(k, _)| k == key).map(|(_, v)| v)
+        self.entries.get(key)
     }
 
     pub fn get_mut(&mut self, key: &str) -> Option<&mut Param> {
-        self.entries.iter_mut().find(|(k, _)| k == key).map(|(_, v)| v)
+        self.entries.get_mut(key)
     }
 
     pub fn str(&self, key: &str) -> Option<&str> {
@@ -203,25 +211,20 @@ impl ParamMap {
     }
 
     pub fn contains_key(&self, key: &str) -> bool {
-        self.entries.iter().any(|(k, _)| k == key)
+        self.entries.contains_key(key)
     }
 
     /// Ruby's `hash[key] = value`: replaces in place, keeping the original position.
     pub fn insert(&mut self, key: impl Into<String>, value: Param) {
-        let key = key.into();
-        match self.get_mut(&key) {
-            Some(slot) => *slot = value,
-            None => self.entries.push((key, value)),
-        }
+        self.entries.insert(key.into(), value);
     }
 
     pub fn remove(&mut self, key: &str) -> Option<Param> {
-        let index = self.entries.iter().position(|(k, _)| k == key)?;
-        Some(self.entries.remove(index).1)
+        self.entries.shift_remove(key)
     }
 
     pub fn keys(&self) -> impl Iterator<Item = &str> {
-        self.entries.iter().map(|(k, _)| k.as_str())
+        self.entries.keys().map(String::as_str)
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&String, &Param)> {
@@ -905,5 +908,14 @@ mod tests {
         let params = from_query_string("user_ids[]=1&user_ids[]=2").unwrap();
         assert_eq!(params.fetch("user_ids", Param::Array(vec![])).to_json(), json!(["1", "2"]));
         assert_eq!(params.fetch("nope", Param::Array(vec![])).to_json(), json!([]));
+    }
+
+    #[test]
+    fn many_keys_build_in_linear_time() {
+        let object: serde_json::Map<String, serde_json::Value> = (0..100_000).map(|n| (format!("k{n}"), n.into())).collect();
+        let started = std::time::Instant::now();
+        let Param::Hash(map) = Param::from_json(serde_json::Value::Object(object)) else { panic!("a hash") };
+        assert_eq!(map.len(), 100_000);
+        assert!(started.elapsed() < std::time::Duration::from_secs(1), "{:?}", started.elapsed());
     }
 }

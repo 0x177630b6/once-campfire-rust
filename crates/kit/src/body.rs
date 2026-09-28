@@ -13,6 +13,9 @@ use crate::request::media_type;
 
 /// `Rack::Utils.multipart_total_part_limit` / `multipart_file_limit`.
 pub const MULTIPART_PART_LIMIT: usize = 4096;
+/// The most of a non-multipart body read into memory (forms are limited to 4 MB after that, as in
+/// Rack); more is a 413. Rails reads any size.
+pub const MAX_BUFFERED_BODY: usize = 16 * 1024 * 1024;
 pub const MULTIPART_FILE_LIMIT: usize = 128;
 
 /// The body as read: raw bytes (empty for multipart) and the params parsed from it.
@@ -61,7 +64,9 @@ pub async fn parse(
             return parse_multipart(body, boundary, limit).await;
         }
 
-    let raw = axum::body::to_bytes(body, limit.unwrap_or(usize::MAX)).await.map_err(|e| {
+    // Everything but multipart (whose files spool to disk) is read into memory, so it's bounded
+    // while it's read, whatever the configured limit.
+    let raw = axum::body::to_bytes(body, limit.unwrap_or(usize::MAX).min(MAX_BUFFERED_BODY)).await.map_err(|e| {
         if e.into_inner().downcast_ref::<http_body_util::LengthLimitError>().is_some() {
             BodyError::TooLarge
         } else {

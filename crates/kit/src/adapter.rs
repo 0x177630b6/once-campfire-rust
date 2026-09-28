@@ -275,24 +275,29 @@ async fn method_override(
     if req.method() != Method::POST {
         return Ok(req);
     }
-    let (mut parts, body) = req.into_parts();
-    let parsed = match body::parse(&Method::POST, &parts.headers, body, kit.config().max_body_bytes).await {
-        Ok(parsed) => parsed,
-        Err(error) => {
-            let mut response = axum::response::Response::new(AxumBody::empty());
-            *response.status_mut() = error.status();
-            return Err(Box::new(response));
-        }
-    };
-    let media = request::media_type(parts.headers.get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()));
+    let media = request::media_type(req.headers().get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()));
     let form_data = match media.as_deref() {
         None => true,
         Some(media) => ["application/x-www-form-urlencoded", "multipart/form-data", "multipart/related", "multipart/mixed"]
             .contains(&media),
     };
-    let from_param = form_data
-        .then(|| parsed.params.as_ref().ok().and_then(|p| p.str("_method")).map(str::to_string))
-        .flatten();
+    let (mut parts, body) = req.into_parts();
+    // Only form data can carry `_method`, so other bodies (JSON, a raw upload) are left for the
+    // action to read, rather than parsed here for every POST, before routing.
+    let (parsed, from_param, body) = if form_data {
+        let parsed = match body::parse(&Method::POST, &parts.headers, body, kit.config().max_body_bytes).await {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                let mut response = axum::response::Response::new(AxumBody::empty());
+                *response.status_mut() = error.status();
+                return Err(Box::new(response));
+            }
+        };
+        let from_param = parsed.params.as_ref().ok().and_then(|p| p.str("_method")).map(str::to_string);
+        (Some(parsed), from_param, AxumBody::empty())
+    } else {
+        (None, None, body)
+    };
     let from_header = || parts.headers.get("x-http-method-override").and_then(|v| v.to_str().ok()).map(str::to_string);
     if let Some(method) = from_param.or_else(from_header).map(|m| m.to_uppercase())
         && OVERRIDABLE_METHODS.contains(&method.as_str())
@@ -300,8 +305,10 @@ async fn method_override(
                 parts.extensions.insert(OriginalMethod(Method::POST));
                 parts.method = method;
             }
-    parts.extensions.insert(parsed);
-    Ok(axum::extract::Request::from_parts(parts, AxumBody::empty()))
+    if let Some(parsed) = parsed {
+        parts.extensions.insert(parsed);
+    }
+    Ok(axum::extract::Request::from_parts(parts, body))
 }
 
 /// `ActionDispatch::RequestId#make_request_id`
