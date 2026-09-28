@@ -3,15 +3,15 @@
 How many chat clients one Campfire can hold, with a Raspberry Pi 5 (4 × Cortex-A76, 8 GB, NVMe,
 gigabit Ethernet) as the target. No Pi was available, so it's emulated here: the app on 4 pinned
 cores of a Ryzen AI Max+ 395 under a cgroup quota of 1.2 cores (`CPUQuota=120%`,
-[`start-pi.sh`](start-pi.sh)) and 8 GB. By Geekbench 6 a Pi 5 core is about 3.5× slower than one
+`PI=1` in [`run100k.sh`](run100k.sh)) and 8 GB. By Geekbench 6 a Pi 5 core is about 3.5× slower than one
 of these, so its four cores are worth roughly 1.2 here. The network can't be throttled without
 root, so the bytes on the wire are measured and compared with gigabit Ethernet instead.
 
 ## Method
 
-[`run100k.sh`](run100k.sh): the app (native release build) with the database from
-[`../header-csrf-20260927`](../header-csrf-20260927/report.md), and `loadgen cable` on 12 other
-cores:
+[`run100k.sh`](run100k.sh): the app (native release build) on a database filled by
+[`../splice-20260927/fill.py`](../splice-20260927/fill.py) (80 messages in one room), and
+`loadgen cable` on 12 other cores:
 - 100,000 clients, spread over several loopback source addresses (one address has only ~28k
   ports towards one server port). Each subscribes to six channels, as a room page does: presence,
   unread rooms, heartbeat and three Turbo streams, all for one room.

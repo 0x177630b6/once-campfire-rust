@@ -186,6 +186,8 @@ pub enum Incoming {
     Pong,
     /// A close frame, with its status code if it had one.
     Close(Option<u16>),
+    /// The client broke the protocol; the connection answers with a 1002 close.
+    Invalid,
 }
 
 /// Reads client frames. It keeps no buffer between messages: frames are read header first, then
@@ -208,7 +210,7 @@ impl<R: AsyncRead + Unpin> Reader<R> {
         loop {
             let (fin, rsv1, opcode, payload) = self.frame().await?;
             match opcode {
-                OP_CLOSE => return Ok(Incoming::Close((payload.len() >= 2).then(|| u16::from_be_bytes([payload[0], payload[1]])))),
+                OP_CLOSE => return close_code(&payload).map(Incoming::Close),
                 OP_PING => return Ok(Incoming::Ping(payload)),
                 OP_PONG => return Ok(Incoming::Pong),
                 OP_TEXT | OP_BINARY if self.partial.is_none() => self.partial = Some((opcode, rsv1, payload)),
@@ -261,6 +263,23 @@ impl<R: AsyncRead + Unpin> Reader<R> {
             *byte ^= mask[i % 4];
         }
         Ok((fin, rsv1, opcode, payload))
+    }
+}
+
+/// A close frame's status code (RFC 6455 §5.5.1, §7.4): no payload, or a code a peer may send
+/// followed by a UTF-8 reason.
+fn close_code(payload: &[u8]) -> io::Result<Option<u16>> {
+    match payload {
+        [] => Ok(None),
+        [_] => Err(protocol_error("one-byte close payload")),
+        [high, low, reason @ ..] => {
+            let code = u16::from_be_bytes([*high, *low]);
+            if !matches!(code, 1000..=1003 | 1007..=1014 | 3000..=4999) {
+                return Err(protocol_error("invalid close code"));
+            }
+            std::str::from_utf8(reason).map_err(|_| protocol_error("close reason isn't UTF-8"))?;
+            Ok(Some(code))
+        }
     }
 }
 
@@ -330,6 +349,15 @@ impl<W: AsyncWrite + Unpin> Writer<W> {
     /// A close frame with `code` and no reason.
     pub async fn close(&mut self, code: u16) -> io::Result<()> {
         self.control(OP_CLOSE, &code.to_be_bytes()).await
+    }
+
+    /// The reply to a client's close frame, echoing its code (none if it sent none), which
+    /// completes the closing handshake.
+    pub async fn close_reply(&mut self, code: Option<u16>) -> io::Result<()> {
+        match code {
+            Some(code) => self.close(code).await,
+            None => self.control(OP_CLOSE, &[]).await,
+        }
     }
 
     async fn control(&mut self, opcode: u8, payload: &[u8]) -> io::Result<()> {
@@ -421,7 +449,7 @@ mod tests {
         bytes.extend(client_frame(OP_PING, true, false, b"p"));
         bytes.extend(client_frame(OP_CONTINUATION, true, false, "lo ☃".as_bytes()));
         bytes.extend(client_frame(OP_TEXT, true, true, &deflated(&"compressed ".repeat(100))));
-        bytes.extend(client_frame(OP_CLOSE, true, false, &1000u16.to_be_bytes()));
+        bytes.extend(client_frame(OP_CLOSE, true, false, &[&1001u16.to_be_bytes()[..], "going away".as_bytes()].concat()));
         let read: Vec<Incoming> = read_all(bytes, true).await.into_iter().map(Result::unwrap).collect();
         assert_eq!(
             read,
@@ -430,7 +458,7 @@ mod tests {
                 Incoming::Ping(b"p".to_vec()),
                 Incoming::Text("hello ☃".into()),
                 Incoming::Text("compressed ".repeat(100)),
-                Incoming::Close(Some(1000)),
+                Incoming::Close(Some(1001)),
             ]
         );
     }
@@ -446,6 +474,9 @@ mod tests {
             client_frame(OP_PING, false, false, b"x"),             // fragmented control frame
             client_frame(0x3, true, false, b"x"),                  // reserved opcode
             client_frame(OP_TEXT, true, false, &vec![b'a'; MAX_MESSAGE + 1]),
+            client_frame(OP_CLOSE, true, false, &[0x03]),                       // one-byte close
+            client_frame(OP_CLOSE, true, false, &1005u16.to_be_bytes()),        // reserved code
+            client_frame(OP_CLOSE, true, false, &[0x03, 0xe8, 0xff]),           // reason not UTF-8
         ];
         for bytes in cases {
             let read = read_all(bytes, false).await;

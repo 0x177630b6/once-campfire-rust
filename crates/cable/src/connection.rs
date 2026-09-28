@@ -114,7 +114,16 @@ pub(crate) async fn run<U: Identified + Send + Sync + 'static>(server: Server<U>
                     }
                 }
                 Some(Incoming::Pong) => {}
-                Some(Incoming::Close(_)) | None => break,
+                // Complete the closing handshake (RFC 6455 §5.5.1) before letting the socket go.
+                Some(Incoming::Close(code)) => {
+                    let _ = sink.close_reply(code).await;
+                    break;
+                }
+                Some(Incoming::Invalid) => {
+                    let _ = sink.close(1002).await;
+                    break;
+                }
+                None => break,
             },
             Some(delivery) = deliveries.next() => {
                 // Whatever else is ready already goes out in the same write.
@@ -178,8 +187,13 @@ fn process_internal_message(message: &str) -> Option<Close> {
 fn spawn_reader(mut reader: Reader<ReadHalf<Io>>) -> (JoinHandle<()>, mpsc::Receiver<Incoming>) {
     let (sender, receiver) = mpsc::channel(INCOMING_CAPACITY);
     let reader = tokio::spawn(async move {
-        while let Ok(message) = reader.next().await {
-            let close = matches!(message, Incoming::Close(_));
+        loop {
+            let message = match reader.next().await {
+                Ok(message) => message,
+                Err(error) if error.kind() == std::io::ErrorKind::InvalidData => Incoming::Invalid,
+                Err(_) => break,
+            };
+            let close = matches!(message, Incoming::Close(_) | Incoming::Invalid);
             if sender.send(message).await.is_err() || close {
                 break;
             }
@@ -194,7 +208,7 @@ async fn close_socket(sink: &mut Sink, incoming: &mut mpsc::Receiver<Incoming>, 
     if sink.close(1000).await.is_ok() {
         let _ = tokio::time::timeout(timeout, async {
             while let Some(message) = incoming.recv().await {
-                if matches!(message, Incoming::Close(_)) {
+                if matches!(message, Incoming::Close(_) | Incoming::Invalid) {
                     break;
                 }
             }
