@@ -382,6 +382,9 @@ Deliberate:
 - **Passwords are hashed and checked outside the database.** bcrypt (about 250 ms) runs before the
   write that saves a password, and a sign-in looks the user up and then verifies the password after
   releasing the database connection. An unknown email address still costs one bcrypt, as in Rails.
+- **Searches are for words.** Rails passes a search's words to SQLite's full-text `MATCH` as they
+  are, so `NOT`, `AND`, `OR` or `NEAR` in the wrong place is a 500. Each word is now matched as
+  itself.
 - **Not ported:** the duplicate `session_token` cookie Rails' Active Storage streaming sends; and
   legacy AES-CBC encrypted cookies, since Campfire started on GCM.
 
@@ -396,7 +399,6 @@ Not fully covered:
 **Rails bugs the port reproduces faithfully,** worth fixing upstream first:
 
 - Edge user agents get a 500 on profile and room pages (`install-edge.svg` is missing).
-- `/searches?q=NOT` raises.
 - New-ping autocomplete never shows suggestions (a plain fetch asks for JSON and gets HTML).
 - A mention of a deleted user blanks the whole message.
 - Editing a message with a missing attachment raises.

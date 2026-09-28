@@ -214,12 +214,6 @@
   path: /422.html
   covers: []
 
-- id: errors/500
-  as: david
-  path: /searches?q=NOT       # the bare FTS5 operator is a syntax error in SQLite
-  expect_status: 500
-  covers: []
-
 - id: errors/500/static
   path: /500.html
   covers: []

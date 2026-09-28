@@ -261,6 +261,10 @@ impl Message {
 
     /// `room.messages.search(query)`: FTS5 `MATCH`, in message order.
     pub fn search_in_room(conn: &Connection, room_id: i64, query: &str) -> Result<Vec<Self>> {
+        let query = match_terms(query);
+        if query.is_empty() {
+            return Ok(Vec::new());
+        }
         query_all(
             conn,
             r#"SELECT "messages".* FROM "messages" join message_search_index idx on messages.id = idx.rowid WHERE "messages"."room_id" = ? AND (idx.body match ?) ORDER BY "messages"."created_at" ASC"#,
@@ -271,6 +275,10 @@ impl Message {
 
     /// `Current.user.reachable_messages.search(query).last(100)`
     pub fn search_reachable(conn: &Connection, user_id: i64, query: &str) -> Result<Vec<Self>> {
+        let query = match_terms(query);
+        if query.is_empty() {
+            return Ok(Vec::new());
+        }
         let sql = format!(
             r#"{SELECT_REACHABLE} join message_search_index idx on messages.id = idx.rowid WHERE "memberships"."user_id" = ? AND (idx.body match ?) ORDER BY "messages"."created_at" DESC LIMIT 100"#
         );
@@ -548,4 +556,11 @@ fn remove_from_index(tx: &Tx<'_>, id: i64) -> Result<()> {
 fn reversed<T>(mut rows: Vec<T>) -> Vec<T> {
     rows.reverse();
     rows
+}
+
+/// Each word of a search as an FTS5 string, so every word must appear and none is read as query
+/// syntax. Rails passes the words straight to `MATCH`, where `NOT`, `AND`, `OR` or `NEAR` in the
+/// wrong place is a syntax error (a 500).
+fn match_terms(query: &str) -> String {
+    query.split_whitespace().map(|word| format!("\"{}\"", word.replace('"', "\"\""))).collect::<Vec<_>>().join(" ")
 }

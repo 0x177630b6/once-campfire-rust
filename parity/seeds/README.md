@@ -177,4 +177,5 @@ no rendering: it only removes the reordering.
   gets the "Campfire" title on the unsupported-browser page.
 - **Reference bug the inventory keeps**: with an Edge user agent, `pwa/_install_instructions`
   references a missing `install-edge.svg`, so the profile and every room page answer 500.
-- **Server errors**: `/searches?q=NOT` is a 500 (a bare FTS5 operator).
+- **Server errors**: `/searches?q=NOT` is a 500 in Rails (a bare FTS5 operator). The Rust app
+  searches for the word instead, so the inventory no longer captures it.
