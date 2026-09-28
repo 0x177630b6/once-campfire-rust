@@ -376,7 +376,7 @@ pub async fn not_found(State(kit): State<Kit>, req: axum::extract::Request) -> a
     };
     let format = format::formats(&input).ok().and_then(|f| f.first().copied());
     let head = req.method() == Method::HEAD;
-    into_axum(crate::exceptions::render(kit.config(), StatusCode::NOT_FOUND, format, head), head).await
+    into_axum(crate::exceptions::render(kit.error_pages(), StatusCode::NOT_FOUND, format, head), head).await
 }
 
 /// Finish an app router: Rails-style 404s for unknown paths *and* unknown methods (Axum would say

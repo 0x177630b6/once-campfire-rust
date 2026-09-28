@@ -2,10 +2,9 @@
 //! `ActionDispatch::Request#POST` do: JSON by content type, urlencoded forms (also for a POST
 //! with no content type), and multipart with file parts spooled to temp files.
 
-use std::io::Write;
-
 use axum::body::{Body, Bytes};
 use axum::http::{HeaderMap, Method, StatusCode, header};
+use tokio::io::AsyncWriteExt;
 
 use crate::format;
 use crate::params::{self, ParamError, ParamMap, RawPair, UploadedFile};
@@ -17,6 +16,12 @@ pub const MULTIPART_PART_LIMIT: usize = 4096;
 /// Rack); more is a 413. Rails reads any size.
 pub const MAX_BUFFERED_BODY: usize = 16 * 1024 * 1024;
 pub const MULTIPART_FILE_LIMIT: usize = 128;
+/// The most a multipart body's text fields may hold together, since they're kept in memory
+/// (Rack's `BUFFERED_UPLOAD_BYTESIZE_LIMIT`). More is a 413. Files aren't counted.
+pub const MULTIPART_TEXT_LIMIT: usize = 16 * 1024 * 1024;
+/// The largest multipart body, files included, when no smaller limit is configured (Rack's
+/// `PARSER_BYTESIZE_LIMIT`).
+pub const MULTIPART_BYTESIZE_LIMIT: u64 = 10 * 1024 * 1024 * 1024;
 
 /// The body as read: raw bytes (empty for multipart) and the params parsed from it.
 #[derive(Debug, Clone)]
@@ -89,59 +94,46 @@ pub async fn parse(
 }
 
 async fn parse_multipart(body: Body, boundary: String, limit: Option<usize>) -> Result<ParsedBody, BodyError> {
-    let mut constraints = multer::Constraints::new();
-    if let Some(limit) = limit {
-        constraints = constraints.size_limit(multer::SizeLimit::new().whole_stream(limit as u64));
-    }
+    let limit = limit.map_or(MULTIPART_BYTESIZE_LIMIT, |limit| (limit as u64).min(MULTIPART_BYTESIZE_LIMIT));
+    let constraints = multer::Constraints::new().size_limit(multer::SizeLimit::new().whole_stream(limit));
     let mut multipart = multer::Multipart::with_constraints(body.into_data_stream(), boundary, constraints);
     let mut pairs = Vec::new();
     let mut parts = 0;
     let mut files = 0;
+    let mut text = 0;
 
-    let result: Result<(), ParamError> = async {
+    let result: Result<(), Stop> = async {
         loop {
-            let field = match multipart.next_field().await {
+            let mut field = match multipart.next_field().await {
                 Ok(Some(field)) => field,
                 Ok(None) => break,
-                Err(multer::Error::StreamSizeExceeded { .. }) => return Err(ParamError::Limit("too large".into())),
-                Err(_) => return Err(ParamError::Parse),
+                Err(error) => return Err(Stop::from(error)),
             };
             parts += 1;
             if parts > MULTIPART_PART_LIMIT {
-                return Err(ParamError::Limit("too many multipart parts".into()));
+                return Err(ParamError::Limit("too many multipart parts".into()).into());
             }
             let part = Part::from_headers(field.headers());
-            let mut field = field;
 
             match part.filename.as_deref() {
                 // A blank filename means no file was selected: Rack drops the part.
-                Some("") => while field.chunk().await.map_err(|_| ParamError::Parse)?.is_some() {},
+                Some("") => while field.chunk().await?.is_some() {},
                 Some(filename) => {
                     files += 1;
                     if files > MULTIPART_FILE_LIMIT {
-                        return Err(ParamError::Limit("too many files".into()));
+                        return Err(ParamError::Limit("too many files".into()).into());
                     }
-                    let mut file = tempfile::Builder::new()
-                        .prefix("RackMultipart")
-                        .tempfile()
-                        .map_err(|e| ParamError::Invalid(e.to_string()))?;
-                    let mut size = 0u64;
-                    while let Some(chunk) = field.chunk().await.map_err(|_| ParamError::Parse)? {
-                        size += chunk.len() as u64;
-                        file.write_all(&chunk).map_err(|e| ParamError::Invalid(e.to_string()))?;
-                    }
-                    let upload = UploadedFile::new(
-                        filename.to_string(),
-                        part.content_type.clone(),
-                        part.head.clone(),
-                        size,
-                        file.into_temp_path(),
-                    );
+                    let (size, path) = spool(&mut field).await?;
+                    let upload = UploadedFile::new(filename.to_string(), part.content_type.clone(), part.head.clone(), size, path);
                     pairs.push(RawPair::file(&part.name(), upload));
                 }
                 None => {
                     let mut value = Vec::new();
-                    while let Some(chunk) = field.chunk().await.map_err(|_| ParamError::Parse)? {
+                    while let Some(chunk) = field.chunk().await? {
+                        text += chunk.len();
+                        if text > MULTIPART_TEXT_LIMIT {
+                            return Err(Stop::TooLarge);
+                        }
                         value.extend_from_slice(&chunk);
                     }
                     pairs.push(RawPair {
@@ -156,11 +148,51 @@ async fn parse_multipart(body: Body, boundary: String, limit: Option<usize>) -> 
     .await;
 
     let params = match result {
-        Err(ParamError::Limit(message)) if message == "too large" => return Err(BodyError::TooLarge),
-        Err(error) => Err(error),
+        Err(Stop::TooLarge) => return Err(BodyError::TooLarge),
+        Err(Stop::Params(error)) => Err(error),
         Ok(()) => params::from_pairs(pairs),
     };
     Ok(ParsedBody { raw: Bytes::new(), params })
+}
+
+/// Why reading a multipart body stopped early.
+enum Stop {
+    TooLarge,
+    Params(ParamError),
+}
+
+impl From<ParamError> for Stop {
+    fn from(error: ParamError) -> Self {
+        Stop::Params(error)
+    }
+}
+
+impl From<multer::Error> for Stop {
+    fn from(error: multer::Error) -> Self {
+        match error {
+            multer::Error::StreamSizeExceeded { .. } => Stop::TooLarge,
+            _ => Stop::Params(ParamError::Parse),
+        }
+    }
+}
+
+/// Writes a file part to a temp file (`RackMultipart...`, as Rack names them) without blocking
+/// the runtime on a slow disk, and returns its size and path.
+async fn spool(field: &mut multer::Field<'_>) -> Result<(u64, tempfile::TempPath), Stop> {
+    let io_error = |e: std::io::Error| Stop::Params(ParamError::Invalid(e.to_string()));
+    let temp = tokio::task::spawn_blocking(|| tempfile::Builder::new().prefix("RackMultipart").tempfile())
+        .await
+        .map_err(|e| io_error(std::io::Error::other(e)))?
+        .map_err(io_error)?;
+    let (file, path) = temp.into_parts();
+    let mut file = tokio::fs::File::from_std(file);
+    let mut size = 0u64;
+    while let Some(chunk) = field.chunk().await? {
+        size += chunk.len() as u64;
+        file.write_all(&chunk).await.map_err(io_error)?;
+    }
+    file.flush().await.map_err(io_error)?;
+    Ok((size, path))
 }
 
 /// A multipart part's `Content-Disposition` and `Content-Type`, parsed like
@@ -348,6 +380,21 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert(header::CONTENT_TYPE, "multipart/form-data; boundary=B".parse().unwrap());
         let result = parse(&Method::POST, &headers, Body::from(body), Some(100)).await;
+        assert!(matches!(result, Err(BodyError::TooLarge)));
+    }
+
+    #[tokio::test]
+    async fn multipart_text_fields_are_capped_together() {
+        let half = "x".repeat(MULTIPART_TEXT_LIMIT / 2);
+        let mut headers = HeaderMap::new();
+        headers.insert(header::CONTENT_TYPE, "multipart/form-data; boundary=B".parse().unwrap());
+        let field = r#"Content-Disposition: form-data; name="a[]""#;
+        let file = r#"Content-Disposition: form-data; name="f"; filename="x""#;
+
+        let fits = multipart_body("B", &[(field, &half), (field, &half), (file, &half)]);
+        assert!(parse(&Method::POST, &headers, Body::from(fits), None).await.unwrap().params.is_ok());
+        let over = multipart_body("B", &[(field, &half), (field, &half), (field, "x")]);
+        let result = parse(&Method::POST, &headers, Body::from(over), None).await;
         assert!(matches!(result, Err(BodyError::TooLarge)));
     }
 

@@ -9,6 +9,7 @@ use axum::http::{HeaderName, HeaderValue};
 
 use crate::clock::SharedClock;
 use crate::crypto::SharedCrypto;
+use crate::exceptions::ErrorPages;
 use crate::request::ProxyConfig;
 use crate::session::SessionConfig;
 
@@ -24,7 +25,8 @@ pub struct KitConfig {
     pub forgery_protection_origin_check: bool,
     /// `action_dispatch.default_headers` (`load_defaults 7.1`).
     pub default_headers: Vec<(HeaderName, HeaderValue)>,
-    /// Where `404.html`, `422.html`, `500.html` live (`Rails.public_path`).
+    /// Where `404.html`, `422.html`, `500.html` live (`Rails.public_path`), read when the `Kit`
+    /// is made.
     pub public_path: Option<PathBuf>,
     /// Largest request body accepted; `None` is unlimited, like Puma.
     pub max_body_bytes: Option<usize>,
@@ -83,6 +85,7 @@ pub(crate) struct KitInner {
     pub crypto: SharedCrypto,
     pub clock: SharedClock,
     pub state: Arc<dyn Any + Send + Sync>,
+    pub error_pages: ErrorPages,
 }
 
 impl std::fmt::Debug for Kit {
@@ -95,7 +98,8 @@ impl Kit {
     /// `state` is the application's own state (database handles etc.), reachable from actions
     /// with [`crate::Ctx::state`].
     pub fn new<S: Send + Sync + 'static>(config: KitConfig, crypto: SharedCrypto, clock: SharedClock, state: S) -> Self {
-        Self { inner: Arc::new(KitInner { config, crypto, clock, state: Arc::new(state) }) }
+        let error_pages = ErrorPages::load(config.public_path.as_deref());
+        Self { inner: Arc::new(KitInner { config, crypto, clock, state: Arc::new(state), error_pages }) }
     }
 
     pub fn config(&self) -> &KitConfig {
@@ -108,6 +112,10 @@ impl Kit {
 
     pub fn clock(&self) -> &SharedClock {
         &self.inner.clock
+    }
+
+    pub(crate) fn error_pages(&self) -> &ErrorPages {
+        &self.inner.error_pages
     }
 
     pub fn state<S: Send + Sync + 'static>(&self) -> &S {

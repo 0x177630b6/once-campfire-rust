@@ -677,7 +677,7 @@ impl Ctx {
             tracing::info!(error = %error, path = self.request.path(), "request rejected");
         }
         let formats = self.formats().unwrap_or_default();
-        crate::exceptions::render(self.kit.config(), error.status(), formats.first().copied(), self.request.is_head())
+        crate::exceptions::render(self.kit.error_pages(), error.status(), formats.first().copied(), self.request.is_head())
     }
 }
 
