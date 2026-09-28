@@ -208,8 +208,9 @@ docker run -d -p 80:80 -p 443:443 \
   the Rails image installs, with the same flags and libraries, so thumbnails and posters are byte
   for byte the ones Rails makes. Only what Campfire can reach goes in: libvips loads PNG, GIF,
   JPEG, TIFF, WebP, AVIF and HEIC/HEIF (with EXIF orientation and ICC profiles) and saves PNG,
-  JPEG, GIF and WebP; ffmpeg keeps every built-in demuxer and decoder plus dav1d for AV1, and
-  drops encoders, hardware, network and external codec libraries. That took the image from
+  JPEG, GIF and WebP; ffmpeg keeps every built-in demuxer and decoder plus dav1d for AV1, the
+  filters that pick and orient a poster frame, and only the MJPEG encoder and `image2` muxer that
+  write it; other encoders and muxers, hardware, network and external codec libraries are left out. That took the image from
   640 MB to 169 MB unpacked, and from 246 MB to 67 MB to download (see the
   [`Dockerfile`](Dockerfile)).
 - **ONCE hooks:** `/hooks/pre-backup` runs `campfire backup`, which uses SQLite's online backup API.
