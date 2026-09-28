@@ -1,6 +1,5 @@
-//! Small Ruby/Rails behaviors the message, room and search views depend on: time formats,
-//! `Float#to_s`, `Array#to_sentence`, `to_query` escaping, turbo-stream tags and Rails' JSON
-//! encoding.
+//! Small Ruby/Rails behaviors the message and room views depend on: time formats and
+//! `Float#to_s`.
 
 use jiff::Timestamp;
 
@@ -91,60 +90,6 @@ pub fn ruby_float(value: f64) -> String {
     if formatted.contains('.') { formatted } else { format!("{formatted}.0") }
 }
 
-/// `Array#to_sentence` with the default English connectors.
-pub fn to_sentence(words: &[String]) -> String {
-    match words {
-        [] => String::new(),
-        [one] => one.clone(),
-        [one, two] => format!("{one} and {two}"),
-        [init @ .., last] => format!("{}, and {last}", init.join(", ")),
-    }
-}
-
-/// `CGI.escape`, which `Hash#to_query` uses for URL query values: spaces become `+`.
-pub fn query_escape(value: &str) -> String {
-    let mut out = String::with_capacity(value.len());
-    for byte in value.bytes() {
-        match byte {
-            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'*' | b'-' | b'.' | b'_' => out.push(byte as char),
-            b' ' => out.push('+'),
-            _ => out.push_str(&format!("%{byte:02X}")),
-        }
-    }
-    out
-}
-
-/// `turbo_stream_action_tag(action, target:, template:, **attributes)`, what both
-/// `turbo_stream.<action>` and the `broadcast_*_to` helpers emit. Extra attributes come first;
-/// Campfire only ever passes `maintain_scroll: true` (rendered as `maintain_scroll="true"`).
-/// `remove` has no template element. The target is escaped; the content is safe HTML.
-pub fn turbo_stream(action: &str, target: &str, content: &str, maintain_scroll: bool) -> String {
-    let attributes = if maintain_scroll { " maintain_scroll=\"true\"" } else { "" };
-    let template = if action == "remove" || action == "refresh" { String::new() } else { format!("<template>{content}</template>") };
-    format!(
-        "<turbo-stream{attributes} action=\"{action}\" target=\"{}\">{template}</turbo-stream>",
-        crate::helpers::escape(target)
-    )
-}
-
-/// Serializes like Rails' `to_json`: `ActiveSupport::JSON` escapes `<`, `>` and `&` as `\u`
-/// sequences, which serde_json leaves raw (U+2028/U+2029 stay raw with `load_defaults 8.2`).
-/// Those characters only ever appear inside JSON strings, so replacing them after the fact is
-/// safe.
-pub fn rails_json<T: serde::Serialize>(value: &T) -> String {
-    let json = serde_json::to_string(value).expect("view models serialize");
-    let mut out = String::with_capacity(json.len());
-    for c in json.chars() {
-        match c {
-            '<' => out.push_str("\\u003c"),
-            '>' => out.push_str("\\u003e"),
-            '&' => out.push_str("\\u0026"),
-            _ => out.push(c),
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -168,35 +113,8 @@ mod tests {
     }
 
     #[test]
-    fn joins_sentences() {
-        let names = |n: &[&str]| n.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        assert_eq!(to_sentence(&names(&["A"])), "A");
-        assert_eq!(to_sentence(&names(&["A", "B"])), "A and B");
-        assert_eq!(to_sentence(&names(&["A", "B", "C"])), "A, B, and C");
-    }
-
-    #[test]
-    fn escapes_json_like_rails() {
-        assert_eq!(rails_json(&"<b>&</b>"), "\"\\u003cb\\u003e\\u0026\\u003c/b\\u003e\"");
-    }
-
-    #[test]
-    fn builds_turbo_streams_like_turbo_rails() {
-        assert_eq!(
-            turbo_stream("append", "x", "<b>y</b>", true),
-            r#"<turbo-stream maintain_scroll="true" action="append" target="x"><template><b>y</b></template></turbo-stream>"#
-        );
-        assert_eq!(turbo_stream("remove", "x", "", false), r#"<turbo-stream action="remove" target="x"></turbo-stream>"#);
-    }
-
-    #[test]
     fn formats_json_times_with_milliseconds() {
         let time: Timestamp = "2026-09-26T12:26:46.848999Z".parse().unwrap();
         assert_eq!(json_time(time), "2026-09-26T12:26:46.848Z");
-    }
-
-    #[test]
-    fn escapes_queries_like_cgi() {
-        assert_eq!(query_escape(r#"pizza & "pie""#), "pizza+%26+%22pie%22");
     }
 }

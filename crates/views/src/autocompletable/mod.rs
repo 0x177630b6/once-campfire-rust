@@ -4,8 +4,7 @@ use askama::Template;
 use serde::Serialize;
 
 use crate::ViewContext;
-#[allow(unused_imports)]
-use crate::helpers::{self as h, filters};
+use crate::helpers as h;
 use crate::users::MentionUser;
 
 /// `autocompletable/users/index.html.erb`: `<lexxy-prompt-item>`s for the mentions prompt,

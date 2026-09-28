@@ -3,7 +3,6 @@
 use askama::Template;
 
 use crate::ViewContext;
-#[allow(unused_imports)]
 use crate::helpers::{self as h, filters};
 use crate::layouts::Page;
 use crate::users::UserSummary;

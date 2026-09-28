@@ -3,8 +3,7 @@
 use askama::Template;
 
 use crate::ViewContext;
-#[allow(unused_imports)]
-use crate::helpers::{self as h, filters};
+use crate::helpers as h;
 use crate::layouts::Page;
 
 /// `welcome/show.html.erb`: shown to users who aren't in any room yet.

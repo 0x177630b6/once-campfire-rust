@@ -25,7 +25,7 @@ protocol recordings all come from running the real Rails app.
 | `rails_compat` | Rails' signed and encrypted cookies, signed IDs, signed global IDs, Turbo stream names and bcrypt, byte-compatible with Rails so sessions carry over |
 | `kit` | Rack, Action Dispatch and Thruster, on Axum: Rails-style nested params, sessions, flash, format negotiation, forgery protection by `Sec-Fetch-Site`, ETags and gzip built from a page's cached parts, plus an in-process front server with TLS and ACME, HTTP/2 and Thruster's response cache |
 | `db` | Active Record over the existing schema (rusqlite), with the same callbacks, timestamps and STI values, and a Rails-compatible fixture loader |
-| `richtext` | The Action Text pipeline: sanitizing, mentions, opengraph embeds and autolinking, byte-identical to Rails on a 647-case corpus |
+| `richtext` | The Action Text pipeline: sanitizing, mentions, opengraph embeds and autolinking, byte-identical to Rails on a 647-case corpus apart from the deliberate differences below |
 | `storage` | Active Storage: the same blob keys, disk layout, variants (libvips) and video previews (ffmpeg), with byte-identical thumbnails |
 | `cable` | The Action Cable protocol server and pub/sub, frame-for-frame with Rails, on a WebSocket implementation of its own that shares and compresses broadcasts |
 | `assets` | Propshaft and importmap-rails, with identical fingerprinted filenames and tags |
@@ -391,6 +391,33 @@ Deliberate:
   (`install-edge.svg`); the Rust app ships it.
 - **New-ping suggestions appear.** The user picker for a new ping asks for JSON; in Rails it asks
   for anything, gets HTML, and never shows a suggestion.
+- **Autolinking can't break out of an attribute.** rails_autolink finds URLs and email addresses
+  with regular expressions over the sanitized HTML, which Nokogiri serializes with `<` and `>` left
+  raw in attribute values. A URL after a `>` in, say, a `title` was taken for text and linked, and
+  the inserted `<a href="...">` closed the attribute, turning the rest of its value into live
+  markup (a stored XSS; it affects the Rails app). The port escapes `<` and `>` in attribute values
+  before autolinking, so URLs inside attributes stay as they were. The same DOM otherwise.
+- **Cached markup doesn't carry the request's host.** A message's "Copy link" button held an
+  absolute URL built from the Host header, inside a fragment cached for everyone, so one request
+  with a forged Host changed the link everyone copied. The button now carries the message's path
+  (`data-copy-to-clipboard-url-value`), and the copy-to-clipboard controller (an override) makes it
+  absolute against the page. The bot API's cached JSON, whose URLs must be absolute, is cached per
+  base URL instead.
+- **Rich text drops `name` attributes.** Rails' default sanitizer allowlist keeps them, which lets
+  a message clobber the page's DOM globals (`<img name="body">` shadows `document.body`). Nothing
+  Campfire's composer writes has one.
+- **Rich text keeps only highlight colors in `style`.** Where Rails runs `style` through Loofah's
+  CSS scrubber, the sanitizer keeps only `color` and `background-color` with a plain color value
+  (a keyword, hex, `rgb()`/`hsl()`, or a custom property like Lexxy's `var(--highlight-1)`), which
+  is all Lexxy writes. It shows in the HTML body the bot API and webhooks send; message pages drop
+  `style` altogether, as they did.
+- **The web app manifest is valid JSON.** Rails HTML-escapes the account name and URLs into
+  `webmanifest.json`, so a name with `\` or `"` broke the manifest and the small logo's URL read
+  `?size=small&amp;v=...`. They're JSON strings now.
+- **Content attachments nest at most 8 deep.** An `<action-text-attachment>` carrying HTML in its
+  `content` renders that content, attachments included; each level parses and sanitizes
+  everything below it again, so a 336 KB body of nested ones took 10 seconds to render. Deeper
+  levels now render empty. Campfire's composer doesn't nest them at all.
 - **Not ported:** the duplicate `session_token` cookie Rails' Active Storage streaming sends; and
   legacy AES-CBC encrypted cookies, since Campfire started on GCM.
 

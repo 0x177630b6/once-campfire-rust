@@ -13,7 +13,6 @@ pub mod accounts;
 pub mod welcome;
 pub mod pwa;
 pub mod autocompletable;
-pub mod action_text;
 pub mod rooms;
 pub mod messages;
 pub mod searches;

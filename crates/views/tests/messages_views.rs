@@ -13,6 +13,19 @@ fn show_text_message() {
     g.assert_content(&g.render(|ctx| messages::Show { ctx, message: &message }.render().unwrap()));
 }
 
+/// The partial is cached once for every request, so nothing in it may come from the request's
+/// Host header (README, Known differences).
+#[test]
+fn message_partial_is_the_same_on_every_host() {
+    let mut g = golden("messages_show_text");
+    let message: MessageView = g.input();
+    let render = |g: &messages_support::Golden| g.render(|ctx| messages::MessagePartial { ctx, message: &message }.render().unwrap());
+    let on_the_reference_host = render(&g);
+    g.json["context"]["base_url"] = "https://evil.example".into();
+    assert_eq!(render(&g), on_the_reference_host);
+    assert!(on_the_reference_host.contains(&format!("data-copy-to-clipboard-url-value=\"/rooms/{}/@{}\"", message.room_id, message.id)));
+}
+
 #[test]
 fn show_image_message() {
     let g = golden("messages_show_image");

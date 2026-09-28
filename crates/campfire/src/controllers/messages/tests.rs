@@ -168,6 +168,29 @@ async fn boosts_are_listed_created_and_removed() {
     assert_eq!(david.get(&format!("/messages/{}/boosts", i64::MAX)).await.status, StatusCode::NOT_FOUND);
 }
 
+/// Message fragments and the bot API's JSON are cached for every request, so a request with a
+/// forged Host mustn't leave its URLs in them for the next one.
+#[tokio::test]
+async fn a_forged_host_stays_out_of_the_caches() {
+    let Some(app) = TestApp::boot().await else { return };
+    let forged = |path: &str| Req::new(Method::GET, path).header("x-forwarded-host", "evil.example");
+
+    let mut bot = app.anonymous();
+    let api = format!("/rooms/{ALL_TALK}/{BENDER_KEY}/messages");
+    assert!(bot.send(forged(&api)).await.text().contains("http://evil.example/"));
+    let honest = bot.get(&api).await;
+    assert_eq!(honest.status, StatusCode::OK);
+    assert!(!honest.text().contains("evil.example"), "{}", honest.text());
+
+    let mut david = app.david();
+    let room = format!("/rooms/{ALL_TALK}");
+    assert_eq!(david.send(forged(&room)).await.status, StatusCode::OK);
+    let honest = app.david().get(&room).await;
+    assert_eq!(honest.status, StatusCode::OK);
+    assert!(honest.text().contains("data-copy-to-clipboard-url-value=\"/rooms/"));
+    assert!(!honest.text().contains("evil.example"));
+}
+
 #[tokio::test]
 async fn the_bot_api() {
     let Some(app) = TestApp::boot().await else { return };
