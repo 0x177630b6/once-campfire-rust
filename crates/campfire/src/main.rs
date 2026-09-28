@@ -32,7 +32,7 @@ fn main() -> anyhow::Result<()> {
 
 /// On kernels with transparent huge pages set to `always` (Debian's and Arch's default), every
 /// thread's 2 MB stack and each of jemalloc's regions get backed by whole 2 MB pages as soon as
-/// they're touched: an idle server took 160 MB on 32 cores instead of 18 MB. Nothing here is big
+/// they're touched: an idle server took 160 MB on 32 cores instead of 15 MB. Nothing here is big
 /// enough to gain from huge pages, so the process (and ffmpeg, which inherits it) opts out.
 fn disable_transparent_huge_pages() {
     #[cfg(target_os = "linux")]
