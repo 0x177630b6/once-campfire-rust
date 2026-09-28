@@ -229,10 +229,18 @@ pub fn keep_after_commit(tx: &mut campfire_db::Tx<'_>, staged: Staged) {
 /// a lot of memory and CPU (libvips threads its own work), and uploads shouldn't queue behind
 /// more of them than the machine can run at once.
 async fn process_media<T: Send + 'static>(work: impl FnOnce() -> campfire_storage::Result<T> + Send + 'static) -> Result<T> {
-    static PERMITS: LazyLock<Semaphore> =
-        LazyLock::new(|| Semaphore::new(std::thread::available_parallelism().map_or(2, |n| n.get()).clamp(1, MAX_MEDIA_JOBS)));
-    let _permit = PERMITS.acquire().await.map_err(Error::internal)?;
-    tokio::task::spawn_blocking(work).await.map_err(Error::internal)?.map_err(Error::internal)
+    static PERMITS: LazyLock<Arc<Semaphore>> =
+        LazyLock::new(|| Arc::new(Semaphore::new(std::thread::available_parallelism().map_or(2, |n| n.get()).clamp(1, MAX_MEDIA_JOBS))));
+    // The permit goes with the work: a request that gives up (a timeout, a closed connection)
+    // doesn't stop the blocking task, so it mustn't free the slot either.
+    let permit = PERMITS.clone().acquire_owned().await.map_err(Error::internal)?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        work()
+    })
+    .await
+    .map_err(Error::internal)?
+    .map_err(Error::internal)
 }
 
 /// `blob.url(disposition:)` on the disk service: a signed `/rails/active_storage/disk/...` URL
@@ -461,13 +469,26 @@ pub async fn direct_uploads_create(c: &mut Ctx) -> Result {
     require_active_storage_authentication(c).await?;
     // `params.expect(blob: [:filename, :byte_size, :checksum, :content_type, metadata: {}])`
     let blob_params = c.params.require("blob")?.as_hash().cloned().ok_or_else(|| Error::ParameterMissing("blob".into()))?;
-    let text = |key: &str| blob_params.get(key).and_then(|p| p.as_str()).map(str::to_string);
+    // Strings, and numbers as their text: Active Storage's JavaScript sends `byte_size` as a number.
+    let text = |key: &str| {
+        blob_params.get(key).and_then(|p| match p {
+            campfire_kit::Param::Str(s) => Some(s.clone()),
+            campfire_kit::Param::Number(n) => Some(n.to_string()),
+            _ => None,
+        })
+    };
     let (Some(filename), Some(checksum)) = (text("filename").filter(|f| !f.is_empty()), text("checksum").filter(|c| !c.is_empty())) else {
         return Err(Error::Status(StatusCode::UNPROCESSABLE_ENTITY));
     };
     let Some(byte_size) = text("byte_size").and_then(|s| crate::concerns::cast_integer(&s)) else {
         return Err(Error::Status(StatusCode::UNPROCESSABLE_ENTITY));
     };
+    // The upload's PUT body is read into memory, so it's capped like other bodies: don't hand out
+    // a URL for more than it will accept. (Campfire's editor only attaches mentions and embeds;
+    // files go up with the message form.)
+    if !(0..=campfire_kit::body::MAX_BUFFERED_BODY as i64).contains(&byte_size) {
+        return Err(Error::Status(StatusCode::PAYLOAD_TOO_LARGE));
+    }
     let content_type = text("content_type");
     let metadata = match blob_params.get("metadata").and_then(|m| m.as_hash()) {
         Some(metadata) => Json::parse(&metadata.to_json().to_string()).map_err(Error::internal)?,

@@ -326,7 +326,8 @@ async fn backup_snapshots_the_live_database() {
     let snapshot = rusqlite::Connection::open(config.storage.backup_file()).unwrap();
     let users: i64 = snapshot.query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0)).unwrap();
     assert!(users > 0);
-    assert!(!config.storage.backup_file().with_extension("sqlite3.partial").exists());
+    let leftovers: Vec<_> = std::fs::read_dir(&config.storage.backups).unwrap().flatten().filter(|entry| entry.file_name().to_string_lossy().starts_with(".backup-")).collect();
+    assert!(leftovers.is_empty(), "{leftovers:?}");
 }
 
 #[tokio::test]

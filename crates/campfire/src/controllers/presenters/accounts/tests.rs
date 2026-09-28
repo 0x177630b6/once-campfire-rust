@@ -273,6 +273,21 @@ async fn a_rails_issued_session_cookie_continues_on_rust() {
 }
 
 #[tokio::test]
+async fn direct_uploads_are_refused_past_the_body_limit() {
+    let Some(test) = boot_seed("default").await else { return };
+    let mut browser = test.browser("198.51.100.10");
+    browser.sign_in("david@37signals.com").await;
+    let create = |byte_size: usize| {
+        format!(r#"{{"blob":{{"filename":"a.bin","byte_size":{byte_size},"checksum":"1B2M2Y8AsgTpgAmY7PhCfg==","content_type":"application/octet-stream"}}}}"#)
+    };
+    let small = browser.request(Method::POST, "/rails/active_storage/direct_uploads", &[], Some(("application/json", create(5)))).await;
+    assert_eq!(small.status, StatusCode::OK, "{}", small.text());
+    assert!(small.text().contains("/rails/active_storage/disk/"), "{}", small.text());
+    let large = browser.request(Method::POST, "/rails/active_storage/direct_uploads", &[], Some(("application/json", create(campfire_kit::body::MAX_BUFFERED_BODY + 1)))).await;
+    assert_eq!(large.status, StatusCode::PAYLOAD_TOO_LARGE);
+}
+
+#[tokio::test]
 async fn edge_gets_its_install_instructions() {
     // EdgeHTML's token: the useragent gem reports Chromium Edge (`Edg/`) as Chrome.
     const EDGE: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edge/124.0.0.0";

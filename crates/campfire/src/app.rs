@@ -308,15 +308,13 @@ pub fn backup(config: &Config) -> anyhow::Result<()> {
     if let Some(dir) = destination.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    // Written beside the destination and renamed over it, so a failed or interrupted backup never
-    // leaves a torn file where ONCE (and `post-restore`) expect the last good one.
-    let partial = destination.with_extension("sqlite3.partial");
-    let _ = std::fs::remove_file(&partial);
-    if let Err(error) = copy_database(&config.storage.database, &partial) {
-        let _ = std::fs::remove_file(&partial);
-        return Err(error);
-    }
-    std::fs::rename(&partial, &destination)?;
+    // Written to a file of its own beside the destination and renamed over it, so a failed,
+    // interrupted or concurrent backup never leaves a torn file where ONCE (and `post-restore`)
+    // expect the last good one. A failed one's file is deleted when `partial` drops.
+    let dir = destination.parent().unwrap_or(std::path::Path::new("."));
+    let partial = tempfile::Builder::new().prefix(".backup-").suffix(".sqlite3").tempfile_in(dir)?;
+    copy_database(&config.storage.database, partial.path())?;
+    partial.persist(&destination)?;
     tracing::info!(path = %destination.display(), "backup written");
     Ok(())
 }
