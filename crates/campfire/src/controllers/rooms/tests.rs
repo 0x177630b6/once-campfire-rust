@@ -62,7 +62,9 @@ async fn undeclared_actions() {
     let mut david = app.david();
     assert_eq!(david.get("/rooms/new").await.status, StatusCode::NOT_FOUND);
     assert_eq!(david.get(&format!("/rooms/{ALL_TALK}/edit")).await.status, StatusCode::NOT_FOUND);
-    assert_eq!(david.get(&format!("/rooms/directs/{DIRECT_DAVID_JASON}")).await.status, StatusCode::INTERNAL_SERVER_ERROR);
+    let direct = david.get(&format!("/rooms/directs/{DIRECT_DAVID_JASON}")).await;
+    assert_eq!(direct.status, StatusCode::FOUND);
+    assert!(direct.header("location").unwrap().ends_with(&format!("/rooms/{DIRECT_DAVID_JASON}")));
     let reply = david.write(Req::new(Method::DELETE, &format!("/rooms/opens/{HQ}"))).await;
     assert_eq!(reply.status, StatusCode::INTERNAL_SERVER_ERROR);
 }

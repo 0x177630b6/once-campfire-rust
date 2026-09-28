@@ -13,10 +13,12 @@ use crate::concerns::{Before, before_actions, require_current_user};
 use crate::controllers::presenters::page::{self, Rendered, db_error};
 use crate::controllers::presenters::{Presenter, user_view};
 
-/// `show` (inherited): `remember_last_room_visited` with no `@room` raises NoMethodError.
+/// `show`: the room page, which checks membership. Rails inherits RoomsController#show without
+/// setting `@room`, so `remember_last_room_visited` raises (a 500).
 pub async fn show(c: &mut Ctx) -> Result {
     before_actions(c, Before::default()).await?;
-    Err(Error::internal(anyhow::anyhow!("undefined method 'id' for nil")))
+    let id = c.param_str("id").and_then(crate::concerns::cast_integer).ok_or(Error::NotFound)?;
+    redirect_to_room(c, id)
 }
 
 pub async fn new(c: &mut Ctx) -> Result {

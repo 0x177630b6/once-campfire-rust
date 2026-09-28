@@ -385,6 +385,7 @@ Deliberate:
 - **Searches are for words.** Rails passes a search's words to SQLite's full-text `MATCH` as they
   are, so `NOT`, `AND`, `OR` or `NEAR` in the wrong place is a 500. Each word is now matched as
   itself.
+- **`/rooms/directs/:id` redirects to the room** instead of answering 500.
 - **Not ported:** the duplicate `session_token` cookie Rails' Active Storage streaming sends; and
   legacy AES-CBC encrypted cookies, since Campfire started on GCM.
 
@@ -402,7 +403,6 @@ Not fully covered:
 - New-ping autocomplete never shows suggestions (a plain fetch asks for JSON and gets HTML).
 - A mention of a deleted user blanks the whole message.
 - Editing a message with a missing attachment raises.
-- `directs#show` returns 500.
 
 ## How it was built
 
