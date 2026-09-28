@@ -11,9 +11,10 @@ use campfire_db::{Message, NewMessage, Role, Room, Status, User};
 use campfire_kit::format;
 use campfire_kit::{Ctx, Error, Freshness, Param, Result, StatusCode, halt, permit_keys};
 use campfire_richtext::Content;
-use campfire_storage::{Filename, Variation};
+use campfire_storage::{Blob, Staged, Variation};
 use campfire_views::messages as views;
 
+use crate::active_storage::{self, keep_after_commit};
 use crate::app::{App, AppCtx};
 use crate::concerns::{self, Before, before_actions, cast_integer, require_current_user};
 use crate::controllers::presenters::page::{self, Rendered, db_error};
@@ -212,31 +213,25 @@ pub(crate) async fn find_paged_messages(c: &Ctx, room: &Room) -> Result<Vec<Mess
 // --- Creating, updating, destroying ---------------------------------------------------------------
 
 /// `@room.messages.create_with_attachment!(attributes)`: the message (with its uploaded blob, in
-/// one transaction), then `process_attachment`.
+/// one transaction), then `process_attachment`. The upload's file is copied into storage and the
+/// body canonicalized before the transaction, so the writer only inserts rows.
 pub(crate) async fn create_message(c: &Ctx, room: &Room, attributes: MessageParams) -> Result<Message> {
-    let app = c.app().clone();
     let creator_id = require_current_user(c)?.id;
     let room_id = room.id;
-    let request_host = Some(c.request.host());
     let attachment = match attributes.attachment {
-        Some(Assignment::Create(upload)) => Some((upload.data, upload.filename, upload.content_type)),
+        Some(Assignment::Create(upload)) => Some(upload.stage(c.app()).await?),
         Some(Assignment::Invalid) => return Err(invalid_attachment()),
         _ => None,
+    };
+    let body = match attributes.body {
+        Some(body) => Some(canonicalize_body(c.app(), body, Some(c.request.host())).await?),
+        None => None,
     };
     let (message, blob) = c
         .app()
         .db
         .write(move |tx| {
-            let now = tx.now().jiff();
-            let blob = match attachment {
-                Some((data, filename, content_type)) => Some(
-                    app.storage
-                        .create_and_upload(tx.conn(), &data, Filename::new(filename), content_type.as_deref(), now)
-                        .map_err(storage_error)?,
-                ),
-                None => None,
-            };
-            let body = attributes.body.map(|body| canonical_body(tx.conn(), &app, &body, request_host.clone()));
+            let blob = attachment.map(|staged| save_staged(tx, staged)).transpose()?;
             let message = Message::create(
                 tx,
                 NewMessage {
@@ -258,6 +253,19 @@ pub(crate) async fn create_message(c: &Ctx, room: &Room, attributes: MessagePara
     c.app().db.read(move |conn| Message::find(conn, id)).await.map_err(db_error)
 }
 
+/// Inserts a staged blob's row, keeping its file once the transaction commits.
+pub(crate) fn save_staged(tx: &mut campfire_db::Tx<'_>, staged: Staged) -> campfire_db::Result<Blob> {
+    let blob = staged.insert(tx.conn(), tx.now().jiff()).map_err(storage_error)?;
+    keep_after_commit(tx, staged);
+    Ok(blob)
+}
+
+/// [`canonical_body`] on a reader, ahead of the write that stores it.
+pub(crate) async fn canonicalize_body(app: &App, body: String, request_host: Option<String>) -> Result<String> {
+    let app2 = app.clone();
+    app.db.read(move |conn| Ok(canonical_body(conn, &app2, &body, request_host))).await.map_err(db_error)
+}
+
 /// Assigning a String to a rich text attribute stores the canonicalized content
 /// (`ActionText::Content.new(body, canonicalize: true).to_html`).
 pub(crate) fn canonical_body(conn: &campfire_db::Connection, app: &App, body: &str, request_host: Option<String>) -> String {
@@ -273,32 +281,27 @@ fn invalid_attachment() -> Error {
 
 /// `Message#process_attachment`: analyze the blob now (its `after_update` touches the message),
 /// then generate the video preview or the `:thumb` representation.
-pub(crate) async fn process_attachment(app: &App, blob: campfire_storage::Blob) -> Result<()> {
+pub(crate) async fn process_attachment(app: &App, blob: Blob) -> Result<()> {
     let blob = analyze_attachment(app, blob).await?;
-
-    let storage = app.storage.clone();
-    let now = app.clock.now();
     if blob.is_video() {
         // attachment.preview(format: :webp).processed
-        app.db
-            .write(move |tx| storage.process_preview(tx.conn(), &blob, &Variation::format_only("webp"), now).map_err(storage_error))
-            .await
-            .map_err(db_error)?;
+        active_storage::processed_preview(app, blob, Variation::format_only("webp")).await?;
     } else if blob.is_representable() {
         // attachment.representation(:thumb).processed
         let thumb = Variation::resize_to_limit(1200, 800, None);
-        crate::active_storage::processed_representation(app, blob, thumb).await?;
+        active_storage::processed_representation(app, blob, thumb).await?;
     }
     Ok(())
 }
 
-/// `blob.analyze`: its `after_update` touches the attached records.
-async fn analyze_attachment(app: &App, blob: campfire_storage::Blob) -> Result<campfire_storage::Blob> {
-    let storage = app.storage.clone();
+/// `blob.analyze`: its `after_update` touches the attached records. The file is analyzed off the
+/// writer.
+async fn analyze_attachment(app: &App, blob: Blob) -> Result<Blob> {
+    let metadata = active_storage::analyzed_metadata(app, &blob).await?;
     app.db
         .write(move |tx| {
             let mut blob = blob;
-            storage.analyze(tx.conn(), &mut blob).map_err(storage_error)?;
+            blob.update_metadata(tx.conn(), metadata).map_err(storage_error)?;
             touch_attachment_records(tx, blob.id)?;
             Ok(blob)
         })
@@ -320,12 +323,14 @@ fn touch_attachment_records(tx: &mut campfire_db::Tx<'_>, blob_id: i64) -> campf
 /// later) without `process_attachment`: the blob is only analyzed, by `ActiveStorage::AnalyzeJob`
 /// after commit (verified against the reference with a bot's `PUT` and `attachment`).
 pub(crate) async fn update_message(c: &Ctx, message: Message, attributes: MessageParams) -> Result<Message> {
-    let app = c.app().clone();
-    let request_host = Some(c.request.host());
     let attachment = match attributes.attachment {
         Some(Assignment::Invalid) => return Err(invalid_attachment()),
-        Some(Assignment::Create(upload)) => Some(Some(upload)),
+        Some(Assignment::Create(upload)) => Some(Some(upload.stage(c.app()).await?)),
         Some(_) => Some(None),
+        None => None,
+    };
+    let body = match attributes.body {
+        Some(body) => Some(canonicalize_body(c.app(), body, Some(c.request.host())).await?),
         None => None,
     };
     let (id, blob) = c
@@ -333,25 +338,11 @@ pub(crate) async fn update_message(c: &Ctx, message: Message, attributes: Messag
         .db
         .write(move |tx| {
             let mut message = message;
-            if let Some(body) = attributes.body {
-                let body = canonical_body(tx.conn(), &app, &body, request_host);
+            if let Some(body) = body {
                 message.update_body(tx, &body)?;
             }
             let attachment_given = attachment.is_some();
-            let blob = match attachment {
-                Some(Some(upload)) => Some(
-                    app.storage
-                        .create_and_upload(
-                            tx.conn(),
-                            &upload.data,
-                            Filename::new(upload.filename),
-                            upload.content_type.as_deref(),
-                            tx.now().jiff(),
-                        )
-                        .map_err(storage_error)?,
-                ),
-                _ => None,
-            };
+            let blob = attachment.flatten().map(|staged| save_staged(tx, staged)).transpose()?;
             if attachment_given {
                 message.replace_attachment(tx, blob.as_ref().map(|blob| blob.id))?;
             }
@@ -367,6 +358,7 @@ pub(crate) async fn update_message(c: &Ctx, message: Message, attributes: Messag
     }
     c.app().db.read(move |conn| Message::find(conn, id)).await.map_err(db_error)
 }
+
 
 /// `@message.destroy` then `@message.broadcast_remove`.
 pub(crate) async fn destroy_message(c: &Ctx, room: &Room, message: &Message) -> Result<()> {

@@ -40,17 +40,17 @@ pub async fn create(c: &mut Ctx) -> Result {
     let name = params.get("name").and_then(Param::to_s).ok_or_else(|| Error::internal(anyhow::anyhow!("NOT NULL constraint failed: users.name")))?;
     // `create_webhook!(url: webhook_url) if webhook_url`: any non-nil value, "" included.
     let webhook_url = params.get("webhook_url").and_then(Param::to_s);
-    let avatar = Assignment::from_params(&params, "avatar")?;
+    let avatar = Assignment::from_params(&params, "avatar")?.stage(c.app()).await?;
     let pending = c
         .app()
         .db
         .write(move |tx| {
             let bot = User::create_bot(tx, &name, webhook_url.as_deref())?;
-            attachments::assign(tx, Record::user(bot.id), "avatar", &avatar)
+            attachments::assign(tx, Record::user(bot.id), "avatar", avatar)
         })
         .await
         .map_err(Error::internal)?;
-    attachments::upload_and_analyze_later(c.app(), pending).await?;
+    attachments::analyze_later(c.app(), pending);
     redirect_to_bots(c)
 }
 
@@ -70,17 +70,17 @@ pub async fn update(c: &mut Ctx) -> Result {
     let params = bot_params(c)?;
     let changes = UserChanges { name: params.get("name").and_then(Param::to_s), ..UserChanges::default() };
     let webhook_url = params.get("webhook_url").and_then(Param::to_s);
-    let avatar = Assignment::from_params(&params, "avatar")?;
+    let avatar = Assignment::from_params(&params, "avatar")?.stage(c.app()).await?;
     let pending = c
         .app()
         .db
         .write(move |tx| {
             bot.update_bot(tx, changes, webhook_url.as_deref())?;
-            attachments::assign(tx, Record::user(bot.id), "avatar", &avatar)
+            attachments::assign(tx, Record::user(bot.id), "avatar", avatar)
         })
         .await
         .map_err(Error::internal)?;
-    attachments::upload_and_analyze_later(c.app(), pending).await?;
+    attachments::analyze_later(c.app(), pending);
     redirect_to_bots(c)
 }
 

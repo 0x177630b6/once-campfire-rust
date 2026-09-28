@@ -40,7 +40,7 @@ pub async fn create(c: &mut Ctx) -> Result {
         password: params.get("password").and_then(|p| p.to_s()).filter(|password| !password.is_empty()),
         ..NewUser::default()
     };
-    let avatar = Assignment::from_params(&params, "avatar")?;
+    let avatar = Assignment::from_params(&params, "avatar")?.stage(c.app()).await?;
 
     // `User.create!(user_params)`
     let result = c
@@ -48,13 +48,13 @@ pub async fn create(c: &mut Ctx) -> Result {
         .db
         .write(move |tx| {
             let user = User::create(tx, attributes)?;
-            let pending = attachments::assign(tx, Record::user(user.id), "avatar", &avatar)?;
+            let pending = attachments::assign(tx, Record::user(user.id), "avatar", avatar)?;
             Ok((user, pending))
         })
         .await;
     match result {
         Ok((user, pending)) => {
-            attachments::upload_and_analyze_later(c.app(), pending).await?;
+            attachments::analyze_later(c.app(), pending);
             concerns::start_new_session_for(c, user).await?;
             let root = c.url_for(&campfire_routes::root());
             c.redirect_to(&root)

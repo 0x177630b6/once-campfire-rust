@@ -31,13 +31,14 @@ pub async fn create(c: &mut Ctx) -> Result {
     let avatar = Assignment::from_params(&user, "avatar")?;
     // users.name is NOT NULL: Rails raises ActiveRecord::NotNullViolation.
     let Some(name) = name else { return Err(Error::internal(anyhow::anyhow!("NOT NULL constraint failed: users.name"))) };
+    let avatar = avatar.stage(c.app()).await?;
 
     let result = c
         .app()
         .db
         .write(move |tx| {
             let administrator = FirstRun::create(tx, &name, &email_address, &password)?;
-            let pending = attachments::assign(tx, Record::user(administrator.id), "avatar", &avatar)?;
+            let pending = attachments::assign(tx, Record::user(administrator.id), "avatar", avatar)?;
             Ok((administrator, pending))
         })
         .await;
@@ -45,7 +46,7 @@ pub async fn create(c: &mut Ctx) -> Result {
     let root = c.url_for(&campfire_routes::root());
     match result {
         Ok((administrator, pending)) => {
-            attachments::upload_and_analyze_later(c.app(), pending).await?;
+            attachments::analyze_later(c.app(), pending);
             concerns::start_new_session_for(c, administrator).await?;
             c.redirect_to(&root)
         }

@@ -8,13 +8,14 @@
 //! `ActiveStorage::BaseController` (`protect_from_forgery with: :exception`), not
 //! `ApplicationController`, so none of Campfire's concerns run.
 
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use campfire_db::CachedStatements;
 use campfire_kit::{Ctx, Error, ExpiresIn, Freshness, Response, Result, SendOptions, StatusCode, halt, http::header};
 use campfire_storage::file_server::{self, BodyPart};
-use campfire_storage::{Blob, Filename, Json, Storage, Variation, content_types, disk, paths};
+use campfire_storage::{Blob, Filename, Json, Staged, Storage, Variation, content_types, disk, paths};
 use rusqlite::params;
+use tokio::sync::Semaphore;
 
 use crate::app::{App, AppCtx};
 use crate::concerns::{find_session_by_cookie, head};
@@ -23,6 +24,8 @@ use crate::concerns::{find_session_by_cookie, head};
 const SERVICE_URLS_EXPIRE_IN: i64 = 5 * 60;
 /// `http_cache_forever`: `expires_in 100.years`.
 const HUNDRED_YEARS: u64 = 3_155_695_200;
+/// The most image and video jobs (variants, previews, analysis) that run at once.
+const MAX_MEDIA_JOBS: usize = 4;
 
 // --- Blobs -----------------------------------------------------------------------------------------
 
@@ -107,16 +110,129 @@ async fn set_representation(c: &mut Ctx, blob: Blob) -> Result<Blob> {
 }
 
 /// `blob.representation(variation).processed`, reusing an existing variant or preview.
-///
-/// Processing inserts rows, so it runs on the writer. TODO: move the libvips/ffmpeg work off the
-/// writer thread once campfire_storage can split transforming from recording.
 pub async fn processed_representation(app: &App, blob: Blob, variation: Variation) -> Result<Blob> {
+    if blob.is_previewable() {
+        processed_preview(app, blob, variation).await
+    } else if blob.is_variable() {
+        let variation = app.storage.variation_for(&blob, &variation).map_err(Error::internal)?;
+        processed_variant(app, blob, variation).await
+    } else {
+        Err(Error::internal(campfire_storage::Error::Unrepresentable(blob.content_type().to_string())))
+    }
+}
+
+/// `blob.preview(transformations).processed`: the preview image itself for empty
+/// transformations, otherwise its processed variant.
+pub async fn processed_preview(app: &App, blob: Blob, transformations: Variation) -> Result<Blob> {
+    let image = preview_image(app, blob).await?;
+    if transformations.is_empty() {
+        return Ok(image);
+    }
+    let variation = app.storage.variation_for(&image, &transformations).map_err(Error::internal)?;
+    processed_variant(app, image, variation).await
+}
+
+/// `VariantWithRecord#processed` for an already-defaulted variation: the existing variant, or
+/// one transformed off the writer and then recorded.
+async fn processed_variant(app: &App, blob: Blob, variation: Variation) -> Result<Blob> {
+    processed_variant_with(app, blob, variation, |storage, blob, variation| storage.transform_variant(blob, variation)).await
+}
+
+pub(crate) async fn processed_variant_with(
+    app: &App,
+    blob: Blob,
+    variation: Variation,
+    transform: impl FnOnce(&Storage, &Blob, &Variation) -> campfire_storage::Result<Staged> + Send + 'static,
+) -> Result<Blob> {
     let storage = app.storage.clone();
-    let now = app.clock.now();
+    let (source, digested) = (blob.clone(), variation.clone());
+    let existing = app.db.read(move |conn| storage.existing_variant(conn, &source, &digested).map_err(storage_error)).await;
+    if let Some(image) = existing.map_err(Error::internal)? {
+        return Ok(image);
+    }
+
+    let storage = app.storage.clone();
+    let (source, digested) = (blob.clone(), variation.clone());
+    let image = process_media(move || transform(&storage, &source, &digested)).await?;
+
+    let storage = app.storage.clone();
     app.db
-        .write(move |tx| storage.process_representation(tx.conn(), &blob, &variation, now).map_err(storage_error))
+        .write(move |tx| {
+            let conn = tx.conn();
+            match storage.record_variant(conn, &blob, &variation, &image, tx.now().jiff()).map_err(storage_error)? {
+                Some(recorded) => {
+                    keep_after_commit(tx, image);
+                    Ok(recorded)
+                }
+                // Another request recorded it first; ours is dropped (and its file deleted).
+                None => storage.existing_variant(conn, &blob, &variation).map_err(storage_error)?.ok_or(campfire_db::Error::RecordNotFound("ActiveStorage::VariantRecord")),
+            }
+        })
         .await
         .map_err(Error::internal)
+}
+
+/// `blob.preview_image`, drawing it with ffmpeg off the writer when it's missing.
+async fn preview_image(app: &App, blob: Blob) -> Result<Blob> {
+    let storage = app.storage.clone();
+    let source = blob.clone();
+    let existing = app.db.read(move |conn| storage.existing_preview_image(conn, &source).map_err(storage_error)).await;
+    if let Some(image) = existing.map_err(Error::internal)? {
+        return Ok(image);
+    }
+
+    let storage = app.storage.clone();
+    let source = blob.clone();
+    let image = process_media(move || storage.draw_preview_image(&source)).await?;
+
+    let storage = app.storage.clone();
+    app.db
+        .write(move |tx| {
+            let conn = tx.conn();
+            match storage.record_preview_image(conn, &blob, &image, tx.now().jiff()).map_err(storage_error)? {
+                Some(recorded) => {
+                    keep_after_commit(tx, image);
+                    Ok(recorded)
+                }
+                None => storage.existing_preview_image(conn, &blob).map_err(storage_error)?.ok_or(campfire_db::Error::RecordNotFound("ActiveStorage::Blob")),
+            }
+        })
+        .await
+        .map_err(Error::internal)
+}
+
+/// What `blob.analyze` would save, worked out off the writer.
+pub async fn analyzed_metadata(app: &App, blob: &Blob) -> Result<Json> {
+    let (storage, blob) = (app.storage.clone(), blob.clone());
+    process_media(move || storage.analyzed_metadata(&blob)).await
+}
+
+/// Uploads a file to storage for a blob whose row the caller saves next (see [`keep_after_commit`]).
+pub async fn stage_file(app: &App, path: std::path::PathBuf, filename: Filename, content_type: Option<String>) -> Result<Staged> {
+    let storage = app.storage.clone();
+    tokio::task::spawn_blocking(move || storage.stage_file(&path, filename, content_type.as_deref()))
+        .await
+        .map_err(Error::internal)?
+        .map_err(Error::internal)
+}
+
+/// Keeps a staged file once the write saving its row commits; a rollback drops it instead,
+/// which deletes the file.
+pub fn keep_after_commit(tx: &mut campfire_db::Tx<'_>, staged: Staged) {
+    tx.after_commit(move |_| {
+        staged.keep();
+        Ok(())
+    });
+}
+
+/// Runs libvips, ffmpeg or ffprobe work on the blocking pool, a few jobs at a time: each can take
+/// a lot of memory and CPU (libvips threads its own work), and uploads shouldn't queue behind
+/// more of them than the machine can run at once.
+async fn process_media<T: Send + 'static>(work: impl FnOnce() -> campfire_storage::Result<T> + Send + 'static) -> Result<T> {
+    static PERMITS: LazyLock<Semaphore> =
+        LazyLock::new(|| Semaphore::new(std::thread::available_parallelism().map_or(2, |n| n.get()).clamp(1, MAX_MEDIA_JOBS)));
+    let _permit = PERMITS.acquire().await.map_err(Error::internal)?;
+    tokio::task::spawn_blocking(work).await.map_err(Error::internal)?.map_err(Error::internal)
 }
 
 /// `blob.url(disposition:)` on the disk service: a signed `/rails/active_storage/disk/...` URL

@@ -68,16 +68,17 @@ pub async fn update(c: &mut Ctx) -> Result {
         _ => "✓",
     };
 
+    let avatar = avatar.stage(c.app()).await?;
     let pending = c
         .app()
         .db
         .write(move |tx| {
             user.update(tx, changes)?;
-            attachments::assign(tx, Record::user(user.id), "avatar", &avatar)
+            attachments::assign(tx, Record::user(user.id), "avatar", avatar)
         })
         .await
         .map_err(Error::internal)?;
-    attachments::upload_and_analyze_later(c.app(), pending).await?;
+    attachments::analyze_later(c.app(), pending);
 
     let location = c.url_for(&campfire_routes::user_profile());
     c.redirect_to_with(&location, Redirect { notice: Some(notice.into()), ..Redirect::default() })
