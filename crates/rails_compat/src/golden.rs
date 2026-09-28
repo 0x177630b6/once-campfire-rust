@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 
 use crate::global_id::{self, GlobalId};
 use crate::metadata::{self, Serializer};
-use crate::{Secrets, cookies, csrf, encoding, password, signed_id, turbo};
+use crate::{Secrets, cookies, password, signed_id, turbo};
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -136,61 +136,11 @@ fn rails_session_and_its_forms_are_accepted() {
 
     let hash = cookies::decrypt(&SECRETS, "_campfire_session", str(&session["session_cookie_raw"]), now()).unwrap();
     assert_eq!(hash, session["session"]);
-    let csrf_secret = str(&hash[csrf::SESSION_KEY]);
-
-    assert!(csrf::valid_token(csrf_secret, str(&session["csrf_meta_token"]), "/session", "POST"));
-    assert!(csrf::valid_token(csrf_secret, str(&session["session_form_token"]), "/session", "POST"));
-    assert!(!csrf::valid_token(csrf_secret, str(&session["session_form_token"]), "/rooms", "POST"));
-    assert!(!csrf::valid_token(csrf_secret, "bad", "/session", "POST"));
 
     let token = str(&session["session_token_value"]);
     assert_eq!(cookies::verify_signed(&SECRETS, "session_token", str(&session["session_token_raw"]), now()).as_deref(), Some(token));
     let ours = cookies::sign(&SECRETS, "session_token", token, Some(cookies::permanent_expires_at(now())));
     assert_eq!(ours, str(&session["session_token_raw"]));
-}
-
-#[test]
-fn csrf_tokens() {
-    let csrf_vectors = v("csrf");
-    assert_eq!(csrf_vectors["per_form_csrf_tokens"], true);
-    assert_eq!(csrf_vectors["forgery_protection_origin_check"], true);
-    let session_token = str(&csrf_vectors["session_token"]);
-    let real = encoding::urlsafe_decode(session_token).unwrap();
-
-    for token in cases("csrf.global_tokens") {
-        let masked = encoding::urlsafe_decode(str(token)).unwrap();
-        let (pad, _) = masked.split_at(32);
-        let global = hex::decode(str(&csrf_vectors["global_token_hex"])).unwrap();
-        assert_eq!(csrf::mask_with_pad_for_test(&global, pad), str(token));
-    }
-
-    for form in cases("csrf.form_tokens") {
-        let (action, method, page) = (str(&form["action"]), str(&form["method"]), str(&form["page_path"]));
-        assert_eq!(csrf::normalize_action_path(action, page), str(&form["normalized_action_path"]), "action {action:?}");
-        let masked = encoding::urlsafe_decode(str(&form["token"])).unwrap();
-        let (pad, _) = masked.split_at(32);
-        let unmasked = hex::decode(str(&form["unmasked_hex"])).unwrap();
-        assert_eq!(csrf::mask_with_pad_for_test(&unmasked, pad), str(&form["token"]));
-        let ours = csrf::per_form_masked_token(session_token, action, method, page);
-        assert!(csrf::valid_token(session_token, &ours, str(&form["normalized_action_path"]), &method.to_uppercase()));
-    }
-
-    for case in cases("csrf.validity") {
-        let valid = csrf::valid_token(session_token, str(&case["token"]), str(&case["path"]), str(&case["method"]));
-        assert_eq!(Value::Bool(valid), case["expected"], "{} {} {}", label(case), case["method"], case["path"]);
-    }
-
-    for case in cases("csrf.origin") {
-        let valid = csrf::valid_request_origin(opt_str(&case["origin"]), str(&case["base_url"]));
-        let expected = case["expected"].as_bool().unwrap_or(false); // "raises" fails the request too
-        assert_eq!(valid, expected, "origin {}", case["origin"]);
-    }
-
-    let fresh = csrf::generate_session_token();
-    assert_eq!(fresh.len(), str(&csrf_vectors["generated_session_token_example"]).len());
-    assert!(csrf::valid_token(&fresh, &csrf::masked_token(&fresh), "/any", "POST"));
-    assert!(!csrf::valid_token(&fresh, &csrf::masked_token(session_token), "/any", "POST"));
-    assert_eq!(real.len(), 32);
 }
 
 #[test]
@@ -337,7 +287,7 @@ fn write_rust_output_for_rails_to_verify() {
         .collect();
 
     let encrypted_cookies: Vec<Value> = [
-        json!({ "session_id": "rust-session-id", "_csrf_token": csrf::generate_session_token() }),
+        json!({ "session_id": "rust-session-id", "return_to_after_authenticating": "/rooms/1" }),
         json!({ "return_to_after_authenticating": "http://campfire.test/rooms/1?a=1&b=<2>", "n": 1 }),
         json!("plain"),
         json!([1, null, "☃\u{2028}"]),
@@ -346,20 +296,7 @@ fn write_rust_output_for_rails_to_verify() {
     .map(|value| json!({ "name": "_campfire_session", "raw": cookies::encrypt(secrets, "_campfire_session", &value, Some(permanent)), "value": value }))
     .collect();
 
-    let csrf_secret = csrf::generate_session_token();
-    let session_id = "0123456789abcdef0123456789abcdef";
-    let session_cookie = cookies::encrypt(secrets, "_campfire_session", &json!({ "session_id": session_id, "_csrf_token": csrf_secret }), Some(permanent));
     let session_token = "RustMadeSessionToken1234";
-
-    let csrf_session_token = str(v("csrf.session_token"));
-    let csrf_tokens: Vec<Value> = [("/session", "post", "/session/new", "/session", "POST"), ("/rooms/1/messages", "post", "/rooms/1", "/rooms/1/messages", "POST"), ("/rooms/1", "patch", "/rooms/1/edit", "/rooms/1", "PATCH"), ("messages", "post", "/rooms/1", "/rooms/1/messages", "POST")]
-        .iter()
-        .map(|(action, method, page, path, request_method)| {
-            json!({ "token": csrf::per_form_masked_token(csrf_session_token, action, method, page), "path": path, "method": request_method, "expected": true })
-        })
-        .chain((0..3).map(|_| json!({ "token": csrf::masked_token(csrf_session_token), "path": "/anything", "method": "POST", "expected": true })))
-        .chain(std::iter::once(json!({ "token": csrf::per_form_masked_token(csrf_session_token, "/session", "post", "/"), "path": "/rooms", "method": "POST", "expected": false })))
-        .collect();
 
     let four_hours = now.checked_add(jiff::SignedDuration::from_hours(4)).unwrap();
     let signed_ids: Vec<Value> = [(1, Some("avatar"), None), (2, Some("transfer"), Some(four_hours)), (12345, None, None), (9_007_199_254_740_993, Some("avatar"), None)]
@@ -404,12 +341,8 @@ fn write_rust_output_for_rails_to_verify() {
         "now": v("now"),
         "signed_cookies": signed_cookies,
         "encrypted_cookies": encrypted_cookies,
-        "session": { "cookie": session_cookie, "session_id": session_id, "csrf_secret": csrf_secret,
-                     "meta_token": csrf::masked_token(&csrf_secret),
-                     "form_token": csrf::per_form_masked_token(&csrf_secret, "http://campfire.test/session", "post", "/session/new"),
-                     "session_token": session_token,
+        "session": { "session_token": session_token,
                      "session_token_cookie": cookies::sign(secrets, "session_token", session_token, Some(permanent)) },
-        "csrf": { "session_token": csrf_session_token, "tokens": csrf_tokens },
         "signed_ids": signed_ids,
         "sgids": sgids,
         "turbo_stream_names": turbo,

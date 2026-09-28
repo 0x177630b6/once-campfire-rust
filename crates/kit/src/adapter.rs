@@ -165,7 +165,7 @@ fn clone_error(error: &Error) -> Error {
 /// Hand a finished response to hyper, streaming files and dropping HEAD bodies (`Rack::Head`)
 /// while keeping their `Content-Length`.
 pub async fn into_axum(response: Response, head: bool) -> axum::response::Response {
-    let Response { status, mut headers, body, cached_fragments } = response;
+    let Response { status, mut headers, body, page_parts, .. } = response;
     let app_set_length = headers.contains_key(header::CONTENT_LENGTH);
     let body = match body {
         Body::Empty => AxumBody::empty(),
@@ -198,8 +198,8 @@ pub async fn into_axum(response: Response, head: bool) -> axum::response::Respon
     if app_set_length {
         response.extensions_mut().insert(crate::deflater::AppContentLength);
     }
-    if !cached_fragments.is_empty() {
-        response.extensions_mut().insert(crate::deflater::splice::CachedFragments(cached_fragments));
+    if let Some(parts) = page_parts {
+        response.extensions_mut().insert(parts);
     }
     response
 }

@@ -20,6 +20,7 @@ async fn create_session(c: &mut Ctx) -> Result {
     c.verify_authenticity_token()?;
     let session = c.session();
     let body = json!({ "id": session.id(), "csrf": session.get("_csrf_token") });
+    session.insert("return_to_after_authenticating", "/rooms/1");
     c.json(StatusCode::OK, &body)
 }
 
@@ -73,12 +74,14 @@ async fn rails_sessions_carry_over() {
     assert_eq!(body["id"], session["session"]["session_id"]);
     assert_eq!(body["csrf"], session["session"]["_csrf_token"], "Rails' token stays in the session, unused");
 
-    // What we write back is the same session, readable by Rails' cookie format.
+    // What we write back after a change is the same session plus the change, in Rails' format.
     let raw = set_cookie.strip_prefix("_campfire_session=").unwrap().split(';').next().unwrap();
     let raw = rails_compat::cookies::unescape(raw);
     let now = vectors["now"].as_str().unwrap().parse().unwrap();
     let decoded = rails_compat::cookies::decrypt(&secrets, "_campfire_session", &raw, now).unwrap();
-    assert_eq!(decoded, session["session"]);
+    let mut expected = session["session"].clone();
+    expected["return_to_after_authenticating"] = "/rooms/1".into();
+    assert_eq!(decoded, expected);
     assert!(set_cookie.ends_with("; path=/; expires=Mon, 01 Jan 2046 12:00:00 GMT; httponly; samesite=lax"));
 
     assert_eq!(post_session(&app, &cookie, "same-origin", None, None).await.status(), StatusCode::OK);

@@ -447,7 +447,7 @@ async fn forgery_protection_checks_the_origin() {
 }
 
 #[tokio::test]
-async fn session_is_lazy_persistent_and_resettable() {
+async fn session_cookie_is_written_only_when_the_session_changes() {
     let app = app();
     let untouched = send(&app, get("/noop").body(AxumBody::empty()).unwrap()).await;
     assert!(untouched.cookies().is_empty());
@@ -457,23 +457,29 @@ async fn session_is_lazy_persistent_and_resettable() {
     let cookie = set.cookie_jar();
     assert!(cookie.starts_with("_campfire_session="));
 
+    // Reading it, or not touching it, sends no cookie back: the one the browser has stays.
     let read = send(&app, get("/session").header(header::COOKIE, &cookie).body(AxumBody::empty()).unwrap()).await;
     assert_eq!(read.json()["value"], "/rooms/1");
+    assert!(read.cookies().is_empty(), "{:?}", read.cookies());
     let id = read.json()["id"].as_str().unwrap().to_string();
     assert_eq!(id.len(), 32);
-
-    // A request that never touches the session still re-issues it (expire_after forces it).
     let noop = send(&app, get("/noop").header(header::COOKIE, &cookie).body(AxumBody::empty()).unwrap()).await;
-    let reissued = noop.cookie_jar();
-    assert!(reissued.starts_with("_campfire_session="));
-    let again = send(&app, get("/session").header(header::COOKIE, &reissued).body(AxumBody::empty()).unwrap()).await;
+    assert!(noop.cookies().is_empty());
+    let same = form_post("/session", "value=%2Frooms%2F1");
+    let (mut parts, body) = same.into_parts();
+    parts.headers.insert(header::COOKIE, cookie.parse().unwrap());
+    let same = send(&app, HttpRequest::from_parts(parts, body)).await;
+    assert!(same.cookies().is_empty(), "writing the value it already holds changes nothing");
+    let again = send(&app, get("/session").header(header::COOKIE, &cookie).body(AxumBody::empty()).unwrap()).await;
     assert_eq!(again.json()["id"], id.as_str());
 
+    // Resetting leaves nothing to keep, so the cookie goes.
     let reset = send(
         &app,
         HttpRequest::delete("/session").header(header::COOKIE, &cookie).body(AxumBody::empty()).unwrap(),
     )
     .await;
+    assert!(reset.cookies().iter().any(|c| c.starts_with("_campfire_session=;")), "{:?}", reset.cookies());
     let after = send(&app, get("/session").header(header::COOKIE, reset.cookie_jar()).body(AxumBody::empty()).unwrap()).await;
     assert_eq!(after.json()["value"], serde_json::Value::Null);
     assert_ne!(after.json()["id"], id.as_str());
@@ -493,6 +499,8 @@ async fn flash_survives_exactly_one_redirect() {
 
     let shown = send(&app, get("/flash").header(header::COOKIE, &cookie).body(AxumBody::empty()).unwrap()).await;
     assert_eq!(shown.json()["notice"], "✓");
+    // Shown, the flash is swept, and with it the only thing the session held.
+    assert!(shown.cookies().iter().any(|c| c.starts_with("_campfire_session=;")), "{:?}", shown.cookies());
     let gone = send(&app, get("/flash").header(header::COOKIE, shown.cookie_jar()).body(AxumBody::empty()).unwrap()).await;
     assert_eq!(gone.json()["notice"], serde_json::Value::Null);
 }

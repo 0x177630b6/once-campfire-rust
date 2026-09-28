@@ -1,8 +1,7 @@
 # Verifies, with the reference app, the values crates/rails_compat generated
 # (target/rails_compat_rust_output.json, written by `cargo test -p rails_compat`).
-# Cookies and CSRF tokens also go through full requests against the app, the "old browser tab"
-# direction: a session Rust started is used to sign in on Rails, and a Rust-signed session_token
-# cookie authenticates on Rails.
+# A Rust-signed session_token cookie also goes through a full request against the app: it
+# authenticates on Rails (switching back to the Rails image keeps people signed in).
 #
 #   reference-tools/run.sh reference-tools/rails_compat_verify_rust.rb [path/to/rust_output.json]
 require_relative "support"
@@ -23,7 +22,6 @@ class RailsCompatVerifyRust
     verify_signed_cookies
     verify_encrypted_cookies
     verify_session_requests
-    verify_csrf_tokens
     verify_signed_ids
     verify_sgids
     verify_turbo_stream_names
@@ -55,21 +53,9 @@ class RailsCompatVerifyRust
     end
 
     def verify_session_requests
+      # The Rust app checks Sec-Fetch-Site rather than CSRF tokens, so there are no Rust-made tokens
+      # to check; its session cookies are covered by verify_encrypted_cookies.
       session = @output["session"]
-      cookies = { "_campfire_session" => session["cookie"] }
-      credentials = { email_address: "david@example.com", password: "secret123456" }
-
-      status, headers, _ = perform(:post, "/session", cookies: cookies, params: credentials.merge(authenticity_token: session["form_token"]))
-      check "sign in with a Rust session and per-form token", status, 302
-      set = set_cookies(headers)
-      check "Rails keeps the Rust session id", read_cookie(:encrypted, "_campfire_session", set.dig("_campfire_session", "raw"))&.fetch("session_id"), session["session_id"]
-
-      status, _, _ = perform(:post, "/session", cookies: cookies, params: credentials, headers: { "HTTP_X_CSRF_TOKEN" => session["meta_token"] })
-      check "sign in with a Rust session and X-CSRF-Token", status, 302
-
-      status, _, _ = perform(:post, "/session", cookies: cookies, params: credentials.merge(authenticity_token: session["meta_token"].reverse))
-      check "sign in with a bad token", status, 422
-
       Session.create!(user: @david, token: session["session_token"], user_agent: USER_AGENT, ip_address: "127.0.0.1")
       status, headers, _ = perform(:get, "/", cookies: { "session_token" => session["session_token_cookie"] })
       check "Rust-signed session_token authenticates (not a redirect to sign in)", [ status, headers["location"].to_s.include?("/session/new") ], [ status, false ]
@@ -77,13 +63,6 @@ class RailsCompatVerifyRust
 
       status, headers, _ = perform(:get, "/", cookies: { "session_token" => session["session_token_cookie"].reverse })
       check "tampered session_token redirects to sign in", headers["location"].to_s.include?("/session/new"), true
-    end
-
-    def verify_csrf_tokens
-      @output["csrf"]["tokens"].each do |token|
-        controller = csrf_controller(@output["csrf"]["session_token"], path: token["path"], method: token["method"])
-        check "csrf token for #{token["method"]} #{token["path"]}", controller.send(:valid_authenticity_token?, controller.session, token["token"]), token["expected"]
-      end
     end
 
     def verify_signed_ids

@@ -16,8 +16,11 @@ pub struct Response {
     pub status: StatusCode,
     pub headers: HeaderMap,
     pub body: Body,
-    /// Cached fragments in the body, for the deflater to splice in precompressed.
+    /// Cached fragments in the body, in order: the ETag and gzip reuse their digests and
+    /// compressed pieces instead of working through the whole body.
     pub cached_fragments: Vec<std::sync::Arc<String>>,
+    /// The body split at `cached_fragments`, once the kit has finished the response.
+    pub(crate) page_parts: Option<std::sync::Arc<crate::deflater::splice::PageParts>>,
 }
 
 pub enum Body {
@@ -49,7 +52,7 @@ pub struct FileBody {
 
 impl Response {
     pub fn new(status: StatusCode) -> Self {
-        Self { status, headers: HeaderMap::new(), body: Body::Empty, cached_fragments: Vec::new() }
+        Self { status, headers: HeaderMap::new(), body: Body::Empty, cached_fragments: Vec::new(), page_parts: None }
     }
 
     pub fn with_body(status: StatusCode, content_type: &str, body: impl Into<Bytes>) -> Self {

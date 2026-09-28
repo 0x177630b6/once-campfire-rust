@@ -12,6 +12,7 @@ use sha2::{Digest, Sha256};
 use crate::app::Kit;
 use crate::clock::{self, SharedClock};
 use crate::cookies::CookieJar;
+use crate::deflater::splice::PageParts;
 use crate::format::{self, Format, InvalidMimeType, NegotiationInput};
 use crate::params::{Param, ParamMap};
 use crate::request::Request;
@@ -685,13 +686,21 @@ impl Ctx {
 /// `Live::Buffer`, which doesn't respond to `to_ary`, so it's never digested: whatever such a
 /// controller renders goes out with `no-cache` and no ETag.
 fn rack_etag(response: &mut Response, digestible: bool) {
+    if let Body::Bytes(bytes) = &response.body
+        && !response.cached_fragments.is_empty()
+    {
+        response.page_parts = PageParts::new(bytes, &response.cached_fragments).map(std::sync::Arc::new);
+    }
     let mut digested = false;
     let skip = !digestible || response.headers.contains_key(header::ETAG) || response.headers.contains_key(header::LAST_MODIFIED);
     if matches!(response.status.as_u16(), 200 | 201) && !skip
         && let Body::Bytes(bytes) = &response.body
             && !bytes.is_empty() {
-                let digest = Sha256::digest(bytes);
-                let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+                // A page of cached fragments hashes its parts' digests rather than the whole body.
+                let hex = match &response.page_parts {
+                    Some(parts) => parts.etag(bytes),
+                    None => Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect(),
+                };
                 response.headers.insert(header::ETAG, HeaderValue::from_str(&format!("W/\"{}\"", &hex[..32])).unwrap());
                 digested = true;
             }
