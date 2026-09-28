@@ -326,6 +326,11 @@ Deliberate:
   modules (libopenmpt), game-console music (libgme), JPEG XL and SVG frames, codec2 speech,
   teletext subtitles, and DASH/IMF manifests. Tracker modules and game-console music attached to
   a message are now stored without duration or bit rate, which Campfire never shows.
+- **Limits where Rails had none, or raised.** Request bodies other than file uploads are capped at
+  16 MiB (a 413). A QR code for more than a QR code can hold is a 422, not a 500. Page numbers are
+  capped at a billion. A WebSocket connection holds up to 64 subscriptions with identifiers of up to
+  4 KiB, and a client that doesn't read what it's sent for 30 seconds is disconnected. Deactivating
+  or banning a user closes their open connections once the change commits.
 - **Not ported:** the duplicate `session_token` cookie Rails' Active Storage streaming sends; responses
   to requests for multiple byte ranges; and legacy AES-CBC encrypted cookies, since Campfire started
   on GCM.
