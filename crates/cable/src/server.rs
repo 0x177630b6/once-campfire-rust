@@ -4,27 +4,16 @@ use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use axum::extract::ws::WebSocketUpgrade;
-use axum::extract::{FromRequestParts, Request};
-use axum::http::{HeaderMap, Method, StatusCode, Uri, header};
+use axum::extract::Request;
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 use tokio::sync::{broadcast, watch};
 
 use crate::channel::Channel;
-use crate::pubsub::Hub;
+use crate::pubsub::{Frame, Hub};
+use crate::socket::Handshake;
 use crate::{connection, json, naming, protocol};
-
-/// The WebSocket read buffer per connection. Clients only send small commands, and tungstenite
-/// zero-fills the buffer's free space on every read (its 128 KiB default costs more CPU than the
-/// rest of a fan-out and stays resident per socket). Larger incoming frames still grow it.
-const READ_BUFFER_SIZE: usize = 4 * 1024;
-
-/// How much tungstenite buffers before writing to the socket while a batch of frames is fed; the
-/// rest goes out on the batch's flush. The buffer keeps its high-water capacity per socket (at
-/// 16 KiB it averaged 47 KB per socket in a 1,000-client fan-out), so only small frames are
-/// coalesced: a frame that takes the buffer past this is written at once.
-const WRITE_BUFFER_SIZE: usize = 4 * 1024;
 
 /// `config.action_cable.*` as the production reference runs it.
 #[derive(Debug, Clone)]
@@ -130,7 +119,7 @@ struct Inner<U: Send + Sync + 'static> {
     hub: Arc<Hub>,
     authenticator: Arc<dyn Authenticate<U>>,
     channels: HashMap<String, ChannelFactory<U>>,
-    heartbeat: OnceLock<watch::Receiver<i64>>,
+    heartbeat: OnceLock<watch::Receiver<Frame>>,
     restart: broadcast::Sender<()>,
 }
 
@@ -148,18 +137,25 @@ impl<U: Identified + Send + Sync + 'static> Server<U> {
         if !websocket_request(&parts.method, &parts.headers) || !self.allow_request_origin(&parts.headers) {
             return page_not_found();
         }
-        let Ok(upgrade) = WebSocketUpgrade::from_request_parts(&mut parts, &()).await else {
+        let (Some(handshake), Some(on_upgrade)) =
+            (Handshake::accept(&parts.headers), parts.extensions.remove::<hyper::upgrade::OnUpgrade>())
+        else {
             return page_not_found();
         };
-        let protocol = negotiate_protocol(&parts.headers);
+        let mut response = Response::new(axum::body::Body::empty());
+        *response.status_mut() = StatusCode::SWITCHING_PROTOCOLS;
+        handshake.response_headers(response.headers_mut());
+        if let Some(protocol) = negotiate_protocol(&parts.headers) {
+            response.headers_mut().insert(header::SEC_WEBSOCKET_PROTOCOL, HeaderValue::from_static(protocol));
+        }
         let request = ConnectRequest { uri: parts.uri, headers: parts.headers };
         let server = self.clone();
-        let upgrade = match protocol {
-            Some(protocol) => upgrade.protocols([protocol]),
-            None => upgrade,
-        };
-        let upgrade = upgrade.read_buffer_size(READ_BUFFER_SIZE).write_buffer_size(WRITE_BUFFER_SIZE);
-        upgrade.on_upgrade(move |socket| connection::run(server, socket, request))
+        connections_runtime().spawn(async move {
+            if let Ok(upgraded) = on_upgrade.await {
+                connection::run(server, hyper_util::rt::TokioIo::new(upgraded), handshake.deflate(), request).await;
+            }
+        });
+        response
     }
 
     /// An Axum router serving [`Server::call`] at `path` (normally [`protocol::DEFAULT_MOUNT_PATH`]).
@@ -190,7 +186,7 @@ impl<U: Send + Sync + 'static> Server<U> {
         self.inner.channels.get(class_name.strip_prefix("::").unwrap_or(class_name))
     }
 
-    pub(crate) fn heartbeat(&self) -> watch::Receiver<i64> {
+    pub(crate) fn heartbeat(&self) -> watch::Receiver<Frame> {
         self.start_heartbeat().clone()
     }
 
@@ -257,15 +253,15 @@ impl<U: Send + Sync + 'static> Server<U> {
 
     /// The server-wide heartbeat timer, started on the first request like Rails'
     /// `setup_heartbeat_timer`, so every connection pings in step.
-    fn start_heartbeat(&self) -> &watch::Receiver<i64> {
+    fn start_heartbeat(&self) -> &watch::Receiver<Frame> {
         self.inner.heartbeat.get_or_init(|| {
-            let (sender, receiver) = watch::channel(unix_now());
+            let (sender, receiver) = watch::channel(Frame::from(protocol::ping(unix_now())));
             tokio::spawn(async move {
                 let period = Duration::from_secs(protocol::BEAT_INTERVAL);
                 let mut interval = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
                 loop {
                     interval.tick().await;
-                    if sender.send(unix_now()).is_err() {
+                    if sender.send(protocol::ping(unix_now()).into()).is_err() {
                         break;
                     }
                 }
@@ -339,4 +335,21 @@ mod tests {
         assert_eq!(negotiate_protocol(&headers("foo")), None);
         assert_eq!(negotiate_protocol(&HeaderMap::new()), None);
     }
+}
+
+/// The runtime connections run on, apart from the app's. A broadcast to a big room wakes every
+/// subscriber's task at once; on a shared runtime the HTTP requests that arrive meanwhile (the
+/// POST that made the broadcast among them) queue behind that whole wave. On threads of their own,
+/// the OS shares the cores between requests and the wave.
+fn connections_runtime() -> &'static tokio::runtime::Handle {
+    static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+    RUNTIME
+        .get_or_init(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .thread_name("cable")
+                .enable_all()
+                .build()
+                .expect("the cable runtime starts")
+        })
+        .handle()
 }

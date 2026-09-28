@@ -51,7 +51,7 @@ pub type Log = Arc<Mutex<Vec<String>>>;
 #[async_trait::async_trait]
 impl Channel<User> for RoomChannel {
     async fn subscribed(&mut self, sub: &mut Subscription<User>) -> ChannelResult {
-        let room_id = sub.param("room_id").and_then(Value::as_u64);
+        let room_id = sub.param("room_id").as_ref().and_then(Value::as_u64);
         match room_id.filter(|id| sub.current_user().room_ids.contains(id)) {
             Some(id) => {
                 let room = format!("room-{id}");

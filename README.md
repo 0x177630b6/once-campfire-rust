@@ -123,6 +123,30 @@ app. Every one of the 10,000 Rust clients subscribed in every run; Rails once go
 | Image size, unpacked | 933 MB | 169 MB | **5.5×** |
 | Image size, compressed download | 359 MB | 67 MB | **5.4×** |
 
+### 100,000 clients, and a Raspberry Pi 5
+
+One Campfire holds 100,000 connected clients in 1.5 GB: every one connects in about 13 s, and
+memory stays flat while messages fan out to all of them. On a Raspberry Pi 5's CPU budget
+(emulated: four pinned cores capped at 1.2 cores' worth), the app delivered over a million
+messages a second to those clients, the load generator's limit, using 0.71 of its 1.2 cores. What
+limits a Pi is its gigabit Ethernet: about 51,000 compressed deliveries a second. That's 100,000
+chatters in rooms of 100, each posting every five minutes, with a third to spare; a single room of
+100,000 can't be busy on one gigabit link. Details and caveats in
+[`bench/results/pi-100k-20260928/report.md`](bench/results/pi-100k-20260928/report.md).
+
+| At 100,000 clients | Before | After |
+|---|---|---|
+| Memory, idle | 3.2 GB | 1.5 GB |
+| Memory, while fanning out | 5.9 GB | 1.6 GB |
+| A message on the wire | ~10 KB | ~2.3 KB (compressed) |
+| Posting while a message fans out to everyone, p50 | 637 ms | 43 ms |
+
+What changed: Action Cable sockets use their own small WebSocket implementation, which writes each
+broadcast's shared bytes to every socket without copying them per connection, and compresses a
+broadcast once for all of its subscribers (`permessage-deflate`, which browsers offer). Connections
+run on threads of their own, so page loads and posts don't queue behind a fan-out. The app also
+raises its own open-file limit, which in Docker would otherwise stop it at 65,536 clients.
+
 ### Where the speed came from
 
 A straight translation was already 3–10× faster than Rails. Profiling (in
@@ -142,6 +166,7 @@ test suite and the parity gate green.
 | Splice precompressed messages into gzipped pages ([below](#spliced-gzip)) | Room page 2,527 → 5,461 req/s; messages page 3,709 → 16,523 req/s; search 2,123 → 5,526 req/s |
 | Forgery protection by `Sec-Fetch-Site` instead of CSRF tokens ([Known differences](#known-differences)) | Room page +9%, messages page +6%, search +10%; pages render the same until their content changes, so revalidation gets a 304 |
 | Cache every part of a page, not just its messages, and take the ETag from the parts ([above](#cached-page-parts)) | Room page 2.9×, search 2.8×, messages page 1.3× |
+| Cable: own WebSocket framing with shared, once-compressed frames; connections on their own runtime ([above](#100000-clients-and-a-raspberry-pi-5)) | 100,000 clients in 1.6 GB instead of 5.9 GB while fanning out; a post during a 100,000-client fan-out 637 → 43 ms; frames 10 KB → 2.3 KB on the wire |
 | Index messages by `(room_id, created_at)`; check "more than a page" without counting the room | In a room with 236k messages: room page 95 → 6,051 req/s (64×), messages page 87 → 17,972 req/s (208×). Before, a room page sorted the room's whole history, so rooms slowed as they grew; now a long room serves as fast as a new one |
 
 Measured the same way as the preliminary run, the room page went from 4.4× to 10.9× Rails, and cable
@@ -253,6 +278,9 @@ bench/run                                                  # benchmark both apps
 
 Deliberate:
 
+- **Compressed WebSocket frames.** The app accepts the `permessage-deflate` compression browsers
+  offer (without context takeover, so each broadcast is compressed once for all of its
+  subscribers); Rails' Action Cable doesn't negotiate it. The frames decode to the same messages.
 - **No CSRF tokens.** Forgery protection checks the `Sec-Fetch-Site` header browsers send, as Rails
   main's `protect_from_forgery using: :header_only` does, instead of per-request tokens. Writes are
   accepted from `same-origin` and `same-site` requests; `cross-site` ones, and HTTPS requests

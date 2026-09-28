@@ -64,9 +64,10 @@ impl<U: Send + Sync + 'static> Channel<U> for EmptyChannel {}
 pub struct Subscription<U: Send + Sync + 'static> {
     pub(crate) server: Server<U>,
     pub(crate) class_name: String,
-    pub(crate) identifier: String,
+    /// The raw identifier the client subscribed with; params are parsed from it when asked for
+    /// (subscriptions live as long as their sockets, and are many).
+    pub(crate) identifier: Arc<str>,
     pub(crate) encoded_identifier: Arc<str>,
-    pub(crate) params: Params,
     pub(crate) current_user: Arc<U>,
     pub(crate) streams: Vec<(String, AbortHandle)>,
     /// Streams started by the last callback, for the connection to start reading once that
@@ -84,12 +85,15 @@ impl<U: Send + Sync + 'static> Subscription<U> {
     }
 
     /// The decoded identifier, including `channel`.
-    pub fn params(&self) -> &Params {
-        &self.params
+    pub fn params(&self) -> Params {
+        match serde_json::from_str::<Value>(&self.identifier) {
+            Ok(Value::Object(params)) => params,
+            _ => Params::new(),
+        }
     }
 
-    pub fn param(&self, key: &str) -> Option<&Value> {
-        self.params.get(key)
+    pub fn param(&self, key: &str) -> Option<Value> {
+        self.params().remove(key)
     }
 
     /// `identified_by :current_user`.

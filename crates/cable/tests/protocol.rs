@@ -346,3 +346,15 @@ async fn http_get(url: &str, headers: &[(&str, &str)]) -> (u16, Option<String>, 
         .find_map(|line| line.to_ascii_lowercase().strip_prefix("content-type: ").map(str::to_string));
     (status, content_type, body.to_string())
 }
+
+#[tokio::test]
+async fn a_client_close_is_answered_with_its_code() {
+    use futures_util::SinkExt;
+    use tokio_tungstenite::tungstenite::protocol::{CloseFrame, frame::coding::CloseCode};
+    let app = start(test_config()).await;
+    let mut client = app.connect(1).await;
+    assert_eq!(client.next_text().await, WELCOME);
+    let close = CloseFrame { code: CloseCode::Away, reason: "".into() };
+    client.socket.send(tokio_tungstenite::tungstenite::Message::Close(Some(close))).await.unwrap();
+    assert_eq!(client.next().await, Frame::Close(Some((1001, String::new()))));
+}

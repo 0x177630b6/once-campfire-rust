@@ -9,14 +9,13 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use axum::extract::ws::Utf8Bytes;
 use futures_util::stream::{Abortable, BoxStream, StreamExt};
 use tokio::sync::broadcast;
 
 use crate::protocol;
 
 /// A frame ready for the socket, shared by every subscriber that receives it.
-pub type Frame = Utf8Bytes;
+pub type Frame = crate::socket::Frame;
 
 /// One subscription's stream of frames, as a connection reads it: it ends when the stream is
 /// stopped.

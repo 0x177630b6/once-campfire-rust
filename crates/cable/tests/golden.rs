@@ -326,7 +326,7 @@ impl Authenticate<User> for FixtureAuth {
 
 /// `RoomChannel#subscribed`: `stream_for` a room the user is a member of, else reject.
 fn subscribe_to_room(sub: &mut Subscription<User>) -> Option<u64> {
-    let room_id = sub.param("room_id").and_then(Value::as_u64).filter(|id| sub.current_user().room_ids.contains(id));
+    let room_id = sub.param("room_id").as_ref().and_then(Value::as_u64).filter(|id| sub.current_user().room_ids.contains(id));
     match room_id {
         Some(id) => sub.stream_for(&[&format!("room-{id}")]),
         None => sub.reject(),

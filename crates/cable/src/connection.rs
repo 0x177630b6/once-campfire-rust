@@ -7,12 +7,12 @@
 //!
 //! The socket's read half lives in a task of its own that hands incoming messages over in order,
 //! so it's only polled when the socket is readable, not every time a delivery wakes the
-//! connection (tungstenite zero-fills its free read buffer on each read attempt).
+//! connection.
 use std::sync::Arc;
 
-use axum::extract::ws::{CloseFrame, Message, WebSocket};
-use futures_util::stream::{AbortRegistration, Abortable, SelectAll, SplitSink, SplitStream};
-use futures_util::{FutureExt, SinkExt, StreamExt};
+use futures_util::stream::{AbortRegistration, Abortable, SelectAll};
+use futures_util::{FutureExt, StreamExt};
+use tokio::io::{ReadHalf, WriteHalf};
 use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -21,6 +21,7 @@ use crate::channel::{Channel, Params, Subscription};
 use crate::protocol::{self, DisconnectReason};
 use crate::pubsub::{Deliveries, Frame, Subscriber};
 use crate::server::{ConnectRequest, Identified, internal_channel};
+use crate::socket::{Incoming, Reader, Writer};
 use crate::{Server, json};
 
 struct Entry<U: Send + Sync + 'static> {
@@ -45,7 +46,7 @@ struct Connection<U: Send + Sync + 'static> {
     server: Server<U>,
     user: Arc<U>,
     /// Keyed by the raw identifier string, in subscription order (a Ruby hash).
-    subscriptions: Vec<(String, Entry<U>)>,
+    subscriptions: Vec<Entry<U>>,
     pending: Vec<Frame>,
     /// Streams the last command's callbacks started, to read from once its frames are queued.
     started: Vec<(Subscriber, AbortRegistration)>,
@@ -55,19 +56,26 @@ struct Connection<U: Send + Sync + 'static> {
 /// commands faster than they're handled is held back by TCP once this fills.
 const INCOMING_CAPACITY: usize = 16;
 
-type Sink = SplitSink<WebSocket, Message>;
+/// The upgraded HTTP connection a WebSocket runs on.
+pub(crate) type Io = hyper_util::rt::TokioIo<hyper::upgrade::Upgraded>;
+type Sink = Writer<WriteHalf<Io>>;
 
-pub(crate) async fn run<U: Identified + Send + Sync + 'static>(server: Server<U>, socket: WebSocket, request: ConnectRequest) {
-    let (mut sink, stream) = socket.split();
-    let (reader, mut incoming) = spawn_reader(stream);
+pub(crate) async fn run<U: Identified + Send + Sync + 'static>(server: Server<U>, io: Io, deflate: bool, request: ConnectRequest) {
+    let (read, write) = tokio::io::split(io);
+    let mut sink = Writer::new(write, deflate);
+    let (reader, mut incoming) = spawn_reader(Reader::new(read, deflate));
     let config = server.config().clone();
 
     // handle_open: connect, subscribe to the internal channel, welcome, then process whatever
     // arrived meanwhile (the socket buffers it for us, like MessageBuffer).
-    let Some(user) = server.authenticator().connect(&request).await else {
+    let user = server.authenticator().connect(&request).await;
+    // Only connecting needs the request. Its header values are slices of the HTTP read buffer, so
+    // keeping it would hold that buffer (8 KB) for as long as the socket is open.
+    drop(request);
+    let Some(user) = user else {
         tracing::error!("An unauthorized connection attempt was rejected");
         let frame = protocol::disconnect(Some(DisconnectReason::Unauthorized), &Value::Bool(false));
-        let _ = sink.send(Message::Text(frame.into())).await;
+        let _ = sink.send(&[frame.into()]).await;
         close_socket(&mut sink, &mut incoming, config.close_timeout).await;
         reader.abort();
         return;
@@ -89,7 +97,7 @@ pub(crate) async fn run<U: Identified + Send + Sync + 'static>(server: Server<U>
         Connection { server, user: Arc::new(user), subscriptions: Vec::new(), pending: Vec::new(), started: Vec::new() };
 
     let mut close: Option<Close> = None;
-    if sink.send(Message::Text(protocol::welcome().into())).await.is_err() {
+    if sink.send(&[protocol::welcome().into()]).await.is_err() {
         reader.abort();
         connection.handle_close().await;
         return;
@@ -98,10 +106,24 @@ pub(crate) async fn run<U: Identified + Send + Sync + 'static>(server: Server<U>
     loop {
         tokio::select! {
             message = incoming.recv() => match message {
-                Some(Message::Text(text)) => connection.dispatch(text.as_str()).await,
-                Some(Message::Binary(_)) => tracing::error!("Couldn't handle non-string message: Array"),
-                Some(Message::Ping(_) | Message::Pong(_)) => {}
-                Some(Message::Close(_)) | None => break,
+                Some(Incoming::Text(text)) => connection.dispatch(&text).await,
+                Some(Incoming::Binary) => tracing::error!("Couldn't handle non-string message: Array"),
+                Some(Incoming::Ping(payload)) => {
+                    if sink.pong(&payload).await.is_err() {
+                        break;
+                    }
+                }
+                Some(Incoming::Pong) => {}
+                // Complete the closing handshake (RFC 6455 §5.5.1) before letting the socket go.
+                Some(Incoming::Close(code)) => {
+                    let _ = sink.close_reply(code).await;
+                    break;
+                }
+                Some(Incoming::Invalid) => {
+                    let _ = sink.close(1002).await;
+                    break;
+                }
+                None => break,
             },
             Some(delivery) = deliveries.next() => {
                 // Whatever else is ready already goes out in the same write.
@@ -120,15 +142,16 @@ pub(crate) async fn run<U: Identified + Send + Sync + 'static>(server: Server<U>
                 }
             }
             Some(message) = internal.next() => match message {
-                Ok(message) => match process_internal_message(&message) {
+                Ok(message) => match process_internal_message(message.as_str()) {
                     Some(remote) => close = Some(remote),
                     None => continue,
                 },
                 Err(_) => continue,
             },
             Ok(()) = heartbeat.changed() => {
-                let now = *heartbeat.borrow_and_update();
-                connection.pending.push(protocol::ping(now).into());
+                // One frame per beat, shared by every connection.
+                let ping = heartbeat.borrow_and_update().clone();
+                connection.pending.push(ping);
             }
             Ok(()) = restarts.recv() => {
                 close = Some(Close { reason: Some(DisconnectReason::ServerRestart), reconnect: Value::Bool(true) });
@@ -140,7 +163,7 @@ pub(crate) async fn run<U: Identified + Send + Sync + 'static>(server: Server<U>
             break;
         }
         if let Some(Close { reason, reconnect }) = close.take() {
-            let _ = sink.send(Message::Text(protocol::disconnect(reason, &reconnect).into())).await;
+            let _ = sink.send(&[protocol::disconnect(reason, &reconnect).into()]).await;
             close_socket(&mut sink, &mut incoming, config.close_timeout).await;
             break;
         }
@@ -161,11 +184,16 @@ fn process_internal_message(message: &str) -> Option<Close> {
 
 /// Reads the socket until it closes or errors, handing each message to the connection. It stops
 /// after a close frame, as the connection does.
-fn spawn_reader(mut stream: SplitStream<WebSocket>) -> (JoinHandle<()>, mpsc::Receiver<Message>) {
+fn spawn_reader(mut reader: Reader<ReadHalf<Io>>) -> (JoinHandle<()>, mpsc::Receiver<Incoming>) {
     let (sender, receiver) = mpsc::channel(INCOMING_CAPACITY);
     let reader = tokio::spawn(async move {
-        while let Some(Ok(message)) = stream.next().await {
-            let close = matches!(message, Message::Close(_));
+        loop {
+            let message = match reader.next().await {
+                Ok(message) => message,
+                Err(error) if error.kind() == std::io::ErrorKind::InvalidData => Incoming::Invalid,
+                Err(_) => break,
+            };
+            let close = matches!(message, Incoming::Close(_) | Incoming::Invalid);
             if sender.send(message).await.is_err() || close {
                 break;
             }
@@ -176,12 +204,11 @@ fn spawn_reader(mut stream: SplitStream<WebSocket>) -> (JoinHandle<()>, mpsc::Re
 
 /// Sends a normal close (1000, no reason, as `ClientSocket#close` defaults) and waits briefly
 /// for the client to finish the handshake.
-async fn close_socket(sink: &mut Sink, incoming: &mut mpsc::Receiver<Message>, timeout: std::time::Duration) {
-    let frame = CloseFrame { code: 1000, reason: "".into() };
-    if sink.send(Message::Close(Some(frame))).await.is_ok() {
+async fn close_socket(sink: &mut Sink, incoming: &mut mpsc::Receiver<Incoming>, timeout: std::time::Duration) {
+    if sink.close(1000).await.is_ok() {
         let _ = tokio::time::timeout(timeout, async {
             while let Some(message) = incoming.recv().await {
-                if matches!(message, Message::Close(_)) {
+                if matches!(message, Incoming::Close(_) | Incoming::Invalid) {
                     break;
                 }
             }
@@ -191,17 +218,14 @@ async fn close_socket(sink: &mut Sink, incoming: &mut mpsc::Receiver<Message>, t
 }
 
 impl<U: Send + Sync + 'static> Connection<U> {
-    /// Writes the pending frames in order and flushes once.
+    /// Writes the pending frames in order, in one vectored write where the socket takes it.
     async fn flush(&mut self, sink: &mut Sink) -> bool {
         if self.pending.is_empty() {
             return true;
         }
-        for frame in self.pending.drain(..) {
-            if sink.feed(Message::Text(frame)).await.is_err() {
-                return false;
-            }
-        }
-        sink.flush().await.is_ok()
+        let written = sink.send(&self.pending).await.is_ok();
+        self.pending.clear();
+        written
     }
 
     /// `Subscriptions#execute_command`. Anything malformed raises in Rails, which is logged and
@@ -239,9 +263,8 @@ impl<U: Send + Sync + 'static> Connection<U> {
         let sub = Subscription {
             server: self.server.clone(),
             class_name,
-            identifier: identifier.to_string(),
+            identifier: identifier.into(),
             encoded_identifier: json::encode(identifier).into(),
-            params,
             current_user: self.user.clone(),
             streams: Vec::new(),
             rejected: false,
@@ -249,14 +272,14 @@ impl<U: Send + Sync + 'static> Connection<U> {
             transmissions: Vec::new(),
             started: Vec::new(),
         };
-        self.subscriptions.push((identifier.to_string(), Entry { channel, sub }));
+        self.subscriptions.push(Entry { channel, sub });
         self.subscribe_to_channel(identifier).await;
     }
 
     /// `Channel::Base#subscribe_to_channel`.
     async fn subscribe_to_channel(&mut self, identifier: &str) {
         let index = self.position(identifier).expect("just added");
-        let Entry { channel, sub } = &mut self.subscriptions[index].1;
+        let Entry { channel, sub } = &mut self.subscriptions[index];
         let result = channel.subscribed(sub).await;
         self.pending.extend(sub.transmissions.drain(..).map(Frame::from));
         self.started.append(&mut sub.started);
@@ -282,7 +305,7 @@ impl<U: Send + Sync + 'static> Connection<U> {
 
     /// `Subscriptions#remove_subscription` → `Channel::Base#unsubscribe_from_channel`.
     async fn remove_subscription(&mut self, index: usize) {
-        let (_, Entry { mut channel, mut sub }) = self.subscriptions.remove(index);
+        let Entry { mut channel, mut sub } = self.subscriptions.remove(index);
         sub.unsubscribed = true;
         if let Err(error) = channel.unsubscribed(&mut sub).await {
             tracing::error!(error = error.0, "Could not execute command");
@@ -308,7 +331,7 @@ impl<U: Send + Sync + 'static> Connection<U> {
             Some(_) => return tracing::error!("Could not execute command: invalid action"),
         };
 
-        let Entry { channel, sub } = &mut self.subscriptions[index].1;
+        let Entry { channel, sub } = &mut self.subscriptions[index];
         let result = channel.perform(&action, &payload, sub).await;
         self.pending.extend(sub.transmissions.drain(..).map(Frame::from));
         self.started.append(&mut sub.started);
@@ -331,6 +354,6 @@ impl<U: Send + Sync + 'static> Connection<U> {
     }
 
     fn position(&self, identifier: &str) -> Option<usize> {
-        self.subscriptions.iter().position(|(id, _)| id == identifier)
+        self.subscriptions.iter().position(|entry| &*entry.sub.identifier == identifier)
     }
 }

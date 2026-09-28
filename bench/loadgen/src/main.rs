@@ -6,6 +6,7 @@
 //!   loadgen http   --base URL --cookie C --path P --conc N --duration S
 //!                  [--post-room ID --csrf T]                     -> latency/throughput
 //!   loadgen cable  --base URL --cookie C --room ID --csrf T --clients N [--streams a,b,c]
+//!                  [--sources 127.0.0.2,127.0.0.3 --hold-secs 60 --deflate 1]
 //!                  [--latency-msgs 30 --interval-ms 200 --tput-secs 15 --posters 4]
 //!   loadgen upload --base URL --cookie C --room ID --csrf T --file PATH [--reps 5]
 //!   loadgen fetch  --base URL --cookie C --path P --out FILE     -> saves an uncompressed body
@@ -367,6 +368,8 @@ struct Delivery {
     got: Mutex<HashMap<u64, (usize, Instant)>>, // seq -> (clients received, last receipt)
     per_client: Mutex<Histogram<u64>>,
     receipts: AtomicU64,
+    /// Bytes read off the sockets (`--deflate` clients only): what the network carries.
+    wire_bytes: AtomicU64,
 }
 
 fn markers(text: &str) -> Vec<u64> {
@@ -386,6 +389,7 @@ fn markers(text: &str) -> Vec<u64> {
 
 async fn cable_client(
     addr: String,
+    source: Option<std::net::IpAddr>,
     cookie: String,
     subs: Vec<String>,
     confirmed: Arc<AtomicUsize>,
@@ -402,7 +406,15 @@ async fn cable_client(
     if debug {
         eprintln!("connecting {:?}", req.headers());
     }
-    let (ws, _) = tokio_tungstenite::connect_async(req).await.inspect_err(|e| {
+    // One source address has ~28k ephemeral ports towards one server port; many clients connect
+    // from several loopback addresses (`--sources`).
+    let socket = tokio::net::TcpSocket::new_v4()?;
+    if let Some(source) = source {
+        socket.bind(std::net::SocketAddr::new(source, 0))?;
+    }
+    let stream = socket.connect(tokio::net::lookup_host(&addr).await?.next().ok_or("no address")?).await?;
+    stream.set_nodelay(true)?;
+    let (ws, _) = tokio_tungstenite::client_async(req, stream).await.inspect_err(|e| {
         if debug {
             eprintln!("connect error: {e}")
         }
@@ -426,34 +438,151 @@ async fn cable_client(
             WsMessage::Close(_) => break,
             _ => continue,
         };
-        let now = Instant::now();
-        if std::env::var_os("LOADGEN_DEBUG").is_some() {
-            eprintln!("<< {}", &text[..text.len().min(300)]);
-        }
-        if text.contains("confirm_subscription") {
-            confirms += 1;
-            if confirms == subs.len() {
-                confirmed.fetch_add(1, Ordering::Relaxed);
-            }
-            continue;
-        }
-        for seq in markers(&text) {
-            if !seen.insert(seq) {
-                continue;
-            }
-            delivery.receipts.fetch_add(1, Ordering::Relaxed);
-            let sent = delivery.sent.lock().unwrap().get(&seq).copied();
-            if let Some(t0) = sent {
-                delivery.per_client.lock().unwrap().record(now.duration_since(t0).as_micros() as u64).ok();
-            }
-            let mut got = delivery.got.lock().unwrap();
-            let e = got.entry(seq).or_insert((0, now));
-            e.0 += 1;
-            e.1 = now;
-        }
+        on_text(&text, subs.len(), &mut confirms, &mut seen, &confirmed, &delivery);
     }
     let _ = tx.send(WsMessage::Close(None)).await;
     Ok(())
+}
+
+/// A frame's text: counts subscription confirmations and records each marked message's arrival.
+fn on_text(text: &str, subscriptions: usize, confirms: &mut usize, seen: &mut HashSet<u64>, confirmed: &AtomicUsize, delivery: &Delivery) {
+    let now = Instant::now();
+    if std::env::var_os("LOADGEN_DEBUG").is_some() {
+        eprintln!("<< {}", &text[..text.len().min(300)]);
+    }
+    if text.contains("confirm_subscription") {
+        *confirms += 1;
+        if *confirms == subscriptions {
+            confirmed.fetch_add(1, Ordering::Relaxed);
+        }
+        return;
+    }
+    for seq in markers(text) {
+        if !seen.insert(seq) {
+            continue;
+        }
+        delivery.receipts.fetch_add(1, Ordering::Relaxed);
+        let sent = delivery.sent.lock().unwrap().get(&seq).copied();
+        if let Some(t0) = sent {
+            delivery.per_client.lock().unwrap().record(now.duration_since(t0).as_micros() as u64).ok();
+        }
+        let mut got = delivery.got.lock().unwrap();
+        let e = got.entry(seq).or_insert((0, now));
+        e.0 += 1;
+        e.1 = now;
+    }
+}
+
+/// `--deflate`: a minimal WebSocket client (RFC 6455) that offers `permessage-deflate` as browsers
+/// do, since tungstenite has no compression, and counts the bytes read off the socket.
+#[allow(clippy::too_many_arguments)]
+async fn deflate_cable_client(
+    addr: String,
+    source: Option<std::net::IpAddr>,
+    cookie: String,
+    subs: Vec<String>,
+    confirmed: Arc<AtomicUsize>,
+    connected: Arc<AtomicUsize>,
+    stop: Arc<AtomicBool>,
+    delivery: Arc<Delivery>,
+) -> Res<()> {
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
+    let socket = tokio::net::TcpSocket::new_v4()?;
+    if let Some(source) = source {
+        socket.bind(std::net::SocketAddr::new(source, 0))?;
+    }
+    let stream = socket.connect(tokio::net::lookup_host(&addr).await?.next().ok_or("no address")?).await?;
+    stream.set_nodelay(true)?;
+    let (read, mut write) = stream.into_split();
+    let request = format!(
+        "GET /cable HTTP/1.1\r\nHost: {addr}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+         Sec-WebSocket-Version: 13\r\nSec-WebSocket-Protocol: actioncable-v1-json, actioncable-unsupported\r\n\
+         Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits\r\nOrigin: http://{addr}\r\nCookie: {cookie}\r\n\r\n"
+    );
+    write.write_all(request.as_bytes()).await?;
+    let mut reader = tokio::io::BufReader::with_capacity(16 * 1024, read);
+    let mut status = String::new();
+    reader.read_line(&mut status).await?;
+    if !status.starts_with("HTTP/1.1 101") {
+        return Err(format!("upgrade failed: {}", status.trim()).into());
+    }
+    let mut compressed = false;
+    loop {
+        let mut line = String::new();
+        reader.read_line(&mut line).await?;
+        if line.trim().is_empty() {
+            break;
+        }
+        compressed |= line.to_ascii_lowercase().starts_with("sec-websocket-extensions:") && line.contains("permessage-deflate");
+    }
+    connected.fetch_add(1, Ordering::Relaxed);
+    for ident in &subs {
+        let payload = json!({"command": "subscribe", "identifier": ident}).to_string();
+        write.write_all(&masked_text_frame(payload.as_bytes())).await?;
+    }
+    let mut seen = HashSet::new();
+    let mut confirms = 0;
+    let mut inflater = flate2::Decompress::new(false);
+    let mut payload = Vec::new();
+    let mut text = Vec::new();
+    loop {
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
+        let mut head = [0u8; 2];
+        if reader.read_exact(&mut head).await.is_err() {
+            break;
+        }
+        let len = match head[1] & 0x7f {
+            126 => reader.read_u16().await? as usize,
+            127 => reader.read_u64().await? as usize,
+            len => len as usize,
+        };
+        payload.resize(len, 0);
+        reader.read_exact(&mut payload).await?;
+        let header_len = 2 + if len >= 65536 { 8 } else if len >= 126 { 2 } else { 0 };
+        delivery.wire_bytes.fetch_add((header_len + len) as u64, Ordering::Relaxed);
+        match head[0] & 0x0f {
+            0x8 => break,
+            0x1 => {}
+            _ => continue,
+        }
+        let message = if head[0] & 0x40 != 0 && compressed {
+            inflater.reset(false);
+            payload.extend_from_slice(&[0, 0, 0xff, 0xff]);
+            text.clear();
+            text.reserve(len * 8 + 1024);
+            loop {
+                let consumed = inflater.total_in() as usize;
+                inflater.decompress_vec(&payload[consumed..], &mut text, flate2::FlushDecompress::Sync)?;
+                if inflater.total_in() as usize == payload.len() && text.len() < text.capacity() {
+                    break;
+                }
+                text.reserve(text.capacity());
+            }
+            std::str::from_utf8(&text)?
+        } else {
+            std::str::from_utf8(&payload)?
+        };
+        on_text(message, subs.len(), &mut confirms, &mut seen, &confirmed, &delivery);
+    }
+    Ok(())
+}
+
+/// A client's text frame: masked, as RFC 6455 requires of clients.
+fn masked_text_frame(payload: &[u8]) -> Vec<u8> {
+    let mask = [0x37, 0xfa, 0x21, 0x3d];
+    let mut frame = vec![0x81];
+    match payload.len() {
+        len if len < 126 => frame.push(0x80 | len as u8),
+        len => {
+            frame.push(0x80 | 126);
+            frame.extend_from_slice(&(len as u16).to_be_bytes());
+        }
+    }
+    frame.extend_from_slice(&mask);
+    frame.extend(payload.iter().enumerate().map(|(i, b)| b ^ mask[i % 4]));
+    frame
 }
 
 async fn post_marked(sender: &mut Option<SendRequest<Full<Bytes>>>, addr: &str, room: &str, cookie: &str, csrf: &str, seq: u64, delivery: &Delivery) -> Option<u64> {
@@ -517,6 +646,10 @@ async fn cable(a: &Args) -> Res<Value> {
     let interval = Duration::from_millis(a.num("interval-ms", 200));
     let tput_secs: f64 = a.num("tput-secs", 15.0);
     let posters: usize = a.num("posters", 4);
+    let hold_secs: u64 = a.num("hold-secs", 0);
+    let deflate = a.num("deflate", 0u8) != 0;
+    let sources: Vec<std::net::IpAddr> =
+        a.opt("sources").unwrap_or_default().split(',').filter(|s| !s.is_empty()).map(|s| s.parse()).collect::<Result<_, _>>()?;
 
     // The chatter.js load shape: presence for the room, unread rooms, heartbeat, and the page's
     // turbo stream sources (rooms list, the room's messages, the user's rooms).
@@ -535,6 +668,7 @@ async fn cable(a: &Args) -> Res<Value> {
         got: Mutex::new(HashMap::new()),
         per_client: Mutex::new(hist()),
         receipts: AtomicU64::new(0),
+        wire_bytes: AtomicU64::new(0),
     });
     let confirmed = Arc::new(AtomicUsize::new(0));
     let connected = Arc::new(AtomicUsize::new(0));
@@ -546,14 +680,19 @@ async fn cable(a: &Args) -> Res<Value> {
     let connect_start = Instant::now();
     let gate = Arc::new(tokio::sync::Semaphore::new(50));
     let mut handles = Vec::new();
-    for _ in 0..clients {
+    for n in 0..clients {
         let permit = gate.clone().acquire_owned().await?;
+        let source = (!sources.is_empty()).then(|| sources[n % sources.len()]);
         let (addr, cookie, subs, confirmed, connected, stop, delivery, failed) =
             (addr.clone(), cookie.clone(), subs.clone(), confirmed.clone(), connected.clone(), stop.clone(), delivery.clone(), failed.clone());
         let before = connected.load(Ordering::Relaxed);
         handles.push(tokio::spawn(async move {
             let c2 = connected.clone();
-            let task = tokio::spawn(cable_client(addr, cookie, subs, confirmed, connected, stop, delivery));
+            let task = if deflate {
+                tokio::spawn(deflate_cable_client(addr, source, cookie, subs, confirmed, connected, stop, delivery))
+            } else {
+                tokio::spawn(cable_client(addr, source, cookie, subs, confirmed, connected, stop, delivery))
+            };
             // Release the permit once this client has connected (or failed).
             let until = Instant::now() + Duration::from_secs(30);
             while c2.load(Ordering::Relaxed) <= before && !task.is_finished() && Instant::now() < until {
@@ -565,7 +704,7 @@ async fn cable(a: &Args) -> Res<Value> {
             }
         }));
     }
-    let until = Instant::now() + Duration::from_secs(120);
+    let until = Instant::now() + Duration::from_secs(120.max(clients as u64 / 200));
     while confirmed.load(Ordering::Relaxed) + failed.load(Ordering::Relaxed) < clients && Instant::now() < until {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
@@ -573,6 +712,12 @@ async fn cable(a: &Args) -> Res<Value> {
     let ready = confirmed.load(Ordering::Relaxed);
     phase("connected");
     tokio::time::sleep(Duration::from_secs(1)).await;
+    if hold_secs > 0 {
+        // Everyone connected and idle: what the server spends on heartbeats and holding sockets.
+        phase("idle");
+        tokio::time::sleep(Duration::from_secs(hold_secs)).await;
+        phase("idle_done");
+    }
     phase("paced");
 
     // Phase 1: paced messages, one at a time (open loop at `interval`), for delivery latency.
@@ -606,6 +751,7 @@ async fn cable(a: &Args) -> Res<Value> {
 
     // Phase 2: closed-loop posters for tput_secs, then drain; delivered messages/sec.
     let receipts_before = delivery.receipts.load(Ordering::Relaxed);
+    let wire_before = delivery.wire_bytes.load(Ordering::Relaxed);
     let next = Arc::new(AtomicU64::new(seq + 1));
     phase("saturated");
     let tput_start = Instant::now();
@@ -642,6 +788,7 @@ async fn cable(a: &Args) -> Res<Value> {
     let span = last.map(|l| l.duration_since(tput_start).as_secs_f64()).unwrap_or(posting_secs).max(posting_secs);
     let tclient_h = delivery.per_client.lock().unwrap().clone();
     let receipts = delivery.receipts.load(Ordering::Relaxed) - receipts_before;
+    let wire_bytes = delivery.wire_bytes.load(Ordering::Relaxed) - wire_before;
     let throughput = json!({
         "posters": posters,
         "posted": tseqs.len(),
@@ -649,6 +796,7 @@ async fn cable(a: &Args) -> Res<Value> {
         "complete": tcomplete,
         "delivered_msgs_per_sec": ((tcomplete as f64 / span) * 10.0).round() / 10.0,
         "frames_per_sec": (receipts as f64 / span).round(),
+        "wire_mb_per_sec": (wire_bytes as f64 / span / 1e6 * 10.0).round() / 10.0,
         "drain_secs": ((span - posting_secs) * 100.0).round() / 100.0,
         "post": summary(&tpost_h),
         "per_client": summary(&tclient_h),
