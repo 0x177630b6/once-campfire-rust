@@ -358,6 +358,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "jiff",
+ "libc",
  "p256",
  "percent-encoding",
  "rails_compat",

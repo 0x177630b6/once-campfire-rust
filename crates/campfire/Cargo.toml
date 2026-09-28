@@ -15,6 +15,7 @@ campfire_assets.workspace = true
 campfire_views.workspace = true
 anyhow.workspace = true
 tikv-jemallocator.workspace = true
+libc.workspace = true
 tokio.workspace = true
 axum.workspace = true
 serde.workspace = true
