@@ -373,6 +373,10 @@ Deliberate:
   the inserted `<a href="...">` closed the attribute, turning the rest of its value into live
   markup (a stored XSS; it affects the Rails app). The port escapes `<` and `>` in attribute values
   before autolinking, so URLs inside attributes stay as they were. The same DOM otherwise.
+- **Content attachments nest at most 8 deep.** An `<action-text-attachment>` carrying HTML in its
+  `content` renders that content, attachments included; each level parses and sanitizes
+  everything below it again, so a 336 KB body of nested ones took 10 seconds to render. Deeper
+  levels now render empty. Campfire's composer doesn't nest them at all.
 - **Not ported:** the duplicate `session_token` cookie Rails' Active Storage streaming sends; responses
   to requests for multiple byte ranges; and legacy AES-CBC encrypted cookies, since Campfire started
   on GCM.

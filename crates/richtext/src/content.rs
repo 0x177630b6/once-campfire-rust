@@ -64,10 +64,15 @@ impl Content {
     /// `render_action_text_content(content)`: attachments and galleries rendered, then sanitized
     /// with Action Text's allowlist.
     pub fn render(&self, ctx: &RenderContext) -> Result<String, Error> {
+        self.render_nested(ctx, 0)
+    }
+
+    /// `render`, for content `depth` content attachments down.
+    fn render_nested(&self, ctx: &RenderContext, depth: usize) -> Result<String, Error> {
         let mut dom = self.dom.clone();
         let root = self.root;
-        render_attachments(&mut dom, root, ctx)?;
-        render_attachment_galleries(&mut dom, root, ctx)?;
+        render_attachments(&mut dom, root, ctx, depth)?;
+        render_attachment_galleries(&mut dom, root, ctx, depth)?;
         sanitizer::sanitize(&dom.to_html(root), &SafeList::action_text()).map_err(Error::Parse)
     }
 
@@ -200,21 +205,35 @@ fn node_with_full_attributes(dom: &mut Dom, node: NodeId, attachable: &Attachabl
     Ok(dom.create_element(ATTACHMENT_TAG, &pairs))
 }
 
+/// How deep content attachments render inside one another. Each level parses and sanitizes
+/// everything nested below it again, so Rails' unbounded nesting makes rendering quadratic in the
+/// body's size; deeper content attachments render empty. Nothing Campfire's composer makes nests
+/// them at all.
+pub const MAX_CONTENT_ATTACHMENT_DEPTH: usize = 8;
+
 /// `render_action_text_attachment`, with nested content attachments rendered through
 /// `ContentAttachment#to_html` (the content partial, without the layout).
 pub fn render_attachment_html(attachment: &Attachment, ctx: &RenderContext) -> Result<String, Error> {
+    render_attachment_html_at(attachment, ctx, 0)
+}
+
+fn render_attachment_html_at(attachment: &Attachment, ctx: &RenderContext, depth: usize) -> Result<String, Error> {
     attachables::render_attachment(attachment, &|content: &str| {
+        if depth >= MAX_CONTENT_ATTACHMENT_DEPTH {
+            return Ok(String::new());
+        }
         let content = Content::load(content, ctx)?;
-        Ok(format!("{}\n", content.render(ctx)?))
+        Ok(format!("{}\n", content.render_nested(ctx, depth + 1)?))
     })
 }
 
-fn render_attachments(dom: &mut Dom, root: NodeId, ctx: &RenderContext) -> Result<(), Error> {
+fn render_attachments(dom: &mut Dom, root: NodeId, ctx: &RenderContext, depth: usize) -> Result<(), Error> {
     for node in attachment_nodes(dom, root) {
         sanitize_content_attribute(dom, node)?;
         let attachment = attachment_from_node(dom, node, ctx)?;
         let full = node_with_full_attributes(dom, node, &attachment.attachable)?;
-        let html = render_attachment_html(&Attachment { attachable: attachment.attachable, caption: presence(dom.attr(full, "caption")).map(str::to_string) }, ctx)?;
+        let attachment = Attachment { attachable: attachment.attachable, caption: presence(dom.attr(full, "caption")).map(str::to_string) };
+        let html = render_attachment_html_at(&attachment, ctx, depth)?;
         dom.set_inner_html(full, &html).map_err(Error::Parse)?;
         let replacement = dom.to_html(full);
         dom.replace_with_html(node, &replacement).map_err(Error::Parse)?;
@@ -253,14 +272,14 @@ pub fn attachment_gallery_nodes(dom: &Dom, root: NodeId) -> Vec<NodeId> {
         .collect()
 }
 
-fn render_attachment_galleries(dom: &mut Dom, root: NodeId, ctx: &RenderContext) -> Result<(), Error> {
+fn render_attachment_galleries(dom: &mut Dom, root: NodeId, ctx: &RenderContext, depth: usize) -> Result<(), Error> {
     for gallery in attachment_gallery_nodes(dom, root) {
         let members: Vec<NodeId> = dom.descendants(gallery).into_iter().filter(|&n| is_gallery_attachment(dom, n)).collect();
         let mut rendered = String::new();
         for member in &members {
             let attachment = attachment_from_node(dom, *member, ctx)?;
             let full = node_with_full_attributes(dom, *member, &attachment.attachable)?;
-            let html = render_attachment_html(&attachment, ctx)?;
+            let html = render_attachment_html_at(&attachment, ctx, depth)?;
             dom.set_inner_html(full, &html).map_err(Error::Parse)?;
             rendered.push_str(&dom.to_html(full));
         }

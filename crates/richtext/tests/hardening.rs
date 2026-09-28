@@ -89,3 +89,30 @@ fn many_bare_domains_autolink_in_linear_time() {
     assert_quick(started, "autolinking 64 KB of bare domains");
     assert_eq!(html.matches("<a target=\"_blank\" href=\"http://www.a.com\">").count(), 64 * 1024 / 16);
 }
+
+/// Content attachments nested `levels` deep, each saying which level it is.
+fn nested_content_attachments(levels: usize, padding: &str) -> String {
+    let mut body = String::new();
+    for level in (1..=levels).rev() {
+        let content = format!("<p>level {level}{padding}</p>{body}").replace('&', "&amp;").replace('"', "&quot;");
+        body = format!("<action-text-attachment content-type=\"text/html\" content=\"{content}\"></action-text-attachment>");
+    }
+    body
+}
+
+#[test]
+fn content_attachments_render_eight_levels_deep() {
+    let html = presentation(&nested_content_attachments(12, ""));
+    for level in 1..=12 {
+        assert_eq!(html.contains(&format!("level {level}<")), level <= 8, "level {level} in {html}");
+    }
+}
+
+#[test]
+fn deeply_nested_content_attachments_render_quickly() {
+    let body = nested_content_attachments(200, &"x".repeat(1000));
+    assert!(body.len() > 200_000);
+    let started = Instant::now();
+    presentation(&body);
+    assert_quick(started, "rendering 200 nested content attachments");
+}
