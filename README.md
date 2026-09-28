@@ -9,7 +9,8 @@ Stimulus controllers, Turbo, Lexxy and the other vendored JavaScript ship as the
 the few files in [`crates/assets/overrides/`](crates/assets/OVERRIDES.md).
 
 The port ships as a single `campfire` executable (plus libvips and ffmpeg). It replaces Ruby, Puma,
-Redis, Resque and Thruster, and it is 9–26× faster than the Rails app it replaces.
+Redis, Resque and Thruster, and it is 19–44× faster than the Rails app it replaces on pages, posts
+and real-time delivery.
 
 ## What was done
 
@@ -64,74 +65,63 @@ The only thing masked is the random join code on the first-run screen.
 
 ## Performance
 
-These numbers come from the final benchmark: production images of both apps, the same seed data,
-the same 4 pinned hardware threads, host networking, a quiet machine, and 5 interleaved runs per
-app. The medians are below; the full tables with spreads are in
-[`bench/results/final-20260927/report.md`](bench/results/final-20260927/report.md).
-
-These tables predate two later changes, [spliced gzip](#spliced-gzip) and forgery protection by
-`Sec-Fetch-Site` (see [Known differences](#known-differences)). Together they made the Rust app's
-own pages faster again, measured natively the same way before and after:
-
-| Route (16 clients) | Before both | After both | Change |
-|---|---|---|---|
-| Room page | 2,527 req/s | 5,886 req/s | **2.3×** |
-| Messages page (`?before=`) | 3,709 req/s | 17,336 req/s | **4.7×** |
-| Search | 2,123 req/s | 6,088 req/s | **2.9×** |
-
-The comparison with Rails hasn't been rerun since, so the page rows below understate the Rust app
-by about that much. Details: [`bench/results/splice-20260927`](bench/results/splice-20260927/report.md)
-and [`bench/results/header-csrf-20260927`](bench/results/header-csrf-20260927/report.md).
+These numbers come from benchmarking `main` at `898653e` (spliced gzip, forgery protection by
+`Sec-Fetch-Site` and the room index) against the Rails app: production images of both, the same
+seed data, the same 4 pinned hardware threads, host networking, a quiet machine, and 3 interleaved
+runs per app. The medians are below; the full tables with spreads are in
+[`bench/results/scale-20260927/report.md`](bench/results/scale-20260927/report.md).
+[Cached page parts](#cached-page-parts) came after this run and make the room page and search
+about 2.9× faster again, so those rows understate the Rust app.
 
 ### Throughput (16 concurrent clients)
 
 | Route | Rails | Rust | Rust advantage |
 |---|---|---|---|
-| Room page | 234 req/s | 2,577 req/s | **11.0×** |
-| Messages page (`?before=`) | 444 req/s | 3,939 req/s | **8.9×** |
-| Sidebar | 581 req/s | 11,066 req/s | **19.0×** |
-| Search | 420 req/s | 5,933 req/s | **14.1×** |
-| Post a message | 273 req/s | 5,272 req/s | **19.3×** |
-| `/up` | 4,289 req/s | 107,715 req/s | **25.1×** |
+| Room page | 221 req/s | 6,002 req/s | **27×** |
+| Messages page (`?before=`) | 396 req/s | 17,540 req/s | **44×** |
+| Sidebar | 528 req/s | 11,550 req/s | **22×** |
+| Search | 388 req/s | 8,970 req/s | **23×** |
+| Post a message | 273 req/s | 5,269 req/s | **19×** |
+| `/up` | 4,088 req/s | 111,291 req/s | **27×** |
 
 ### Latency
 
 | Measurement | Rails | Rust | Rust advantage |
 |---|---|---|---|
-| Room page p50, one client | 10.2 ms | 1.55 ms | **6.6×** |
-| Room page p99, 64 clients | 391 ms | 44.1 ms | **8.9×** |
-| Post a message p99, one client | 18.4 ms | 1.51 ms | **12.1×** |
-| Post a message p99, 64 clients | 370 ms | 24.8 ms | **14.9×** |
-| Upload a 505 KB JPEG until its thumbnail is served | 55.4 ms | 27.8 ms | **2.0×** |
+| Room page p50, one client | 10.5 ms | 0.65 ms | **16×** |
+| Room page p99, 64 clients | 453 ms | 18.7 ms | **24×** |
+| Post a message p99, one client | 17.7 ms | 1.77 ms | **10×** |
+| Post a message p99, 64 clients | 381 ms | 19.4 ms | **20×** |
+| Upload a 505 KB JPEG until its thumbnail is served | 104 ms | 29.0 ms | **3.6×** |
 
-### Real time (Action Cable)
+### Real time (Action Cable, up to 10,000 clients in one room)
 
 | Measurement | Rails | Rust | Rust advantage |
 |---|---|---|---|
-| Deliveries per second, 100 clients | 9,286 | 244,719 | **26.4×** |
-| Deliveries per second, 1,000 clients | 13,646 | 304,197 | **22.3×** |
-| Post to all 1,000 clients received, p50 | 78.8 ms | 8.97 ms | **8.8×** |
-| Post to all 1,000 clients received, p99 | 159 ms | 12.3 ms | **12.9×** |
+| Deliveries per second, 100 clients | 7,934 | 244,900 | **31×** |
+| Deliveries per second, 1,000 clients | 11,127 | 373,319 | **34×** |
+| Deliveries per second, 5,000 clients | 11,239 | 375,151 | **33×** |
+| Deliveries per second, 10,000 clients | 8,949 | 379,608 | **42×** |
+| Post to all 1,000 clients received, p50 | 101 ms | 7.1 ms | **14×** |
+| Post to all 10,000 clients received, p50 | 1,293 ms | 42 ms | **31×** |
+| Post to all 10,000 clients received, p99 | 1,744 ms | 59 ms | **30×** |
+| Connect and subscribe 10,000 clients | 29.2 s | 2.3 s | **13×** |
 
-At 500 and 1,000 clients, Rust is capped at about 300k deliveries/s by the load generator, not by
-the app.
+From 1,000 clients up, Rust is capped at about 380k deliveries/s by the load generator, not by the
+app. Every one of the 10,000 Rust clients subscribed in every run; Rails once got 9,867.
 
 ### Startup and memory
 
 | Measurement | Rails | Rust | Rust advantage |
 |---|---|---|---|
-| Cold start (`docker run` until `/up` answers) | 2,457 ms | 232 ms | **10.6×** |
-| Idle memory (container) | 309 MB | 49 MB | **6.3×** |
-| App process, 1,000 idle cable clients (Pss) | 459 MB | 154 MB | **3.0×** |
-| App process, 1,000 cable clients under load (Pss) | 836 MB | 319 MB | **2.6×** |
-| Whole container, 1,000 cable clients under load | 1,188 MB | 319 MB | **3.7×** |
+| Cold start (`docker run` until `/up` answers) | 2,536 ms | 135 ms | **19×** |
+| Idle memory (container) | 304 MB | 47 MB | **6.5×** |
+| App process, 1,000 idle cable clients (Pss) | 642 MB | 234 MB | **2.7×** |
+| App process, 10,000 idle cable clients (Pss) | 1,479 MB | 582 MB | **2.5×** |
+| App process, 10,000 cable clients under load (Pss) | 2,083 MB | 876 MB | **2.4×** |
+| Whole container, 10,000 cable clients under load (Pss) | 3,328 MB | 876 MB | **3.8×** |
 | Image size, unpacked | 933 MB | 169 MB | **5.5×** |
 | Image size, compressed download | 359 MB | 67 MB | **5.4×** |
-
-These memory figures come from a build whose fragment cache was capped by entry count rather than
-bytes, so a write-heavy run could grow it past 1 GB. It's now bounded by bytes, like Rails'
-`MemoryStore`: 32 MB by default, set with `CAMPFIRE_FRAGMENT_CACHE_MB`. After 60,000 message posts
-the process now holds 129 MB instead of 1.28 GB, at the same throughput.
 
 ### Where the speed came from
 
@@ -151,6 +141,7 @@ test suite and the parity gate green.
 | Fat LTO, one codegen unit, jemalloc | A further 5–14% per route |
 | Splice precompressed messages into gzipped pages ([below](#spliced-gzip)) | Room page 2,527 → 5,461 req/s; messages page 3,709 → 16,523 req/s; search 2,123 → 5,526 req/s |
 | Forgery protection by `Sec-Fetch-Site` instead of CSRF tokens ([Known differences](#known-differences)) | Room page +9%, messages page +6%, search +10%; pages render the same until their content changes, so revalidation gets a 304 |
+| Cache every part of a page, not just its messages, and take the ETag from the parts ([above](#cached-page-parts)) | Room page 2.9×, search 2.8×, messages page 1.3× |
 | Index messages by `(room_id, created_at)`; check "more than a page" without counting the room | In a room with 236k messages: room page 95 → 6,051 req/s (64×), messages page 87 → 17,972 req/s (208×). Before, a room page sorted the room's whole history, so rooms slowed as they grew; now a long room serves as fast as a new one |
 
 Measured the same way as the preliminary run, the room page went from 4.4× to 10.9× Rails, and cable
@@ -183,6 +174,27 @@ in [`bench/results/splice-20260927/report.md`](bench/results/splice-20260927/rep
 gzip of a 466 KB room page went from 1,032 µs to 271 µs. What remains is the live compression of
 the ~55 KB of layout around the messages. The messages page now serves about as fast as it did with
 compression turned off.
+
+### Cached page parts
+
+Without CSRF tokens (see [Known differences](#known-differences)), a page renders byte for byte the
+same until what it shows changes, so the layout around the messages can be stored too. A page is now
+split into parts that cover it end to end: its cached messages, and the text between them. Each part
+is compressed once, against the part before it, and kept under the part's identity (the cached
+fragment, or the SHA-256 of the text) and its predecessor's. The ETag comes from the same parts'
+digests instead of a SHA-256 over the whole body. For a 466 KB room page, the ETag and gzip went from
+~460 µs to 42 µs; the first request after the page changes pays ~2 ms to compress its new parts.
+
+Measured against the previous commit (details in
+[`bench/results/page-parts-20260927`](bench/results/page-parts-20260927/report.md); the host was
+busy, so these are lower than on a quiet machine):
+
+| Route | Before | After | Change |
+|---|---|---|---|
+| Room page | 5,762 req/s | 16,881 req/s | **2.9×** |
+| Messages page (`?before=`) | 17,087 req/s | 22,580 req/s | **1.3×** |
+| Search | 5,692 req/s | 16,097 req/s | **2.8×** |
+| Sidebar | 15,586 req/s | 17,207 req/s | **1.1×** |
 
 ## Running it
 
@@ -257,6 +269,15 @@ Deliberate:
   to requests for multiple byte ranges; and legacy AES-CBC encrypted cookies, since Campfire started
   on GCM.
 
+- **Cookies are only sent when they change.** Rails rewrites the session cookie, re-signs the
+  `session_token` cookie and re-sets `last_room` on nearly every response. The session cookie is now
+  written only when the session changed, and deleted once it's empty (it only holds the flash and a
+  return-to URL); `session_token` is re-signed when the session's hourly activity refresh runs, which
+  keeps its 20-year expiry rolling; `last_room` is set when it changes. An authenticated request whose
+  session doesn't need that refresh also no longer passes through the database writer.
+- **ETags aren't a digest of the body** on pages made of cached messages (room, messages and search
+  pages): they're a SHA-256 over the page's parts. Identical pages still get identical ETags, and
+  any change gets a new one.
 - **One more index.** On boot the app adds `index_messages_on_room_id_and_created_at` to the Rails
   schema if it's missing (a one-time 49 ms for 236k messages). Rails' schema pages a room's messages
   through `index_messages_on_room_id` alone, which sorts the room's whole history for every page.

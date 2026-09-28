@@ -102,6 +102,11 @@ impl Session {
         })
     }
 
+    /// Whether [`Self::resume`] would refresh the session at `now`: its activity is over an hour old.
+    pub fn needs_resume(&self, now: Timestamp) -> bool {
+        self.last_active_at < now.ago(ACTIVITY_REFRESH_RATE)
+    }
+
     /// `resume`: refreshes activity, user agent and IP at most once an hour.
     pub fn resume(
         &mut self,
@@ -110,7 +115,7 @@ impl Session {
         ip_address: Option<&str>,
     ) -> Result<()> {
         let now = tx.now();
-        if self.last_active_at >= now.ago(ACTIVITY_REFRESH_RATE) {
+        if !self.needs_resume(now) {
             return Ok(());
         }
         self.user_agent = user_agent.map(Into::into);

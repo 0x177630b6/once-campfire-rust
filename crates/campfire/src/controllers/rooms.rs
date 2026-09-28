@@ -215,8 +215,8 @@ async fn render_show(c: &mut Ctx, room: Room) -> Result {
         })
         .await
         .map_err(db_error)?;
-    let fragments = campfire_views::messages::MessageItem::cached_fragments(&show.messages);
     let response = page::framed_page!(c, StatusCode::OK, |ctx| campfire_views::rooms::Show { ctx, show: &show }).await?;
+    let fragments = campfire_views::messages::MessageItem::cached_fragments(&c.app().fragment_cache, &show.messages);
     Ok(response.with_cached_fragments(fragments))
 }
 
