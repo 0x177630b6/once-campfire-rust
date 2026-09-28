@@ -98,7 +98,7 @@ pub fn render_detached_at<T>(app: &App, account: Option<&Account>, base_url: &st
         flash_notice: None,
         flash_alert: None,
         platform: Platform::default(),
-        vapid_public_key: app.config.vapid_public_key.clone(),
+        vapid_public_key: app.vapid_public_key(),
         asset_path: &asset_path,
         importmap_tags: campfire_assets::javascript_importmap_tags(),
         stylesheet_tags: &stylesheets.html,

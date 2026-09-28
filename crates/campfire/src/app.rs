@@ -48,6 +48,14 @@ pub struct AppState {
     _public_pages: tempfile::TempDir,
 }
 
+impl AppState {
+    /// The key pages offer browsers to subscribe with: none while Web Push is off, so that browsers
+    /// don't subscribe to notifications that would never be sent.
+    pub fn vapid_public_key(&self) -> Option<String> {
+        self.web_push.as_ref().and(self.config.vapid_public_key.clone())
+    }
+}
+
 pub type App = Arc<AppState>;
 
 /// `c.app()` in actions.

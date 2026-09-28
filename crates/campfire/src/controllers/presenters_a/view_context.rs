@@ -60,7 +60,7 @@ impl Layout {
             custom_styles: account.and_then(|account| account.custom_styles),
             platform: super::platform(c),
             last_room_visited_id,
-            vapid_public_key: app.config.vapid_public_key.clone(),
+            vapid_public_key: app.vapid_public_key(),
             app_version: app.config.app_version.clone(),
         })
     }
