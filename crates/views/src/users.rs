@@ -218,7 +218,7 @@ fn direct_room_fragment_key(membership_id: i64, updated_at: jiff::Timestamp) -> 
 
 fn direct_room_digest() -> &'static str {
     static DIGEST: std::sync::LazyLock<String> =
-        std::sync::LazyLock::new(|| crate::fragment_cache::digest(&[include_str!("../../templates/users/sidebars/rooms/_direct.html")]));
+        std::sync::LazyLock::new(|| crate::fragment_cache::digest(&[include_str!("../templates/users/sidebars/rooms/_direct.html")]));
     &DIGEST
 }
 

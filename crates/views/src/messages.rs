@@ -350,12 +350,12 @@ pub fn cached_boost(ctx: &ViewContext, boost: &BoostView) -> crate::helpers::Htm
 fn message_digest() -> &'static str {
     static DIGEST: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
         fragment_cache::digest(&[
-            include_str!("../../templates/messages/_message.html"),
-            include_str!("../../templates/messages/_actions.html"),
-            include_str!("../../templates/messages/_presentation.html"),
-            include_str!("../../templates/messages/_unrenderable.html"),
-            include_str!("../../templates/messages/boosts/_boosts.html"),
-            include_str!("../../templates/messages/boosts/_boost.html"),
+            include_str!("../templates/messages/_message.html"),
+            include_str!("../templates/messages/_actions.html"),
+            include_str!("../templates/messages/_presentation.html"),
+            include_str!("../templates/messages/_unrenderable.html"),
+            include_str!("../templates/messages/boosts/_boosts.html"),
+            include_str!("../templates/messages/boosts/_boost.html"),
         ])
     });
     &DIGEST
@@ -363,7 +363,7 @@ fn message_digest() -> &'static str {
 
 fn boost_digest() -> &'static str {
     static DIGEST: std::sync::LazyLock<String> =
-        std::sync::LazyLock::new(|| fragment_cache::digest(&[include_str!("../../templates/messages/boosts/_boost.html")]));
+        std::sync::LazyLock::new(|| fragment_cache::digest(&[include_str!("../templates/messages/boosts/_boost.html")]));
     &DIGEST
 }
 
