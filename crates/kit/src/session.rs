@@ -3,11 +3,12 @@
 //! `reference/config/initializers/session_store.rb`: key `_campfire_session`, encrypted, and
 //! `expire_after: 20.years`.
 //!
-//! Loading is lazy. Committing follows `Rack::Session::Abstract::Persisted#commit_session`:
-//! the cookie is written when the session was loaded during the request, *or* when the request
-//! carried a valid session cookie at all (`expire_after` forces an update of any non-empty
-//! session). So with this store Rails re-issues the session cookie, with a fresh 20-year expiry,
-//! on every request that presents one; we do the same.
+//! Loading is lazy. Unlike Rails, the cookie is only written when the session changed during the
+//! request, and deleted when that left it empty. Rails' `commit_session` rewrites it on every
+//! request that loads or carries one (`expire_after` forces the update), which made a session
+//! cookie, re-encrypted, part of nearly every response. Without CSRF tokens the session holds only
+//! the flash and a return-to URL, so an unchanged session needs no cookie traffic and an empty one
+//! no cookie. Cookies Rails wrote are read the same way.
 
 use serde_json::{Map, Value};
 
@@ -34,6 +35,8 @@ impl Default for SessionConfig {
 pub struct Session {
     config: SessionConfig,
     loaded: bool,
+    /// Whether the data changed during this request, and so the cookie needs writing.
+    changed: bool,
     data: Map<String, Value>,
     /// The cookie's decoded contents, read once (`action_dispatch.request.unsigned_session_cookie`).
     cookie_data: Option<Map<String, Value>>,
@@ -41,16 +44,11 @@ pub struct Session {
 
 impl Session {
     pub fn new(config: SessionConfig) -> Self {
-        Self { config, loaded: false, data: Map::new(), cookie_data: None }
+        Self { config, loaded: false, changed: false, data: Map::new(), cookie_data: None }
     }
 
     pub fn is_loaded(&self) -> bool {
         self.loaded
-    }
-
-    /// Whether the request carried a session (a cookie that decrypts to a hash with an id).
-    pub fn exists(&mut self, jar: &CookieJar) -> bool {
-        self.cookie_data(jar).get("session_id").is_some_and(|id| !id.is_null())
     }
 
     /// Load from the cookie if not yet loaded (`load_for_read!`/`load_for_write!`).
@@ -99,12 +97,19 @@ impl Session {
 
     pub fn insert(&mut self, key: impl Into<String>, value: impl Into<Value>) {
         self.assert_loaded();
-        self.data.insert(key.into(), value.into());
+        let value = value.into();
+        let key = key.into();
+        if self.data.get(&key) != Some(&value) {
+            self.data.insert(key, value);
+            self.changed = true;
+        }
     }
 
     pub fn remove(&mut self, key: &str) -> Option<Value> {
         self.assert_loaded();
-        self.data.remove(key)
+        let removed = self.data.remove(key);
+        self.changed |= removed.is_some();
+        removed
     }
 
     /// `reset_session`: drop everything and start a new session id.
@@ -113,16 +118,20 @@ impl Session {
         self.data.insert("session_id".into(), Value::String(generate_sid()));
         self.cookie_data = Some(self.data.clone());
         self.loaded = true;
+        self.changed = true;
     }
 
-    /// `commit_session`: write the cookie into `jar` if Rack would.
+    /// Writes the cookie into `jar` if the session changed, or deletes it if that left nothing but
+    /// the session id.
     pub fn commit(&mut self, jar: &mut CookieJar, now: jiff::Timestamp) -> crate::Result<()> {
-        let forced = self.config.expire_after_years.is_some() && self.exists(jar);
-        if !self.loaded && !forced {
+        if !self.changed {
             return Ok(());
         }
-        self.load(jar);
         let data: Map<String, Value> = self.data.iter().filter(|(_, v)| !v.is_null()).map(|(k, v)| (k.clone(), v.clone())).collect();
+        if data.keys().all(|key| key == "session_id") {
+            jar.delete(&self.config.key);
+            return Ok(());
+        }
         let mut cookie = Cookie::new("");
         cookie.httponly = self.config.httponly;
         if let Some(years) = self.config.expire_after_years {

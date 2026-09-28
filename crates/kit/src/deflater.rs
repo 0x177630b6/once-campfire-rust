@@ -68,8 +68,8 @@ pub async fn deflater(request: Request, next: Next) -> Response {
             headers.insert(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"));
             headers.remove(header::CONTENT_LENGTH);
             let (mut parts, body) = response.into_parts();
-            match parts.extensions.remove::<splice::CachedFragments>() {
-                Some(fragments) => Response::from_parts(parts, gzip_with_fragments(body, &fragments, mtime).await),
+            match parts.extensions.remove::<std::sync::Arc<splice::PageParts>>() {
+                Some(page_parts) => Response::from_parts(parts, gzip_page_parts(body, &page_parts, mtime).await),
                 None => Response::from_parts(parts, gzip_stream(body, mtime)),
             }
         }
@@ -212,18 +212,19 @@ fn gzip_stream(body: Body, mtime: u32) -> Body {
     Body::from_stream(stream)
 }
 
-/// A body with cached fragments in it (always a single buffer), with their stored pieces
-/// spliced in where it can ([`splice`]); the same decoded bytes as [`gzip_stream`].
-async fn gzip_with_fragments(body: Body, fragments: &splice::CachedFragments, mtime: u32) -> Body {
+/// A body split into [`splice::PageParts`] (always a single buffer), as their stored pieces; the
+/// same decoded bytes as [`gzip_stream`].
+async fn gzip_page_parts(body: Body, page_parts: &splice::PageParts, mtime: u32) -> Body {
     let bytes = match body.collect().await {
         Ok(collected) => collected.to_bytes(),
         Err(error) => return Body::from_stream(futures_util::stream::once(async move { Err::<Bytes, _>(std::io::Error::other(error)) })),
     };
-    match splice::gzip(&bytes, &fragments.0, mtime) {
-        // Streamed like `gzip_stream`'s output, so no `Content-Length` goes with it.
-        Some(gzipped) => Body::from_stream(futures_util::stream::once(async move { Ok::<_, std::io::Error>(Bytes::from(gzipped)) })),
-        None => gzip_stream(Body::from(bytes), mtime),
+    if !page_parts.fits(&bytes) {
+        return gzip_stream(Body::from(bytes), mtime);
     }
+    let gzipped = page_parts.gzip(&bytes, mtime);
+    // Streamed like `gzip_stream`'s output, so no `Content-Length` goes with it.
+    Body::from_stream(futures_util::stream::once(async move { Ok::<_, std::io::Error>(Bytes::from(gzipped)) }))
 }
 
 fn compress(encoder: &mut GzEncoder<Vec<u8>>, chunk: &[u8]) -> std::io::Result<Bytes> {

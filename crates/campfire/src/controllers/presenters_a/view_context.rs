@@ -141,19 +141,8 @@ pub fn account_summary(account: Option<&Account>, has_logo: bool) -> AccountSumm
     }
 }
 
-/// Renders a page in the application layout (or, for a Turbo-Frame request, in turbo-rails'
-/// frame layout when `frame` is given: `layout -> { "turbo_rails/frame" if turbo_frame_request? }`).
-pub async fn page(
-    c: &mut Ctx,
-    status: StatusCode,
-    full: impl FnOnce(&ViewContext) -> askama::Result<String>,
-) -> Result {
-    find_template(c, &format::HTML)?;
-    page_in_any_format(c, status, full).await
-}
-
-/// [`page`] without the implicit render's template lookup: an explicit `render template:`
-/// answers HTML whatever the request's format.
+/// Renders a page in the application layout without the implicit render's template lookup: an
+/// explicit `render template:` answers HTML whatever the request's format.
 pub async fn page_in_any_format(
     c: &mut Ctx,
     status: StatusCode,
@@ -164,8 +153,9 @@ pub async fn page_in_any_format(
     Ok(layout.page(c, status, html))
 }
 
-/// [`page`] for templates that expose their `head`/`content` blocks, so a Turbo-Frame request
-/// gets the frame layout.
+/// Renders a page in the application layout, or, for templates that expose their `head`/`content`
+/// blocks, turbo-rails' frame layout for a Turbo-Frame request
+/// (`layout -> { "turbo_rails/frame" if turbo_frame_request? }`).
 pub async fn page_or_frame(
     c: &mut Ctx,
     status: StatusCode,
