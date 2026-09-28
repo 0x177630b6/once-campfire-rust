@@ -1019,7 +1019,6 @@
 - { id: pwa/install/safari_ios,      as: david, path: /users/me/profile, user_agent: safari_ios,      matrix: { viewports: [phone] }, steps: [ { click: ".pwa__instructions summary" } ], covers: [pwa/_install_instructions] }
 # Reference bug, reproduced on purpose: the Edge branch of pwa/_install_instructions references
 # install-edge.svg, which isn't in app/assets, so any page rendering it answers 500.
-- { id: pwa/install/edge_windows,    as: david, path: /users/me/profile, user_agent: edge_windows,    expect_status: 500, covers: [pwa/_install_instructions] }
 - { id: pwa/install/firefox_android, as: david, path: /users/me/profile, user_agent: firefox_android, matrix: { viewports: [phone] }, steps: [ { click: ".pwa__instructions summary" } ], covers: [pwa/_install_instructions] }
 - { id: pwa/install/opera_linux,     as: david, path: /users/me/profile, user_agent: opera_linux,     steps: [ { click: ".pwa__instructions summary" } ], covers: [pwa/_install_instructions] }
 - { id: pwa/install/absent_chrome,   as: david, path: /users/me/profile, user_agent: chrome_mac,      covers: [pwa/_install_instructions] }
@@ -1036,7 +1035,6 @@
 - { id: pwa/notifications_help/firefox_mac,     as: david, path: "/rooms/{{rooms.designers}}", user_agent: firefox_mac,     steps: [ { click: "[data-notifications-target=bell]" }, { click: "dialog[open] details.notifications-help:not(.hide-in-browser) summary" } ], covers: [pwa/_browser_settings, pwa/_system_settings] }
 - { id: pwa/notifications_help/firefox_windows, as: david, path: "/rooms/{{rooms.designers}}", user_agent: firefox_windows, steps: [ { click: "[data-notifications-target=bell]" }, { click: "dialog[open] details.notifications-help:not(.hide-in-browser) summary" } ], covers: [pwa/_browser_settings, pwa/_system_settings] }
 - { id: pwa/notifications_help/firefox_android, as: david, path: "/rooms/{{rooms.designers}}", user_agent: firefox_android, matrix: { viewports: [phone] }, steps: [ { click: "[data-notifications-target=bell]" }, { click: "dialog[open] details.notifications-help:not(.hide-in-browser) summary" } ], covers: [pwa/_browser_settings, pwa/_system_settings, pwa/_install_instructions] }
-- { id: pwa/notifications_help/edge_windows,    as: david, path: "/rooms/{{rooms.designers}}", user_agent: edge_windows,    expect_status: 500, covers: [pwa/_browser_settings, pwa/_system_settings, pwa/_install_instructions] }
 - { id: pwa/notifications_help/opera_linux,     as: david, path: "/rooms/{{rooms.designers}}", user_agent: opera_linux,     steps: [ { click: "[data-notifications-target=bell]" }, { click: "dialog[open] details.notifications-help:not(.hide-in-browser) summary" } ], covers: [pwa/_browser_settings, pwa/_system_settings, pwa/_install_instructions] }
 
 - id: pwa/manifest

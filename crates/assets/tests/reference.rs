@@ -25,23 +25,33 @@ fn sha256(bytes: &[u8]) -> String {
         .collect()
 }
 
+/// The logical paths in `overrides/`.
+fn override_files() -> Vec<String> {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("overrides");
+    let mut files = Vec::new();
+    collect_files(&dir, &mut files);
+    files.into_iter().map(|file| file.strip_prefix(&dir).unwrap().to_string_lossy().into_owned()).collect()
+}
+
 /// Each overridden logical path, with the reference's digested path and ours.
 fn overridden() -> BTreeMap<String, (String, String)> {
     let reference = json_fixture("manifest.json");
     let ours: BTreeMap<&str, &str> = campfire_assets::manifest().iter().map(|(l, d)| (*l, *d)).collect();
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("overrides");
-    let mut files = Vec::new();
-    collect_files(&dir, &mut files);
-    files
+    override_files()
         .into_iter()
-        .map(|file| {
-            let logical = file.strip_prefix(&dir).unwrap().to_string_lossy().into_owned();
-            let theirs = reference[&logical]["digested_path"].as_str().unwrap_or_else(|| panic!("{logical} isn't a reference asset"));
+        .filter_map(|logical| {
+            let theirs = reference[&logical]["digested_path"].as_str()?;
             let ours = ours[logical.as_str()];
             assert_ne!(theirs, ours, "{logical} is overridden but digests the same");
-            (logical, (theirs.to_string(), ours.to_string()))
+            Some((logical, (theirs.to_string(), ours.to_string())))
         })
         .collect()
+}
+
+/// Logical paths the overrides add, which the reference doesn't have at all.
+fn added() -> Vec<String> {
+    let reference = json_fixture("manifest.json");
+    override_files().into_iter().filter(|logical| reference.get(logical).is_none()).collect()
 }
 
 fn collect_files(dir: &std::path::Path, files: &mut Vec<std::path::PathBuf>) {
@@ -82,8 +92,10 @@ fn manifest_matches_the_reference_precompile() {
             )
         })
         .collect();
+    let added = added();
     let ours: BTreeMap<String, String> = campfire_assets::manifest()
         .iter()
+        .filter(|(l, _)| !added.iter().any(|a| a == l))
         .map(|(l, d)| (l.to_string(), as_reference(d)))
         .collect();
 
@@ -102,6 +114,9 @@ fn manifest_matches_the_reference_precompile() {
 
     let served: Value = serde_json::from_str(&as_reference(campfire_assets::manifest_json())).unwrap();
     let mut served = served.as_object().unwrap().clone();
+    for logical in &added {
+        served.remove(logical);
+    }
     let mut reference_json = json_fixture("manifest.json").as_object().unwrap().clone();
     // An overridden file's integrity hash covers its own bytes.
     for logical in overridden().keys() {
@@ -130,7 +145,7 @@ fn compiled_files_are_byte_identical_to_the_reference_precompile() {
         "compiled output differs for {mismatched:?}"
     );
     assert_eq!(
-        reference.as_object().unwrap().len(),
+        reference.as_object().unwrap().len() + added().len(),
         campfire_assets::manifest().len()
     );
 }

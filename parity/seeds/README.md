@@ -175,7 +175,8 @@ no rendering: it only removes the reordering.
   reports every Edge as Windows, so the Edge-on-macOS branches are unreachable), `opera_linux` none
   of them (the `else` branches), `chrome_outdated` is blocked by `allow_browser`, `apple_messages`
   gets the "Campfire" title on the unsupported-browser page.
-- **Reference bug the inventory keeps**: with an Edge user agent, `pwa/_install_instructions`
-  references a missing `install-edge.svg`, so the profile and every room page answer 500.
+- **Reference bug the inventory no longer captures**: with an EdgeHTML user agent (`Edge/`),
+  `pwa/_install_instructions` references a missing `install-edge.svg`, so the profile and every
+  room page answer 500 in Rails. The Rust app ships the image (`crates/assets/overrides/`).
 - **Server errors**: `/searches?q=NOT` is a 500 in Rails (a bare FTS5 operator). The Rust app
   searches for the word instead, so the inventory no longer captures it.

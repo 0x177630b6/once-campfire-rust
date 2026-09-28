@@ -134,7 +134,10 @@ struct Browser<'a> {
 
 impl Browser<'_> {
     async fn request(&mut self, method: Method, path: &str, headers: &[(&str, &str)], body: Option<(&str, String)>) -> Reply {
-        let mut request = Request::builder().method(method).uri(path).header(header::HOST, HOST).header(header::USER_AGENT, CHROME).header("x-forwarded-for", &self.ip);
+        let mut request = Request::builder().method(method).uri(path).header(header::HOST, HOST).header("x-forwarded-for", &self.ip);
+        if !headers.iter().any(|(name, _)| name.eq_ignore_ascii_case("user-agent")) {
+            request = request.header(header::USER_AGENT, CHROME);
+        }
         // What a browser sends for requests the page itself makes (forms, fetches).
         request = request.header("sec-fetch-site", "same-origin");
         if !self.cookies.is_empty() {
@@ -267,6 +270,18 @@ async fn a_rails_issued_session_cookie_continues_on_rust() {
     let profile = browser.get("/users/me/profile").await;
     assert_eq!(profile.status, StatusCode::OK);
     assert!(profile.text().contains("David"));
+}
+
+#[tokio::test]
+async fn edge_gets_its_install_instructions() {
+    // EdgeHTML's token: the useragent gem reports Chromium Edge (`Edg/`) as Chrome.
+    const EDGE: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edge/124.0.0.0";
+    let Some(test) = boot_seed("default").await else { return };
+    let mut browser = test.browser("198.51.100.9");
+    browser.sign_in("david@37signals.com").await;
+    let profile = browser.request(Method::GET, "/users/me/profile", &[("user-agent", EDGE)], None).await;
+    assert_eq!(profile.status, StatusCode::OK);
+    assert!(profile.text().contains("/assets/install-edge-"), "{}", profile.text());
 }
 
 #[tokio::test]

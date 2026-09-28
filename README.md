@@ -386,6 +386,9 @@ Deliberate:
   are, so `NOT`, `AND`, `OR` or `NEAR` in the wrong place is a 500. Each word is now matched as
   itself.
 - **`/rooms/directs/:id` redirects to the room** instead of answering 500.
+- **Edge's install instructions render.** With an EdgeHTML user agent (`Edge/`), Rails answers
+  profile and room pages with a 500 because the partial names an image that isn't there
+  (`install-edge.svg`); the Rust app ships it.
 - **Not ported:** the duplicate `session_token` cookie Rails' Active Storage streaming sends; and
   legacy AES-CBC encrypted cookies, since Campfire started on GCM.
 
@@ -399,7 +402,6 @@ Not fully covered:
 
 **Rails bugs the port reproduces faithfully,** worth fixing upstream first:
 
-- Edge user agents get a 500 on profile and room pages (`install-edge.svg` is missing).
 - New-ping autocomplete never shows suggestions (a plain fetch asks for JSON and gets HTML).
 - A mention of a deleted user blanks the whole message.
 - Editing a message with a missing attachment raises.
