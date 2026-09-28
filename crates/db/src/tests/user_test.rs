@@ -3,7 +3,7 @@
 use super::*;
 use crate::{
     Ban, Membership, Message, NewUser, PasswordDigest, PushSubscription, Role, Room, RoomType, Search, Session,
-    Status, User, UserChanges, Webhook,
+    Status, User, UserChanges, Webhook, WebhookAttachment,
 };
 
 fn user(t: &TestDb, label: &str) -> User {
@@ -235,9 +235,11 @@ fn webhook_payload() {
             &message,
             "/rooms/1/bot/key/messages",
             "/rooms/1/@2",
+            None,
         )
     });
     let json: serde_json::Value = serde_json::from_str(&payload).unwrap();
+    assert!(json["message"].get("attachment").is_none());
     assert_eq!(
         json["user"],
         serde_json::json!({ "id": id("jason"), "name": "Jason" })
@@ -251,6 +253,35 @@ fn webhook_payload() {
         serde_json::json!({ "html": "First post!", "plain": "First post!" })
     );
     assert!(payload.starts_with(r#"{"user":{"id":"#));
+}
+
+#[test]
+fn webhook_payload_with_attachment() {
+    let t = TestDb::new();
+    let message = t.read(|c| Message::find(c, id("first")));
+    let webhook = t.read(|c| Ok(Webhook::find_by_user(c, id("bender"))?.unwrap()));
+    let attachment = WebhookAttachment {
+        filename: "memo <1>.m4a".into(),
+        content_type: Some("audio/x-m4a".into()),
+        byte_size: 12345,
+        path: "/rails/active_storage/blobs/proxy/abc--def/memo.m4a".into(),
+    };
+    let payload = t.read(|c| {
+        webhook.payload(c, &BasicRichText, &message, "/rooms/1/bot/key/messages", "/rooms/1/@2", Some(&attachment))
+    });
+    let json: serde_json::Value = serde_json::from_str(&payload).unwrap();
+    assert_eq!(
+        json["message"]["attachment"],
+        serde_json::json!({
+            "filename": "memo <1>.m4a",
+            "content_type": "audio/x-m4a",
+            "byte_size": 12345,
+            "path": "/rails/active_storage/blobs/proxy/abc--def/memo.m4a"
+        })
+    );
+    // Same ActiveSupport::JSON escaping as the rest of the payload.
+    assert!(payload.contains(r#""filename":"memo \u003c1\u003e.m4a""#));
+    assert_eq!(json["message"]["path"], "/rooms/1/@2");
 }
 
 // User::Role

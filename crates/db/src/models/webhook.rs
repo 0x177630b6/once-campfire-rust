@@ -84,6 +84,8 @@ impl Webhook {
 
     /// The JSON body `deliver` posts. `room_bot_messages_path` and `message_path` come from
     /// the route helpers (`room_bot_messages_path(room, bot_key)`, `room_at_message_path(room, message)`).
+    /// Hermes fork: `attachment`, when given, is added as `message.attachment` (stock Campfire
+    /// sends only the filename, as `body.plain`).
     pub fn payload(
         &self,
         conn: &Connection,
@@ -91,6 +93,7 @@ impl Webhook {
         message: &Message,
         room_bot_messages_path: &str,
         message_path: &str,
+        attachment: Option<&WebhookAttachment>,
     ) -> Result<String> {
         let creator = message.creator(conn)?;
         let room = Room::find(conn, message.room_id)?;
@@ -99,9 +102,11 @@ impl Webhook {
         let plain =
             without_recipient_mentions(&message.plain_text_body(conn, rich_text)?, &recipient);
 
+        let attachment = attachment.map(WebhookAttachment::to_json_member).unwrap_or_default();
+
         // Hash order as written in `Webhook#payload`, encoded like `ActiveSupport::JSON`.
         let body = format!(
-            r#"{{"user":{{"id":{},"name":{}}},"room":{{"id":{},"name":{},"path":{}}},"message":{{"id":{},"body":{{"html":{},"plain":{}}},"path":{}}}}}"#,
+            r#"{{"user":{{"id":{},"name":{}}},"room":{{"id":{},"name":{},"path":{}}},"message":{{"id":{},"body":{{"html":{},"plain":{}}},"path":{}{}}}}}"#,
             creator.id,
             json_string(&creator.name),
             room.id,
@@ -116,8 +121,32 @@ impl Webhook {
                 .unwrap_or_else(|| "null".into()),
             json_string(&plain),
             json_string(message_path),
+            attachment,
         );
         Ok(body)
+    }
+}
+
+/// Hermes fork: the message's attachment as a bot webhook exposes it. `path` is a relative,
+/// expiring Active Storage proxy path (see `campfire_storage::paths::blob_proxy_path_expiring`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct WebhookAttachment {
+    pub filename: String,
+    pub content_type: Option<String>,
+    pub byte_size: i64,
+    pub path: String,
+}
+
+impl WebhookAttachment {
+    /// `,"attachment":{...}`, ready to follow `"path":...` inside the `message` object.
+    fn to_json_member(&self) -> String {
+        format!(
+            r#","attachment":{{"filename":{},"content_type":{},"byte_size":{},"path":{}}}"#,
+            json_string(&self.filename),
+            self.content_type.as_deref().map(json_string).unwrap_or_else(|| "null".into()),
+            self.byte_size,
+            json_string(&self.path),
+        )
     }
 }
 

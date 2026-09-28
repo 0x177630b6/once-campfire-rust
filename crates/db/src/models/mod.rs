@@ -30,4 +30,4 @@ pub use search::Search;
 pub use session::Session;
 pub use sound::Sound;
 pub use user::{NewUser, PasswordDigest, Role, Status, User, UserChanges};
-pub use webhook::Webhook;
+pub use webhook::{Webhook, WebhookAttachment};

@@ -4,7 +4,7 @@
 //! (create the bot's message, process an attachment, `broadcast_create`).
 
 use anyhow::{Context as _, anyhow};
-use campfire_db::{Database, Event, Message, NewMessage, PushSubscription, Room, User, Webhook};
+use campfire_db::{Database, Event, Message, NewMessage, PushSubscription, Room, User, Webhook, WebhookAttachment};
 use campfire_views::messages as views;
 
 use super::net::Network;
@@ -69,6 +69,8 @@ pub fn web_push_pool(config: &Config, db: &Database) -> Option<web_push::Pool> {
 async fn deliver_webhook(app: App, event: Event) -> anyhow::Result<()> {
     let Event::DeliverWebhook { bot_id, message_id } = event else { return Ok(()) };
     let db = app.db.clone();
+    let storage = app.storage.clone();
+    let attachment_expires_at = app.clock.now() + app.config.webhook_attachment_ttl;
     let (bot, room, url, payload) = app
         .db
         .read(move |conn| {
@@ -76,12 +78,25 @@ async fn deliver_webhook(app: App, event: Event) -> anyhow::Result<()> {
             let message = Message::find(conn, message_id)?;
             let room = Room::find(conn, message.room_id)?;
             let Some(webhook) = Webhook::find_by_user(conn, bot_id)? else { return Ok(None) };
+            // Hermes fork: expose the attachment (e.g. a voice note) so the bot can fetch it.
+            let attachment = message.attachment(conn)?.map(|(_, blob)| WebhookAttachment {
+                path: campfire_storage::paths::blob_proxy_path_expiring(
+                    &*storage.verifier,
+                    blob.id,
+                    &campfire_storage::Filename::new(blob.filename.clone()),
+                    attachment_expires_at,
+                ),
+                filename: blob.filename,
+                content_type: blob.content_type,
+                byte_size: blob.byte_size,
+            });
             let payload = webhook.payload(
                 conn,
                 &*db.env().rich_text,
                 &message,
                 &campfire_routes::room_bot_messages(room.id, bot.bot_key()),
                 &campfire_routes::room_at_message(room.id, message.id),
+                attachment.as_ref(),
             )?;
             Ok(Some((bot, room, webhook.url, payload)))
         })

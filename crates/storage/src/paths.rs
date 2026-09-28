@@ -45,6 +45,18 @@ pub fn representation_proxy_path(verifier: &dyn Verifier, blob: &Blob, variation
     representation_path("proxy", verifier, blob, variation)
 }
 
+/// `rails_storage_proxy_path` with an expiring signed id (`blob.signed_id(expires_in:)`):
+/// `/rails/active_storage/blobs/proxy/:signed_id/*filename`. Hermes fork: the path a bot
+/// webhook carries as `message.attachment.path`, so the bot can fetch the bytes until
+/// `expires_at`.
+pub fn blob_proxy_path_expiring(verifier: &dyn Verifier, blob_id: i64, filename: &Filename, expires_at: jiff::Timestamp) -> String {
+    format!(
+        "{PREFIX}/blobs/proxy/{}/{}",
+        escape_segment(&signed_blob_id(verifier, blob_id, Some(expires_at))),
+        escape_path(&filename.sanitized())
+    )
+}
+
 fn blob_path(kind: &str, verifier: &dyn Verifier, blob_id: i64, filename: &Filename, disposition: Option<&str>) -> String {
     let mut path = format!(
         "{PREFIX}/blobs/{kind}/{}/{}",
@@ -78,4 +90,27 @@ fn query_escape(s: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::verifier::AppMessageVerifier;
+
+    #[test]
+    fn expiring_proxy_path_verifies_until_it_expires() {
+        let verifier = AppMessageVerifier::new(vec![7; 64]);
+        let now: jiff::Timestamp = "2026-09-28T12:00:00Z".parse().unwrap();
+        let expires_at = now + jiff::SignedDuration::from_mins(60);
+        let signed_id = signed_blob_id(&verifier, 42, Some(expires_at));
+
+        assert_eq!(
+            blob_proxy_path_expiring(&verifier, 42, &Filename::new("memo.m4a"), expires_at),
+            format!("{PREFIX}/blobs/proxy/{}/memo.m4a", escape_segment(&signed_id))
+        );
+        assert_eq!(verify_signed_blob_id(&verifier, &signed_id, now), Some(42));
+        assert_eq!(verify_signed_blob_id(&verifier, &signed_id, expires_at + jiff::SignedDuration::from_secs(1)), None);
+        // The stock, non-expiring id is a different token.
+        assert_ne!(signed_id, signed_blob_id(&verifier, 42, None));
+    }
 }

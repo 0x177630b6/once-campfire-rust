@@ -52,6 +52,9 @@ pub struct Config {
     pub log_level: String,
     /// The fragment store's limit in bytes (`CAMPFIRE_FRAGMENT_CACHE_MB`).
     pub fragment_cache_bytes: usize,
+    /// Hermes fork: lifetime of the signed `message.attachment.path` in bot webhooks
+    /// (`HERMES_ATTACHMENT_URL_TTL_MINUTES`, default 60).
+    pub webhook_attachment_ttl: jiff::SignedDuration,
 }
 
 #[derive(Debug, Clone)]
@@ -138,6 +141,9 @@ impl Config {
             log_level: present("RAILS_LOG_LEVEL").unwrap_or_else(|| "info".into()),
             fragment_cache_bytes: number("CAMPFIRE_FRAGMENT_CACHE_MB", campfire_views::fragment_cache::DEFAULT_MAX_BYTES >> 20)?
                 .saturating_mul(1 << 20),
+            webhook_attachment_ttl: jiff::SignedDuration::from_mins(
+                i64::try_from(number("HERMES_ATTACHMENT_URL_TTL_MINUTES", 60)?.max(1)).unwrap_or(60),
+            ),
         })
     }
 }
