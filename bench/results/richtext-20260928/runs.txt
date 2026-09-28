@@ -1,0 +1,10 @@
+# message_presentation / to_plain_text, native release build, one run each (timing.rs)
+# before: commit 98818bd (autolink.rs as it was)
+domains 1024 bytes: presentation 11.526838ms (Ok(4070)), plain text 47.684µs (Ok(702))
+domains 2048 bytes: presentation 72.380149ms (Ok(8102)), plain text 86.329µs (Ok(1406))
+domains 4096 bytes: presentation 514.842566ms (Ok(16166)), plain text 135.225µs (Ok(2814))
+domains 8192 bytes: presentation 4.04651989s (Ok(32294)), plain text 258.786µs (Ok(5630))
+# after: tag positions indexed once per pass
+domains 4096 bytes: presentation 1.555863ms (Ok(16166)), plain text 101.92µs (Ok(2814))
+domains 16384 bytes: presentation 3.534705ms (Ok(64550)), plain text 389.121µs (Ok(11262))
+domains 65536 bytes: presentation 14.166282ms (Ok(258086)), plain text 1.592495ms (Ok(45054))

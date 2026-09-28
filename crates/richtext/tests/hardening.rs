@@ -1,6 +1,8 @@
 //! Regression tests for places where the port deliberately diverges from the Rails pipeline to
 //! close a hole or bound the work a message body can cause (see "Known differences" in README.md).
 
+use std::time::{Duration, Instant};
+
 use campfire_richtext::dom::Dom;
 use campfire_richtext::{AttachableResolver, GidLookup, RenderContext, SignedLookup, message_presentation};
 
@@ -41,6 +43,12 @@ fn parsed_markup(html: &str) -> Vec<String> {
     names
 }
 
+fn assert_quick(started: Instant, what: &str) {
+    // Generous enough for a debug build; release takes a few milliseconds.
+    let bound = if cfg!(debug_assertions) { Duration::from_secs(5) } else { Duration::from_secs(1) };
+    assert!(started.elapsed() < bound, "{what} took {:?}", started.elapsed());
+}
+
 // --- Autolinking inside attribute values ---------------------------------------------------------
 
 #[test]
@@ -69,4 +77,15 @@ fn urls_in_text_are_still_linked() {
     assert!(html.contains(
         "<p>see <a target=\"_blank\" href=\"http://example.com/a?b=1&amp;c=2\">http://example.com/a?b=1&amp;c=2</a> and <a target=\"_blank\" href=\"mailto:me@example.com\">me@example.com</a></p>"
     ), "{html}");
+}
+
+// --- Bounded work ----------------------------------------------------------------------------------
+
+#[test]
+fn many_bare_domains_autolink_in_linear_time() {
+    let body = "<p>www.a.com</p>".repeat(64 * 1024 / 16);
+    let started = Instant::now();
+    let html = presentation(&body);
+    assert_quick(started, "autolinking 64 KB of bare domains");
+    assert_eq!(html.matches("<a target=\"_blank\" href=\"http://www.a.com\">").count(), 64 * 1024 / 16);
 }
