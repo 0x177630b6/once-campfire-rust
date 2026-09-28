@@ -233,6 +233,10 @@ docker run -d -p 80:80 -p 443:443 \
 - **TLS:** with `TLS_DOMAIN` set, the app gets and renews its own Let's Encrypt certificate. It
   keeps certificates where Thruster did, so an existing install keeps its certificate.
 - **Plain HTTP:** set `DISABLE_SSL` instead, for running behind another proxy.
+- **Web Push:** `VAPID_PUBLIC_KEY` and `VAPID_PRIVATE_KEY` are a P-256 key pair in URL-safe Base64
+  (as the Rails image takes them). They're checked at boot; without a valid pair, push
+  notifications are off and the log says why. `VAPID_SUBJECT` is the contact push services see (a
+  `mailto:` or `https:` URL); it defaults to `https://` and your `TLS_DOMAIN`.
 - **Storage:** everything lives under `/rails/storage`: the SQLite database, uploaded files and
   backups.
 - **Media:** the image builds libvips 8.16.1 (thumbnails and other variants) and ffmpeg 7.1.5
@@ -292,7 +296,18 @@ Deliberate:
   header (e.g. Safari before 16.4) can't submit forms over HTTPS. Tabs opened before an upgrade keep
   working: their tokens are ignored, and the header does the job.
 - **Redis and Resque are gone.** Jobs run in-process and are best-effort: a crash loses queued
-  webhooks and pushes, as a Redis restart would under Rails.
+  webhooks and pushes, as a Redis restart would under Rails. Each kind of job (pushes, webhooks,
+  purges, ...) has its own queue and `JOB_CONCURRENCY` workers, so a slow bot's webhooks can't hold
+  up push notifications.
+- **Push subscriptions are kept through our own failures.** Rails destroys a push subscription on
+  any OpenSSL error, which includes a bad VAPID key and any TLS failure (an empty CA store, a skewed
+  clock), so a configuration mistake deleted everyone's subscriptions on the next message. The
+  VAPID keys are now checked once at boot (Web Push is off, with a log line, when they're missing
+  or don't form a key pair), and a subscription is destroyed only when the push service answers
+  410 or 404 (RFC 8030; Rails keeps it on a 404) or its own key isn't a valid P-256 point.
+- **The VAPID subject is configurable.** Rails identifies every install to push services as
+  `mailto:support@37signals.com`; this uses `VAPID_SUBJECT`, or `https://` and the first
+  `TLS_DOMAIN`, or the project's URL.
 - **Cookies are only sent when they change.** Rails rewrites the session cookie, re-signs the
   `session_token` cookie and re-sets `last_room` on nearly every response. The session cookie is now
   written only when the session changed, and deleted once it's empty (it only holds the flash and a

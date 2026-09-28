@@ -39,6 +39,8 @@ pub struct AppState {
     pub cable: Cable,
     pub broadcasts: channels::Broadcasts,
     pub jobs: jobs::Jobs,
+    /// `config.x.web_push_pool`; `None` when Web Push is off (no valid VAPID keys).
+    pub web_push: Option<crate::integrations::web_push::Pool>,
     /// `Rails.cache` for view fragments (`cache message do`), current during every request
     /// and every render outside one.
     pub fragment_cache: Arc<FragmentCache>,
@@ -95,6 +97,7 @@ pub async fn boot(config: Config) -> anyhow::Result<Booted> {
     kit_config.public_path = Some(public_pages.path().to_path_buf());
 
     let fragment_cache = FragmentCache::new(config.fragment_cache_bytes);
+    let web_push = crate::integrations::web_push_pool(&config, &db);
     let app = Arc::new(AppState {
         config,
         secrets,
@@ -105,6 +108,7 @@ pub async fn boot(config: Config) -> anyhow::Result<Booted> {
         broadcasts: channels::Broadcasts::new(cable.clone()),
         cable,
         jobs,
+        web_push,
         fragment_cache,
         _public_pages: public_pages,
     });
@@ -293,7 +297,11 @@ async fn serve(config: Config) -> anyhow::Result<()> {
         result = server => result?,
         _ = deadline => tracing::warn!("requests still running at shutdown were abandoned"),
     }
+    // Jobs first: pushing a message queues its notifications on the Web Push pool.
     jobs.shutdown(SHUTDOWN_GRACE).await;
+    if let Some(web_push) = &app.web_push {
+        web_push.shutdown().await;
+    }
     Ok(())
 }
 

@@ -4,7 +4,11 @@
 //! Reference sources:
 //! - `SECRET_KEY_BASE`: Rails' `secret_key_base` (required in production; `SECRET_KEY_BASE_DUMMY`
 //!   makes a throwaway one, as Rails does for asset precompilation).
-//! - `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`: `config/initializers/vapid.rb`.
+//! - `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`: `config/initializers/vapid.rb`. Checked at boot:
+//!   when either is missing or they aren't a matching P-256 key pair, Web Push is off (logged).
+//! - `VAPID_SUBJECT`: the contact push services see in the VAPID JWT's `sub` (a `mailto:` or
+//!   `https:` URL). The reference hardcodes `mailto:support@37signals.com`; this defaults to
+//!   `https://` and the first `TLS_DOMAIN`, or the project's URL without one.
 //! - `DISABLE_SSL`: `config/environments/production.rb` (`assume_ssl`/`force_ssl` unless present).
 //! - `APP_VERSION`, `GIT_REVISION`: `config/initializers/version.rb` (`X-Version`, `X-Rev`).
 //! - `PORT`: `config/puma.rb` (default 3000). Unused by `campfire server`, which (like Thruster,
@@ -36,6 +40,8 @@ pub struct Config {
     pub secret_key_base: String,
     pub vapid_public_key: Option<String>,
     pub vapid_private_key: Option<String>,
+    /// `VAPID_SUBJECT`, or a default (see the module docs).
+    pub vapid_subject: String,
     /// `DISABLE_SSL` present: no `assume_ssl`, no `force_ssl`.
     pub disable_ssl: bool,
     /// `Rails.application.config.app_version`
@@ -131,8 +137,9 @@ impl Config {
 
         Ok(Self {
             secret_key_base,
-            vapid_public_key: get("VAPID_PUBLIC_KEY"),
-            vapid_private_key: get("VAPID_PRIVATE_KEY"),
+            vapid_public_key: present("VAPID_PUBLIC_KEY"),
+            vapid_private_key: present("VAPID_PRIVATE_KEY"),
+            vapid_subject: present("VAPID_SUBJECT").unwrap_or_else(|| default_vapid_subject(present("TLS_DOMAIN"))),
             disable_ssl: present("DISABLE_SSL").is_some(),
             app_version: present("APP_VERSION").or_else(|| present("GIT_REVISION")).unwrap_or_else(|| "0".into()),
             git_revision: get("GIT_REVISION"),
@@ -147,6 +154,15 @@ impl Config {
             fragment_cache_bytes: number("CAMPFIRE_FRAGMENT_CACHE_MB", campfire_views::fragment_cache::DEFAULT_MAX_BYTES >> 20)?
                 .saturating_mul(1 << 20),
         })
+    }
+}
+
+/// The install's own HTTPS URL when it has a TLS domain; the project's otherwise.
+fn default_vapid_subject(tls_domains: Option<String>) -> String {
+    let domain = tls_domains.as_deref().and_then(|domains| domains.split(',').map(str::trim).find(|domain| !domain.is_empty()));
+    match domain {
+        Some(domain) => format!("https://{domain}"),
+        None => "https://github.com/basecamp/once-campfire-rust".into(),
     }
 }
 
@@ -203,6 +219,20 @@ mod tests {
     fn disable_ssl_is_any_non_blank_value() {
         assert!(config(&[("SECRET_KEY_BASE", "abc"), ("DISABLE_SSL", "false")]).unwrap().disable_ssl);
         assert!(!config(&[("SECRET_KEY_BASE", "abc"), ("DISABLE_SSL", " ")]).unwrap().disable_ssl);
+    }
+
+    #[test]
+    fn vapid_keys_must_not_be_blank() {
+        let config = config(&[("SECRET_KEY_BASE", "abc"), ("VAPID_PUBLIC_KEY", ""), ("VAPID_PRIVATE_KEY", " ")]).unwrap();
+        assert_eq!((config.vapid_public_key, config.vapid_private_key), (None, None));
+    }
+
+    #[test]
+    fn vapid_subject_defaults_to_the_tls_domain() {
+        let subject = |vars: &[(&str, &str)]| config(&[&[("SECRET_KEY_BASE", "abc")], vars].concat()).unwrap().vapid_subject;
+        assert_eq!(subject(&[("VAPID_SUBJECT", "mailto:ops@example.com"), ("TLS_DOMAIN", "chat.example.com")]), "mailto:ops@example.com");
+        assert_eq!(subject(&[("TLS_DOMAIN", " , chat.example.com,other.example.com")]), "https://chat.example.com");
+        assert_eq!(subject(&[("VAPID_SUBJECT", " ")]), "https://github.com/basecamp/once-campfire-rust");
     }
 
     #[test]
