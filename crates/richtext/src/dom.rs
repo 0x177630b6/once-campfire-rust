@@ -368,27 +368,38 @@ impl Dom {
 
     /// `node.to_html` for an HTML5 document: the node itself (children only for a fragment).
     pub fn to_html(&self, id: NodeId) -> String {
+        self.serialize(id, AttributeEscaping::Nokogiri)
+    }
+
+    /// `to_html`, but with `<` and `>` escaped in attribute values as well, as the current HTML
+    /// serialization algorithm does. Nokogiri leaves them raw, which lets auto_link's regular
+    /// expressions mistake an attribute value for text.
+    pub fn to_html_with_escaped_attribute_brackets(&self, id: NodeId) -> String {
+        self.serialize(id, AttributeEscaping::Brackets)
+    }
+
+    fn serialize(&self, id: NodeId, escaping: AttributeEscaping) -> String {
         let mut out = String::new();
         match self.nodes[id].data {
-            NodeData::Fragment | NodeData::Document => self.serialize_children(id, &mut out),
-            _ => self.serialize_node(id, &mut out),
+            NodeData::Fragment | NodeData::Document => self.serialize_children(id, escaping, &mut out),
+            _ => self.serialize_node(id, escaping, &mut out),
         }
         out
     }
 
     pub fn inner_html(&self, id: NodeId) -> String {
         let mut out = String::new();
-        self.serialize_children(id, &mut out);
+        self.serialize_children(id, AttributeEscaping::Nokogiri, &mut out);
         out
     }
 
-    fn serialize_children(&self, id: NodeId, out: &mut String) {
+    fn serialize_children(&self, id: NodeId, escaping: AttributeEscaping, out: &mut String) {
         for &child in &self.nodes[id].children {
-            self.serialize_node(child, out);
+            self.serialize_node(child, escaping, out);
         }
     }
 
-    fn serialize_node(&self, id: NodeId, out: &mut String) {
+    fn serialize_node(&self, id: NodeId, escaping: AttributeEscaping, out: &mut String) {
         match &self.nodes[id].data {
             NodeData::Element(e) => {
                 let tag = serialized_tag_name(&e.name);
@@ -398,14 +409,14 @@ impl Dom {
                     out.push(' ');
                     out.push_str(&attr.qualified_name());
                     out.push_str("=\"");
-                    escape_attribute(&attr.value, out);
+                    escape_attribute(&attr.value, escaping, out);
                     out.push('"');
                 }
                 out.push('>');
                 if e.name.ns == ns!(html) && is_void_element(&e.name.local) {
                     return;
                 }
-                self.serialize_children(id, out);
+                self.serialize_children(id, escaping, out);
                 out.push_str("</");
                 out.push_str(&tag);
                 out.push('>');
@@ -430,7 +441,7 @@ impl Dom {
                 out.push_str(name);
                 out.push('>');
             }
-            NodeData::Fragment | NodeData::Document => self.serialize_children(id, out),
+            NodeData::Fragment | NodeData::Document => self.serialize_children(id, escaping, out),
         }
     }
 }
@@ -461,12 +472,20 @@ fn is_raw_text_element(local: &str) -> bool {
     )
 }
 
-fn escape_attribute(value: &str, out: &mut String) {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AttributeEscaping {
+    Nokogiri,
+    Brackets,
+}
+
+fn escape_attribute(value: &str, escaping: AttributeEscaping, out: &mut String) {
     for c in value.chars() {
         match c {
             '&' => out.push_str("&amp;"),
             '\u{a0}' => out.push_str("&nbsp;"),
             '"' => out.push_str("&quot;"),
+            '<' if escaping == AttributeEscaping::Brackets => out.push_str("&lt;"),
+            '>' if escaping == AttributeEscaping::Brackets => out.push_str("&gt;"),
             _ => out.push(c),
         }
     }
@@ -701,6 +720,9 @@ mod tests {
             roundtrip("<a title='a<b>c' href=\"x&y\u{a0}z\">t&lt;\u{a0}>\"'</a>"),
             "<a title=\"a<b>c\" href=\"x&amp;y&nbsp;z\">t&lt;&nbsp;&gt;\"'</a>"
         );
+        let mut dom = Dom::new();
+        let f = dom.parse_fragment("<a title='a<b>c'>d>e</a>").unwrap();
+        assert_eq!(dom.to_html_with_escaped_attribute_brackets(f), "<a title=\"a&lt;b&gt;c\">d&gt;e</a>");
         assert_eq!(roundtrip("<pre>\n\nx</pre>"), "<pre>\nx</pre>");
         assert_eq!(roundtrip("<noscript><b>x</b></noscript>"), "<noscript><b>x</b></noscript>");
         assert_eq!(roundtrip("<?php x ?>"), "<!--?php x ?-->");

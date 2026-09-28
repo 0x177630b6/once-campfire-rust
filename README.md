@@ -25,7 +25,7 @@ protocol recordings all come from running the real Rails app.
 | `rails_compat` | Rails' signed and encrypted cookies, signed IDs, signed global IDs, Turbo stream names and bcrypt, byte-compatible with Rails so sessions carry over |
 | `kit` | Rack, Action Dispatch and Thruster, on Axum: Rails-style nested params, sessions, flash, format negotiation, forgery protection by `Sec-Fetch-Site`, ETags and gzip built from a page's cached parts, plus an in-process front server with TLS and ACME, HTTP/2 and Thruster's response cache |
 | `db` | Active Record over the existing schema (rusqlite), with the same callbacks, timestamps and STI values, and a Rails-compatible fixture loader |
-| `richtext` | The Action Text pipeline: sanitizing, mentions, opengraph embeds and autolinking, byte-identical to Rails on a 647-case corpus |
+| `richtext` | The Action Text pipeline: sanitizing, mentions, opengraph embeds and autolinking, byte-identical to Rails on a 647-case corpus apart from the deliberate differences below |
 | `storage` | Active Storage: the same blob keys, disk layout, variants (libvips) and video previews (ffmpeg), with byte-identical thumbnails |
 | `cable` | The Action Cable protocol server and pub/sub, frame-for-frame with Rails, on a WebSocket implementation of its own that shares and compresses broadcasts |
 | `assets` | Propshaft and importmap-rails, with identical fingerprinted filenames and tags |
@@ -367,6 +367,12 @@ Deliberate:
   URIs longer than 2 KB, keys on the raw path (Thruster decoded it, so `/a%2Fb` and `/a/b` shared
   an entry), and lets range requests through to the app instead of answering them with a whole
   cached body.
+- **Autolinking can't break out of an attribute.** rails_autolink finds URLs and email addresses
+  with regular expressions over the sanitized HTML, which Nokogiri serializes with `<` and `>` left
+  raw in attribute values. A URL after a `>` in, say, a `title` was taken for text and linked, and
+  the inserted `<a href="...">` closed the attribute, turning the rest of its value into live
+  markup (a stored XSS; it affects the Rails app). The port escapes `<` and `>` in attribute values
+  before autolinking, so URLs inside attributes stay as they were. The same DOM otherwise.
 - **Not ported:** the duplicate `session_token` cookie Rails' Active Storage streaming sends; responses
   to requests for multiple byte ranges; and legacy AES-CBC encrypted cookies, since Campfire started
   on GCM.

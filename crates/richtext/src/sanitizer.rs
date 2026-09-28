@@ -114,12 +114,28 @@ pub fn sanitize(html: &str, list: &SafeList) -> Result<String, ParseError> {
     if html.is_empty() {
         return Ok(String::new());
     }
+    let (dom, fragment) = scrubbed(html, list)?;
+    Ok(dom.to_html(fragment))
+}
+
+/// `sanitize`, serialized with `<` and `>` escaped in attribute values too, so that the result can
+/// be scanned with regular expressions (auto_link) without mistaking an attribute for text.
+/// Rails serializes them raw; the two are the same DOM.
+pub fn sanitize_with_escaped_attribute_brackets(html: &str, list: &SafeList) -> Result<String, ParseError> {
+    if html.is_empty() {
+        return Ok(String::new());
+    }
+    let (dom, fragment) = scrubbed(html, list)?;
+    Ok(dom.to_html_with_escaped_attribute_brackets(fragment))
+}
+
+fn scrubbed(html: &str, list: &SafeList) -> Result<(Dom, NodeId), ParseError> {
     let mut dom = Dom::new();
     let fragment = dom.parse_fragment(html)?;
     for child in dom.children(fragment).to_vec() {
         scrub_bottom_up(&mut dom, child, list);
     }
-    Ok(dom.to_html(fragment))
+    Ok((dom, fragment))
 }
 
 /// `Loofah::Scrubber#traverse_conditionally_bottom_up`: children (as they were before any of them

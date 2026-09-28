@@ -1,13 +1,19 @@
 //! rails_autolink 1.1.8's `auto_link(text, html: { target: "_blank" }, sanitize_options: ...)`, as
 //! `MessagesHelper#message_presentation` calls it. It works on the serialized HTML with regular
 //! expressions, so the exact serialization from the earlier steps matters.
+//!
+//! One deliberate difference closes a stored XSS in rails_autolink: the sanitized HTML is
+//! serialized with `<` and `>` escaped in attribute values. Nokogiri leaves them raw, so a URL after
+//! a `>` in a `title` looked like text to `auto_linked?`, and the `<a href="...">` inserted there
+//! closed the attribute and turned the rest of its value into markup. With them escaped, every `<`
+//! and `>` in the text is a tag's, so auto_link only ever inserts links between tags.
 
 use regex::Regex;
 use std::sync::LazyLock;
 
 use crate::dom::ParseError;
 use crate::ruby::{html_escape, is_blank, url_encode};
-use crate::sanitizer::{SafeList, sanitize};
+use crate::sanitizer::{SafeList, sanitize, sanitize_with_escaped_attribute_brackets};
 
 /// `AUTO_LINK_RE`. Ruby's `\s` and `\w` are ASCII-only.
 static AUTO_LINK_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -50,7 +56,7 @@ pub fn auto_link(text: &str, sanitize_options: &SafeList) -> Result<String, Pars
     if is_blank(text) {
         return Ok(String::new());
     }
-    let text = sanitize(text, sanitize_options)?;
+    let text = sanitize_with_escaped_attribute_brackets(text, sanitize_options)?;
     let text = auto_link_urls(&text)?;
     auto_link_email_addresses(&text)
 }
