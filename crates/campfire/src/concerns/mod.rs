@@ -37,7 +37,7 @@
 pub mod platform;
 pub mod user_agent;
 
-use campfire_db::{Ban, Membership, Room, Session, User};
+use campfire_db::{Ban, Membership, PasswordDigest, Room, Session, User};
 use campfire_kit::{Cookie, Ctx, Error, Result, SameSite, StatusCode, halt};
 
 use crate::app::AppCtx;
@@ -252,6 +252,24 @@ pub fn redirect_signed_in_user_to_root(c: &mut Ctx) -> Result<()> {
         return halt(c.redirect_to(&root)?);
     }
     Ok(())
+}
+
+/// `has_secure_password`'s `password=`, hashed on the blocking pool ahead of the write that saves
+/// it, so bcrypt (about 250 ms) holds neither an async thread nor the database writer.
+pub async fn password_digest(c: &Ctx, password: Option<String>) -> Result<Option<PasswordDigest>> {
+    let Some(password) = password else { return Ok(None) };
+    PasswordDigest::hash(password, c.app().db.env().bcrypt_cost).await.map(Some).map_err(Error::internal)
+}
+
+/// `User.active.authenticate_by(email_address:, password:)`: the user is looked up on a reader,
+/// and the password checked once the reader is released.
+pub async fn authenticate_by(c: &Ctx, email_address: String, password: String) -> Result<Option<User>> {
+    // `authenticate_by` returns nil for a blank password before looking anything up.
+    if password.is_empty() {
+        return Ok(None);
+    }
+    let candidate = c.app().db.read(move |conn| User::find_active_by_email_address(conn, &email_address)).await.map_err(Error::internal)?;
+    tokio::task::spawn_blocking(move || User::authenticated(candidate, &password)).await.map_err(Error::internal)
 }
 
 /// `start_new_session_for(user)`

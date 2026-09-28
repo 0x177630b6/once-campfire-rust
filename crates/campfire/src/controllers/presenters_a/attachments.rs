@@ -6,22 +6,26 @@
 //! the old attachment is destroyed first (`has_one ... dependent: :destroy` replacing its target;
 //! its blob is purged after commit, `dependent: :purge_later`), then the new blob and attachment
 //! rows are inserted, and each attachment change touches the record
-//! (`belongs_to :record, touch: true`). After commit the file is uploaded and, since a fresh blob
-//! isn't analyzed, `ActiveStorage::AnalyzeJob` runs later (analysis touches the record again).
+//! (`belongs_to :record, touch: true`). Since a fresh blob isn't analyzed, `ActiveStorage::AnalyzeJob`
+//! runs after commit (analysis touches the record again).
+//!
+//! Unlike Rails, which uploads after commit, the file is uploaded before the transaction
+//! ([`Assignment::stage`]), so the writer never waits on copying and checksumming it; a
+//! transaction that rolls back deletes it again.
+
+use std::sync::Arc;
 
 use campfire_db::{CachedStatements, Connection, Event, Tx};
-use campfire_kit::{Error, Param, Result};
-use campfire_storage::{Blob, Filename, NewBlob, Variation};
+use campfire_kit::{Error, Param, Result, UploadedFile};
+use campfire_storage::{Blob, Filename, Staged, Variation};
 
+use crate::active_storage::{analyzed_metadata, keep_after_commit, stage_file};
 use crate::app::App;
 
-/// The storage service `config/storage.yml` names for production.
-const SERVICE_NAME: &str = "local";
-
-/// An uploaded file, read into memory (`ActionDispatch::Http::UploadedFile`).
+/// An uploaded file (`ActionDispatch::Http::UploadedFile`), still in its multipart tempfile.
 #[derive(Debug, Clone)]
 pub struct Upload {
-    pub data: Vec<u8>,
+    pub file: Arc<UploadedFile>,
     pub filename: String,
     pub content_type: Option<String>,
 }
@@ -29,25 +33,28 @@ pub struct Upload {
 impl Upload {
     /// The upload in `param`, if it is one. `""` and nil mean "no change" to the controllers
     /// here (`params.permit(...).compact` / `avatar=` with nil or "" deletes, see [`Assignment`]).
-    pub fn from_param(param: Option<&Param>) -> Result<Option<Upload>> {
-        let Some(file) = param.and_then(Param::as_file) else { return Ok(None) };
-        Ok(Some(Upload {
-            data: file.read()?,
-            filename: file.original_filename.clone(),
-            content_type: file.content_type.clone(),
-        }))
+    pub fn from_param(param: Option<&Param>) -> Option<Upload> {
+        let file = param.and_then(Param::as_file)?;
+        Some(Upload { file: file.clone(), filename: file.original_filename.clone(), content_type: file.content_type.clone() })
+    }
+
+    /// Uploads the file to storage for a blob whose row is saved next, off the async threads.
+    pub async fn stage(self, app: &App) -> Result<Staged> {
+        let path = self.file.path().to_path_buf();
+        stage_file(app, path, Filename::new(self.filename), self.content_type).await
     }
 }
 
-/// What `record.avatar = value` does with a permitted param value.
+/// What `record.avatar = value` does with a permitted param value: `Create` holds the [`Upload`],
+/// then, once staged, the [`Staged`] blob.
 #[derive(Debug, Clone)]
-pub enum Assignment {
+pub enum Assignment<U = Upload> {
     /// The key wasn't given.
     Unchanged,
     /// `nil` or `""`: `Attached::Changes::DeleteOne` (the attachment is destroyed on save).
     Delete,
     /// An uploaded file: `Attached::Changes::CreateOne`.
-    Create(Upload),
+    Create(U),
     /// Anything else (e.g. a plain string that isn't a signed blob id): Rails raises.
     Invalid,
 }
@@ -60,17 +67,25 @@ impl Assignment {
         match params.get(key) {
             None => Ok(Assignment::Delete),
             Some(param) if param.is_null() || param.as_str() == Some("") => Ok(Assignment::Delete),
-            Some(param) if param.as_file().is_some() => Ok(Assignment::Create(Upload::from_param(Some(param))?.expect("a file"))),
-            Some(_) => Ok(Assignment::Invalid),
+            Some(param) => Ok(Upload::from_param(Some(param)).map_or(Assignment::Invalid, Assignment::Create)),
         }
+    }
+
+    /// Uploads a new file, so the save only has rows to write.
+    pub async fn stage(self, app: &App) -> Result<Assignment<Staged>> {
+        Ok(match self {
+            Assignment::Unchanged => Assignment::Unchanged,
+            Assignment::Delete => Assignment::Delete,
+            Assignment::Create(upload) => Assignment::Create(upload.stage(app).await?),
+            Assignment::Invalid => Assignment::Invalid,
+        })
     }
 }
 
-/// A blob inserted for an attachment, whose bytes still need uploading after commit.
+/// A blob inserted for an attachment, to analyze after commit.
 #[derive(Debug)]
 pub struct Pending {
     pub blob: Blob,
-    pub data: Vec<u8>,
 }
 
 /// `record.<name>.attached?`'s blob: the attachment's blob, if any.
@@ -78,15 +93,15 @@ pub fn attached_blob(conn: &Connection, record_type: &str, record_id: i64, name:
     Blob::attached(conn, record_type, record_id, name).map_err(storage_error)
 }
 
-/// Applies an assignment inside the record's save. Returns the blob to upload after commit.
-pub fn assign(tx: &mut Tx<'_>, record: Record, name: &str, assignment: &Assignment) -> campfire_db::Result<Option<Pending>> {
+/// Applies an assignment inside the record's save. Returns the blob to analyze after commit.
+pub fn assign(tx: &mut Tx<'_>, record: Record, name: &str, assignment: Assignment<Staged>) -> campfire_db::Result<Option<Pending>> {
     match assignment {
         Assignment::Unchanged => Ok(None),
         Assignment::Delete => {
             destroy(tx, record, name)?;
             Ok(None)
         }
-        Assignment::Create(upload) => attach(tx, record, name, upload).map(Some),
+        Assignment::Create(staged) => attach(tx, record, name, staged).map(Some),
         Assignment::Invalid => Err(campfire_db::Error::Other("Could not find or build blob: expected attachable".into())),
     }
 }
@@ -110,15 +125,14 @@ impl Record {
 }
 
 /// `record.<name> = uploaded_file; record.save`: replaces any current attachment.
-pub fn attach(tx: &mut Tx<'_>, record: Record, name: &str, upload: &Upload) -> campfire_db::Result<Pending> {
-    // Attached::Changes::CreateOne#initialize: build_after_unfurling + identify_without_saving.
-    let new_blob = NewBlob::unfurl(&upload.data, Filename::new(upload.filename.clone()), upload.content_type.as_deref(), SERVICE_NAME, true);
+pub fn attach(tx: &mut Tx<'_>, record: Record, name: &str, staged: Staged) -> campfire_db::Result<Pending> {
     destroy(tx, record, name)?;
     let now = tx.now();
-    let blob = new_blob.insert(tx.conn(), now.jiff()).map_err(storage_error)?;
+    let blob = staged.insert(tx.conn(), now.jiff()).map_err(storage_error)?;
+    keep_after_commit(tx, staged);
     campfire_storage::blob::insert_attachment(tx.conn(), name, record.record_type, record.id, blob.id, now.jiff()).map_err(storage_error)?;
     super::touch(tx.conn(), record.table, record.id, tx.now())?;
-    Ok(Pending { blob, data: upload.data.clone() })
+    Ok(Pending { blob })
 }
 
 /// `record.<name>.destroy` (the attachment): delete it, touch the record, and purge its blob
@@ -140,29 +154,23 @@ pub fn destroy(tx: &mut Tx<'_>, record: Record, name: &str) -> campfire_db::Resu
     Ok(true)
 }
 
-/// After commit: upload the file (`blob.upload_without_unfurling`), then `analyze_blob_later`.
-pub async fn upload_and_analyze_later(app: &App, pending: Option<Pending>) -> Result<()> {
-    let Some(Pending { blob, data }) = pending else { return Ok(()) };
-    let storage = app.storage.clone();
-    let key = blob.key.clone();
-    let checksum = blob.checksum.clone();
-    tokio::task::spawn_blocking(move || storage.service.upload(&key, data.as_slice(), checksum.as_deref()))
-        .await
-        .map_err(Error::internal)?
-        .map_err(Error::internal)?;
-
+/// After commit: `analyze_blob_later` (the file was uploaded before the save).
+pub fn analyze_later(app: &App, pending: Option<Pending>) {
+    let Some(Pending { blob }) = pending else { return };
     let job_app = app.clone();
     app.jobs.perform_later("ActiveStorage::AnalyzeJob", async move { analyze(&job_app, blob.id).await });
-    Ok(())
 }
 
-/// `ActiveStorage::AnalyzeJob`: `blob.analyze`, then `touch_attachment_records`.
+/// `ActiveStorage::AnalyzeJob`: `blob.analyze`, then `touch_attachment_records`. The file is
+/// analyzed off the writer; only the metadata update and touches run on it.
 pub async fn analyze(app: &App, blob_id: i64) -> anyhow::Result<()> {
-    let storage = app.storage.clone();
+    let blob = app.db.read(move |conn| Blob::find(conn, blob_id).map_err(storage_error)).await?;
+    let Some(blob) = blob else { return Ok(()) };
+    let metadata = analyzed_metadata(app, &blob).await.map_err(|e| anyhow::anyhow!("{e:?}"))?;
     app.db
         .write(move |tx| {
-            let Some(mut blob) = Blob::find(tx.conn(), blob_id).map_err(storage_error)? else { return Ok(()) };
-            storage.analyze(tx.conn(), &mut blob).map_err(storage_error)?;
+            let mut blob = blob;
+            blob.update_metadata(tx.conn(), metadata).map_err(storage_error)?;
             for (record_type, record_id) in campfire_storage::blob::attachment_records(tx.conn(), blob_id).map_err(storage_error)? {
                 if let Some(table) = table_for(&record_type) {
                     super::touch(tx.conn(), table, record_id, tx.now())?;

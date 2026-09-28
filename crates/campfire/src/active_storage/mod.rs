@@ -8,13 +8,14 @@
 //! `ActiveStorage::BaseController` (`protect_from_forgery with: :exception`), not
 //! `ApplicationController`, so none of Campfire's concerns run.
 
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use campfire_db::CachedStatements;
 use campfire_kit::{Ctx, Error, ExpiresIn, Freshness, Response, Result, SendOptions, StatusCode, halt, http::header};
 use campfire_storage::file_server::{self, BodyPart};
-use campfire_storage::{Blob, Filename, Json, Storage, Variation, content_types, disk, paths};
+use campfire_storage::{Blob, Filename, Json, Staged, Storage, Variation, content_types, disk, paths};
 use rusqlite::params;
+use tokio::sync::Semaphore;
 
 use crate::app::{App, AppCtx};
 use crate::concerns::{find_session_by_cookie, head};
@@ -23,6 +24,8 @@ use crate::concerns::{find_session_by_cookie, head};
 const SERVICE_URLS_EXPIRE_IN: i64 = 5 * 60;
 /// `http_cache_forever`: `expires_in 100.years`.
 const HUNDRED_YEARS: u64 = 3_155_695_200;
+/// The most image and video jobs (variants, previews, analysis) that run at once.
+const MAX_MEDIA_JOBS: usize = 4;
 
 // --- Blobs -----------------------------------------------------------------------------------------
 
@@ -107,16 +110,129 @@ async fn set_representation(c: &mut Ctx, blob: Blob) -> Result<Blob> {
 }
 
 /// `blob.representation(variation).processed`, reusing an existing variant or preview.
-///
-/// Processing inserts rows, so it runs on the writer. TODO: move the libvips/ffmpeg work off the
-/// writer thread once campfire_storage can split transforming from recording.
 pub async fn processed_representation(app: &App, blob: Blob, variation: Variation) -> Result<Blob> {
+    if blob.is_previewable() {
+        processed_preview(app, blob, variation).await
+    } else if blob.is_variable() {
+        let variation = app.storage.variation_for(&blob, &variation).map_err(Error::internal)?;
+        processed_variant(app, blob, variation).await
+    } else {
+        Err(Error::internal(campfire_storage::Error::Unrepresentable(blob.content_type().to_string())))
+    }
+}
+
+/// `blob.preview(transformations).processed`: the preview image itself for empty
+/// transformations, otherwise its processed variant.
+pub async fn processed_preview(app: &App, blob: Blob, transformations: Variation) -> Result<Blob> {
+    let image = preview_image(app, blob).await?;
+    if transformations.is_empty() {
+        return Ok(image);
+    }
+    let variation = app.storage.variation_for(&image, &transformations).map_err(Error::internal)?;
+    processed_variant(app, image, variation).await
+}
+
+/// `VariantWithRecord#processed` for an already-defaulted variation: the existing variant, or
+/// one transformed off the writer and then recorded.
+async fn processed_variant(app: &App, blob: Blob, variation: Variation) -> Result<Blob> {
+    processed_variant_with(app, blob, variation, |storage, blob, variation| storage.transform_variant(blob, variation)).await
+}
+
+pub(crate) async fn processed_variant_with(
+    app: &App,
+    blob: Blob,
+    variation: Variation,
+    transform: impl FnOnce(&Storage, &Blob, &Variation) -> campfire_storage::Result<Staged> + Send + 'static,
+) -> Result<Blob> {
     let storage = app.storage.clone();
-    let now = app.clock.now();
+    let (source, digested) = (blob.clone(), variation.clone());
+    let existing = app.db.read(move |conn| storage.existing_variant(conn, &source, &digested).map_err(storage_error)).await;
+    if let Some(image) = existing.map_err(Error::internal)? {
+        return Ok(image);
+    }
+
+    let storage = app.storage.clone();
+    let (source, digested) = (blob.clone(), variation.clone());
+    let image = process_media(move || transform(&storage, &source, &digested)).await?;
+
+    let storage = app.storage.clone();
     app.db
-        .write(move |tx| storage.process_representation(tx.conn(), &blob, &variation, now).map_err(storage_error))
+        .write(move |tx| {
+            let conn = tx.conn();
+            match storage.record_variant(conn, &blob, &variation, &image, tx.now().jiff()).map_err(storage_error)? {
+                Some(recorded) => {
+                    keep_after_commit(tx, image);
+                    Ok(recorded)
+                }
+                // Another request recorded it first; ours is dropped (and its file deleted).
+                None => storage.existing_variant(conn, &blob, &variation).map_err(storage_error)?.ok_or(campfire_db::Error::RecordNotFound("ActiveStorage::VariantRecord")),
+            }
+        })
         .await
         .map_err(Error::internal)
+}
+
+/// `blob.preview_image`, drawing it with ffmpeg off the writer when it's missing.
+async fn preview_image(app: &App, blob: Blob) -> Result<Blob> {
+    let storage = app.storage.clone();
+    let source = blob.clone();
+    let existing = app.db.read(move |conn| storage.existing_preview_image(conn, &source).map_err(storage_error)).await;
+    if let Some(image) = existing.map_err(Error::internal)? {
+        return Ok(image);
+    }
+
+    let storage = app.storage.clone();
+    let source = blob.clone();
+    let image = process_media(move || storage.draw_preview_image(&source)).await?;
+
+    let storage = app.storage.clone();
+    app.db
+        .write(move |tx| {
+            let conn = tx.conn();
+            match storage.record_preview_image(conn, &blob, &image, tx.now().jiff()).map_err(storage_error)? {
+                Some(recorded) => {
+                    keep_after_commit(tx, image);
+                    Ok(recorded)
+                }
+                None => storage.existing_preview_image(conn, &blob).map_err(storage_error)?.ok_or(campfire_db::Error::RecordNotFound("ActiveStorage::Blob")),
+            }
+        })
+        .await
+        .map_err(Error::internal)
+}
+
+/// What `blob.analyze` would save, worked out off the writer.
+pub async fn analyzed_metadata(app: &App, blob: &Blob) -> Result<Json> {
+    let (storage, blob) = (app.storage.clone(), blob.clone());
+    process_media(move || storage.analyzed_metadata(&blob)).await
+}
+
+/// Uploads a file to storage for a blob whose row the caller saves next (see [`keep_after_commit`]).
+pub async fn stage_file(app: &App, path: std::path::PathBuf, filename: Filename, content_type: Option<String>) -> Result<Staged> {
+    let storage = app.storage.clone();
+    tokio::task::spawn_blocking(move || storage.stage_file(&path, filename, content_type.as_deref()))
+        .await
+        .map_err(Error::internal)?
+        .map_err(Error::internal)
+}
+
+/// Keeps a staged file once the write saving its row commits; a rollback drops it instead,
+/// which deletes the file.
+pub fn keep_after_commit(tx: &mut campfire_db::Tx<'_>, staged: Staged) {
+    tx.after_commit(move |_| {
+        staged.keep();
+        Ok(())
+    });
+}
+
+/// Runs libvips, ffmpeg or ffprobe work on the blocking pool, a few jobs at a time: each can take
+/// a lot of memory and CPU (libvips threads its own work), and uploads shouldn't queue behind
+/// more of them than the machine can run at once.
+async fn process_media<T: Send + 'static>(work: impl FnOnce() -> campfire_storage::Result<T> + Send + 'static) -> Result<T> {
+    static PERMITS: LazyLock<Semaphore> =
+        LazyLock::new(|| Semaphore::new(std::thread::available_parallelism().map_or(2, |n| n.get()).clamp(1, MAX_MEDIA_JOBS)));
+    let _permit = PERMITS.acquire().await.map_err(Error::internal)?;
+    tokio::task::spawn_blocking(work).await.map_err(Error::internal)?.map_err(Error::internal)
 }
 
 /// `blob.url(disposition:)` on the disk service: a signed `/rails/active_storage/disk/...` URL
@@ -180,25 +296,27 @@ fn send_blob_byte_range_data(c: &mut Ctx, blob: &Blob, range: &str) -> Result {
         Some(ranges) if !ranges.is_empty() => ranges,
         _ => return Ok(c.head(StatusCode::RANGE_NOT_SATISFIABLE)),
     };
+    let path = storage.path_for(blob);
+    if !path.is_file() {
+        return Err(storage_error_to_kit(campfire_storage::Error::FileNotFound));
+    }
     let content_type_for_serving = content_types::for_serving(blob.content_type()).to_string();
-    let read = |start: u64, end: u64| storage.service.download_chunk(&blob.key, start..end + 1).map_err(storage_error_to_kit);
-    let (content_type, data, content_range) = if let [(start, end)] = ranges[..] {
-        (content_type_for_serving, read(start, end)?, Some(format!("bytes {start}-{end}/{size}")))
+    let (content_type, parts, content_range) = if let [(start, end)] = ranges[..] {
+        (content_type_for_serving, vec![BodyPart::File { path, start, end }], Some(format!("bytes {start}-{end}/{size}")))
     } else {
         let boundary = random_hex(16);
-        let mut data = Vec::new();
+        let mut parts = Vec::new();
         for &(start, end) in &ranges {
-            data.extend_from_slice(format!("\r\n--{boundary}\r\n").as_bytes());
-            data.extend_from_slice(format!("Content-Type: {content_type_for_serving}\r\n").as_bytes());
-            data.extend_from_slice(format!("Content-Range: bytes {start}-{end}/{size}\r\n\r\n").as_bytes());
-            data.extend_from_slice(&read(start, end)?);
+            let heading = format!("\r\n--{boundary}\r\nContent-Type: {content_type_for_serving}\r\nContent-Range: bytes {start}-{end}/{size}\r\n\r\n");
+            parts.push(BodyPart::Bytes(heading.into_bytes()));
+            parts.push(BodyPart::File { path: path.clone(), start, end });
         }
-        data.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
-        (format!("multipart/byteranges; boundary={boundary}"), data, None)
+        parts.push(BodyPart::Bytes(format!("\r\n--{boundary}--\r\n").into_bytes()));
+        (format!("multipart/byteranges; boundary={boundary}"), parts, None)
     };
     let disposition = content_types::forced_disposition(blob.content_type()).unwrap_or("inline");
     let mut response = c.send_data(
-        data,
+        bytes::Bytes::new(),
         SendOptions {
             filename: Some(blob.filename.sanitized()),
             content_type: Some(content_type),
@@ -207,10 +325,66 @@ fn send_blob_byte_range_data(c: &mut Ctx, blob: &Blob, range: &str) -> Result {
             ..SendOptions::default()
         },
     );
+    let length = parts_len(&parts);
+    response.body = parts_body(parts);
+    if matches!(response.body, campfire_kit::Body::Stream(_)) {
+        response = response.header(header::CONTENT_LENGTH, &length.to_string());
+    }
     if let Some(content_range) = content_range {
         response = response.header(header::CONTENT_RANGE, &content_range);
     }
     Ok(response.header(header::ACCEPT_RANGES, "bytes"))
+}
+
+/// The body for byte ranges of files and the bytes between them: a single range is sent as a
+/// file body and several are streamed, so neither is read into memory up front.
+fn parts_body(parts: Vec<BodyPart>) -> campfire_kit::Body {
+    match <[BodyPart; 1]>::try_from(parts) {
+        Ok([BodyPart::File { path, start, end }]) => {
+            campfire_kit::Body::File(campfire_kit::response::FileBody { path, offset: start, len: end - start + 1 })
+        }
+        Ok([BodyPart::Bytes(bytes)]) => campfire_kit::Body::Bytes(bytes.into()),
+        Err(parts) if parts.is_empty() => campfire_kit::Body::Empty,
+        Err(parts) => campfire_kit::Body::Stream(axum::body::Body::from_stream(stream_parts(parts))),
+    }
+}
+
+fn parts_len(parts: &[BodyPart]) -> u64 {
+    parts
+        .iter()
+        .map(|part| match part {
+            BodyPart::Bytes(bytes) => bytes.len() as u64,
+            BodyPart::File { start, end, .. } => end - start + 1,
+        })
+        .sum()
+}
+
+/// Reads each part in turn, a chunk at a time.
+fn stream_parts(parts: Vec<BodyPart>) -> impl futures_util::Stream<Item = std::io::Result<bytes::Bytes>> + Send + 'static {
+    use tokio::io::{AsyncReadExt, AsyncSeekExt};
+    const CHUNK: usize = 64 * 1024;
+    let state = (parts.into_iter(), None::<tokio::io::Take<tokio::fs::File>>);
+    futures_util::stream::try_unfold(state, |(mut parts, mut reading)| async move {
+        loop {
+            if let Some(reader) = reading.as_mut() {
+                let mut chunk = vec![0; CHUNK];
+                let read = reader.read(&mut chunk).await?;
+                if read > 0 {
+                    chunk.truncate(read);
+                    return Ok(Some((bytes::Bytes::from(chunk), (parts, reading))));
+                }
+            }
+            match parts.next() {
+                None => return Ok(None),
+                Some(BodyPart::Bytes(bytes)) => return Ok(Some((bytes::Bytes::from(bytes), (parts, None)))),
+                Some(BodyPart::File { path, start, end }) => {
+                    let mut file = tokio::fs::File::open(&path).await?;
+                    file.seek(std::io::SeekFrom::Start(start)).await?;
+                    reading = Some(file.take(end - start + 1));
+                }
+            }
+        }
+    })
 }
 
 // --- Disk service ----------------------------------------------------------------------------------
@@ -243,32 +417,9 @@ fn disk_serve(c: &mut Ctx) -> Result {
     for (name, value) in &served.headers {
         response = response.header(name.as_str(), value);
     }
-    response.body = match served.body.as_slice() {
-        [] => campfire_kit::Body::Empty,
-        [BodyPart::File { path, start, end }] => campfire_kit::Body::File(campfire_kit::response::FileBody {
-            path: path.clone(),
-            offset: *start,
-            len: end - start + 1,
-        }),
-        parts => campfire_kit::Body::Bytes(read_parts(parts)?.into()),
-    };
+    // `served.headers` carries the Content-Length of every part together.
+    response.body = parts_body(served.body);
     Ok(response)
-}
-
-fn read_parts(parts: &[BodyPart]) -> Result<Vec<u8>> {
-    use std::io::{Read, Seek, SeekFrom};
-    let mut data = Vec::new();
-    for part in parts {
-        match part {
-            BodyPart::Bytes(bytes) => data.extend_from_slice(bytes),
-            BodyPart::File { path, start, end } => {
-                let mut file = std::fs::File::open(path)?;
-                file.seek(SeekFrom::Start(*start))?;
-                file.take(end - start + 1).read_to_end(&mut data)?;
-            }
-        }
-    }
-    Ok(data)
 }
 
 /// `ActiveStorage::DiskController#update` (the direct-upload PUT), behind
@@ -483,6 +634,27 @@ fn random_hex(bytes: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn byte_ranges_are_not_read_into_memory() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), (0..=255u8).cycle().take(200_000).collect::<Vec<u8>>()).unwrap();
+        let path = file.path().to_path_buf();
+        let range = |start, end| BodyPart::File { path: path.clone(), start, end };
+
+        match parts_body(vec![range(10, 199_999)]) {
+            campfire_kit::Body::File(body) => assert_eq!((body.offset, body.len), (10, 199_990)),
+            other => panic!("a single range should be a file body, got {other:?}"),
+        }
+
+        let parts = vec![BodyPart::Bytes(b"<".to_vec()), range(0, 2), BodyPart::Bytes(b">".to_vec()), range(100_000, 170_000)];
+        let length = parts_len(&parts);
+        let campfire_kit::Body::Stream(stream) = parts_body(parts) else { panic!("several ranges should stream") };
+        let streamed = axum::body::to_bytes(stream, usize::MAX).await.unwrap();
+        let contents = std::fs::read(file.path()).unwrap();
+        assert_eq!(streamed, [b"<".as_slice(), &contents[0..3], b">", &contents[100_000..=170_000]].concat());
+        assert_eq!(streamed.len() as u64, length);
+    }
 
     #[test]
     fn json_times_have_milliseconds() {

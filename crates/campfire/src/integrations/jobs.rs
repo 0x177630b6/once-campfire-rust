@@ -13,8 +13,8 @@ use super::webhook::{self, WebhookReply};
 use crate::app::App;
 use crate::config::Config;
 use crate::controllers::presenters::page::{self, Rendered};
-use crate::controllers::messages::{canonical_body, process_attachment};
-use crate::controllers::presenters::{Presenter, storage_error};
+use crate::controllers::messages::{canonicalize_body, process_attachment, save_staged};
+use crate::controllers::presenters::Presenter;
 use crate::jobs::{JobKind, Registry};
 
 /// Registers the handlers for `Event::PushMessage` and `Event::DeliverWebhook`.
@@ -101,13 +101,11 @@ async fn deliver_webhook(app: App, event: Event) -> anyhow::Result<()> {
 /// body, which stores it canonicalized (as `MessagesController` does; there's no request host
 /// in a job).
 async fn create_text_reply(app: &App, room: &Room, bot: &User, text: String) -> anyhow::Result<Message> {
-    let (app2, room_id, creator_id) = (app.clone(), room.id, bot.id);
+    let (room_id, creator_id) = (room.id, bot.id);
+    let body = canonicalize_body(app, text, None).await.map_err(|e| anyhow!("{e:?}"))?;
     let message = app
         .db
-        .write(move |tx| {
-            let body = canonical_body(tx.conn(), &app2, &text, None);
-            Message::create(tx, NewMessage { room_id, creator_id, client_message_id: None, body: Some(body), attachment_blob_id: None })
-        })
+        .write(move |tx| Message::create(tx, NewMessage { room_id, creator_id, client_message_id: None, body: Some(body), attachment_blob_id: None }))
         .await?;
     Ok(message)
 }
@@ -117,8 +115,8 @@ async fn create_text_reply(app: &App, room: &Room, bot: &User, text: String) -> 
 /// attachment.
 async fn create_attachment_reply(app: &App, room: &Room, bot: &User, attachment: webhook::Attachment) -> anyhow::Result<Message> {
     let storage = app.storage.clone();
-    let now = app.clock.now();
-    let blob = app.db.write(move |tx| attachment.create_blob(&storage, tx.conn(), now).map_err(storage_error)).await?;
+    let staged = tokio::task::spawn_blocking(move || attachment.stage_blob(&storage)).await??;
+    let blob = app.db.write(move |tx| save_staged(tx, staged)).await?;
 
     let (room_id, creator_id, blob_id) = (room.id, bot.id, blob.id);
     let message = app

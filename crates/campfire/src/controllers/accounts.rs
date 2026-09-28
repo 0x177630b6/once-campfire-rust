@@ -58,7 +58,7 @@ pub async fn update(c: &mut Ctx) -> Result {
     let settings: Option<Vec<(String, String)>> = params.get("settings").and_then(Param::as_hash).map(|settings| {
         settings.iter().map(|(key, value)| (key.clone(), value.to_s().unwrap_or_default())).collect()
     });
-    let logo = Assignment::from_params(&params, "logo")?;
+    let logo = Assignment::from_params(&params, "logo")?.stage(c.app()).await?;
 
     let pending = c
         .app()
@@ -66,11 +66,11 @@ pub async fn update(c: &mut Ctx) -> Result {
         .write(move |tx| {
             let settings: Option<Vec<(&str, &str)>> = settings.as_ref().map(|s| s.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect());
             account.update(tx, name.as_deref(), None, settings.as_deref())?;
-            attachments::assign(tx, Record::account(account.id), "logo", &logo)
+            attachments::assign(tx, Record::account(account.id), "logo", logo)
         })
         .await
         .map_err(Error::internal)?;
-    attachments::upload_and_analyze_later(c.app(), pending).await?;
+    attachments::analyze_later(c.app(), pending);
 
     let location = c.url_for(&campfire_routes::edit_account());
     c.redirect_to_with(&location, Redirect { notice: Some("✓".into()), ..Redirect::default() })

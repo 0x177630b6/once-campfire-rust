@@ -29,5 +29,5 @@ pub use room::{Room, RoomType};
 pub use search::Search;
 pub use session::Session;
 pub use sound::Sound;
-pub use user::{NewUser, Role, Status, User, UserChanges};
+pub use user::{NewUser, PasswordDigest, Role, Status, User, UserChanges};
 pub use webhook::Webhook;

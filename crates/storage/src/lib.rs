@@ -28,7 +28,7 @@ pub use blob::{Blob, NewBlob};
 pub use disk::DiskService;
 pub use filename::Filename;
 pub use json::Json;
-pub use storage::Storage;
+pub use storage::{Staged, Storage};
 pub use variation::Variation;
 pub use verifier::{AppMessageVerifier, Verifier};
 

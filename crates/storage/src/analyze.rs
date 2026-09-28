@@ -4,10 +4,15 @@
 
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::time::Duration;
 
 use crate::json::Json;
+use crate::process::output_within;
 use crate::vips::Image;
 use crate::{Error, Result, content_types};
+
+/// How long ffprobe may take to read a file's streams before it's killed. Rails sets no limit.
+pub const FFPROBE_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Analyzer {
@@ -59,15 +64,15 @@ fn image_metadata(path: &Path) -> Json {
 
 /// `ffprobe -print_format json -show_streams -show_format -v error <path>`; `{}` without ffprobe.
 fn probe(path: &Path) -> Result<Json> {
-    let output = match Command::new(content_types::ffprobe_path())
+    let mut command = Command::new(content_types::ffprobe_path());
+    command
         .args(["-print_format", "json", "-show_streams", "-show_format", "-v", "error"])
         .arg(path)
-        .stdin(Stdio::null())
-        .stderr(Stdio::inherit())
-        .output()
-    {
+        .stderr(Stdio::inherit());
+    let output = match output_within(&mut command, FFPROBE_TIMEOUT) {
         Ok(output) => output,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Json::object()),
+        Err(e) if e.kind() == std::io::ErrorKind::TimedOut => return Err(Error::Analyze(format!("ffprobe {e}"))),
         Err(e) => return Err(e.into()),
     };
     Json::parse(&String::from_utf8_lossy(&output.stdout)).map_err(|e| Error::Analyze(format!("ffprobe output: {e}")))

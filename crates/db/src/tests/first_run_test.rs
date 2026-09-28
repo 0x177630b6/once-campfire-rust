@@ -1,7 +1,7 @@
 //! `test/models/first_run_test.rb`
 
 use super::*;
-use crate::{FirstRun, Room, User};
+use crate::{FirstRun, PasswordDigest, Room, User};
 
 fn fresh() -> TestDb {
     let t = TestDb::new();
@@ -18,7 +18,8 @@ fn fresh() -> TestDb {
 }
 
 fn create_first_run_user(t: &TestDb) -> User {
-    t.write(|tx| FirstRun::create(tx, "User", "user@example.com", "secret123456"))
+    let digest = PasswordDigest::create("secret123456", 4).unwrap();
+    t.write(move |tx| FirstRun::create(tx, "User", "user@example.com", digest))
 }
 
 #[test]
@@ -47,10 +48,10 @@ fn first_room_is_an_open_room() {
 fn first_user_can_sign_in() {
     let t = fresh();
     create_first_run_user(&t);
-    let user = t.read(|c| User::authenticate_by(c, "user@example.com", "secret123456"));
-    assert!(user.is_some());
-    assert!(
-        t.read(|c| User::authenticate_by(c, "user@example.com", "wrong"))
-            .is_none()
-    );
+    let found = t.read(|c| User::find_active_by_email_address(c, "user@example.com"));
+    assert!(User::authenticated(found.clone(), "secret123456").is_some());
+    assert!(User::authenticated(found.clone(), "wrong").is_none());
+    assert!(User::authenticated(found, "").is_none());
+    let missing = t.read(|c| User::find_active_by_email_address(c, "nobody@example.com"));
+    assert!(User::authenticated(missing, "secret123456").is_none());
 }

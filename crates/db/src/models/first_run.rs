@@ -2,7 +2,7 @@
 
 use crate::database::Tx;
 use crate::error::Result;
-use crate::models::{Account, NewUser, Role, Room, RoomType, User};
+use crate::models::{Account, NewUser, PasswordDigest, Role, Room, RoomType, User};
 
 pub struct FirstRun;
 
@@ -18,7 +18,7 @@ impl FirstRun {
         tx: &mut Tx<'_>,
         name: &str,
         email_address: &str,
-        password: &str,
+        password_digest: PasswordDigest,
     ) -> Result<User> {
         Account::create(tx, Self::ACCOUNT_NAME)?;
         let administrator = User::create(
@@ -26,7 +26,7 @@ impl FirstRun {
             NewUser {
                 name: name.into(),
                 email_address: Some(email_address.into()),
-                password: Some(password.into()),
+                password_digest: Some(password_digest),
                 role: Role::Administrator,
                 ..Default::default()
             },

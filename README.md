@@ -367,9 +367,20 @@ Deliberate:
   URIs longer than 2 KB, keys on the raw path (Thruster decoded it, so `/a%2Fb` and `/a/b` shared
   an entry), and lets range requests through to the app instead of answering them with a whole
   cached body.
-- **Not ported:** the duplicate `session_token` cookie Rails' Active Storage streaming sends; responses
-  to requests for multiple byte ranges; and legacy AES-CBC encrypted cookies, since Campfire started
-  on GCM.
+- **Media is processed off the database writer.** Rails saves a blob's row and then uploads its
+  file after commit; here the upload is copied into storage first, straight from the request's
+  tempfile, and deleted again if the save fails. Variants, video posters and analysis run on
+  background threads (at most four at a time), and only their rows are written in a transaction, so
+  a large image or video doesn't hold up other writes. A variant or poster is saved already
+  analyzed, where Rails analyzes it in a job after commit; the rows end up the same. Two requests for
+  the same missing variant may both transform it: the first to save wins and the other's file is
+  deleted. ffmpeg is stopped after 60 seconds of drawing a poster and ffprobe after 30 seconds of
+  reading a file, which Rails doesn't limit.
+- **Passwords are hashed and checked outside the database.** bcrypt (about 250 ms) runs before the
+  write that saves a password, and a sign-in looks the user up and then verifies the password after
+  releasing the database connection. An unknown email address still costs one bcrypt, as in Rails.
+- **Not ported:** the duplicate `session_token` cookie Rails' Active Storage streaming sends; and
+  legacy AES-CBC encrypted cookies, since Campfire started on GCM.
 
 Not fully covered:
 

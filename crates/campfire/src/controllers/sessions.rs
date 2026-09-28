@@ -5,7 +5,7 @@ pub mod transfers;
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
 
-use campfire_db::{PushSubscription, User};
+use campfire_db::PushSubscription;
 use campfire_kit::{Ctx, Error, Result, StatusCode, format, halt};
 use campfire_views::sessions;
 use jiff::{SignedDuration, Timestamp};
@@ -34,16 +34,10 @@ pub async fn create(c: &mut Ctx) -> Result {
 
     let email_address = c.param_str("email_address").map(str::to_string);
     let password = c.param_str("password").map(str::to_string);
-    let user = c
-        .app()
-        .db
-        .read(move |conn| match (email_address, password) {
-            // `authenticate_by` returns nil for a blank password before looking anything up.
-            (Some(email_address), Some(password)) => User::authenticate_by(conn, &email_address, &password),
-            _ => Ok(None),
-        })
-        .await
-        .map_err(Error::internal)?;
+    let user = match (email_address, password) {
+        (Some(email_address), Some(password)) => concerns::authenticate_by(c, email_address, password).await?,
+        _ => None,
+    };
 
     match user {
         Some(user) => {

@@ -9,11 +9,9 @@
 use std::sync::LazyLock;
 use std::time::Duration;
 
-use campfire_db::Connection;
 use campfire_richtext::uri;
-use campfire_storage::blob::Blob;
 use campfire_storage::filename::Filename;
-use campfire_storage::Storage;
+use campfire_storage::{Staged, Storage};
 use regex::Regex;
 
 use crate::integrations::net::Network;
@@ -46,7 +44,7 @@ pub enum WebhookReply {
     /// as the message's rich text body, as a bot's posted body is.
     Text(String),
     /// `room.messages.create_with_attachment!(attachment: blob, creator: bot).broadcast_create`,
-    /// with the blob from [`Attachment::create_blob`].
+    /// with the blob from [`Attachment::stage_blob`].
     Attachment(Attachment),
 }
 
@@ -60,9 +58,10 @@ pub struct Attachment {
 }
 
 impl Attachment {
-    /// `ActiveStorage::Blob.create_and_upload!(io:, filename:, content_type:)`
-    pub fn create_blob(&self, storage: &Storage, conn: &Connection, now: jiff::Timestamp) -> campfire_storage::Result<Blob> {
-        storage.create_and_upload(conn, &self.data, Filename::new(self.filename.clone()), Some(&self.content_type), now)
+    /// The upload half of `ActiveStorage::Blob.create_and_upload!(io:, filename:, content_type:)`,
+    /// blocking: the caller saves the staged blob's row.
+    pub fn stage_blob(&self, storage: &Storage) -> campfire_storage::Result<Staged> {
+        storage.stage_bytes(&self.data, Filename::new(self.filename.clone()), Some(&self.content_type))
     }
 }
 
