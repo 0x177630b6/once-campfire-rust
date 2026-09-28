@@ -38,11 +38,22 @@ struct Server {
 }
 
 impl Server {
+    /// On fresh ports, picking new ones when something took one between `free_port` and the bind.
     async fn start(vars: &[(&str, &str)], app: Router) -> Self {
-        Self::start_with(vars, app, None, free_port(), free_port()).await
+        for _ in 0..5 {
+            if let Some(server) = Self::try_start(vars, app.clone(), None, free_port(), free_port()).await {
+                return server;
+            }
+        }
+        panic!("front server didn't start");
     }
 
     async fn start_with(vars: &[(&str, &str)], app: Router, acme: Option<AcmeOptions>, http: u16, https: u16) -> Self {
+        Self::try_start(vars, app, acme, http, https).await.expect("front server didn't start")
+    }
+
+    /// `None` when the server stops before it's listening (a port was taken).
+    async fn try_start(vars: &[(&str, &str)], app: Router, acme: Option<AcmeOptions>, http: u16, https: u16) -> Option<Self> {
         let target = free_port();
         let mut env: HashMap<String, String> = vars.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
         env.entry("HTTP_PORT".into()).or_insert(http.to_string());
@@ -52,19 +63,24 @@ impl Server {
         let config = FrontConfig::from_lookup(|name| env.get(name).cloned());
         let (stop, stopped) = oneshot::channel::<()>();
         let done = tokio::spawn(async move {
-            front::serve_with(config, app, acme, async move {
+            if let Err(error) = front::serve_with(config, app, acme, async move {
                 let _ = stopped.await;
             })
             .await
-            .unwrap();
+            {
+                eprintln!("front server stopped: {error}");
+            }
         });
         for _ in 0..100 {
+            if done.is_finished() {
+                return None;
+            }
             if TcpStream::connect(("127.0.0.1", http)).await.is_ok() {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        Self { http, target, stop: Some(stop), done }
+        Some(Self { http, target, stop: Some(stop), done })
     }
 
     async fn stop(mut self) {
