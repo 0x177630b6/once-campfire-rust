@@ -296,7 +296,14 @@ fn corpus_matches_rails() {
         };
         let actual = present_message(body, &ctx);
         let label = format!("[presentation] {name}");
+        // Deliberate: a missing attachable Rails can't find a partial for (a deleted user's
+        // mention) renders ☒ instead of raising and blanking the message.
+        let missing_partial = case["presentation_raised_message"].as_str().is_some_and(|m| m.contains("to_missing_attachable_partial_path"));
         match (&expected, &actual) {
+            (Presentation::Html(_), Presentation::Html(a)) if missing_partial => {
+                assert!(a.contains('☒'), "{label}: {a}");
+                tallies.entry("presentation").or_default().exact += 1;
+            }
             (Presentation::Html(e), Presentation::Html(a)) => tallies.entry("presentation").or_default().record(label, e, a),
             _ => tallies.entry("presentation").or_default().record(label, &format!("{expected:?}"), &format!("{actual:?}")),
         }
@@ -318,7 +325,10 @@ fn corpus_matches_rails() {
         // editable value
         let actual = editable_value(body, &ctx);
         let label = format!("[editable] {name}");
+        // Deliberate: missing attachables leave the editor, where Rails raises.
+        let missing_in_editor = case["editable"]["message"].as_str().is_some_and(|m| m.contains("MissingAttachable"));
         match (outcome_str(&case["editable"]), &actual) {
+            (Err(_), Ok(_)) if missing_in_editor => tallies.entry("editable").or_default().exact += 1,
             (Ok(e), Ok(a)) => tallies.entry("editable").or_default().record(label, &format!("{e:?}"), &format!("{a:?}")),
             (Err(_), Err(_)) => tallies.entry("editable").or_default().exact += 1,
             (e, _) => tallies.entry("editable").or_default().record(label, &format!("{e:?}"), &render(&actual)),

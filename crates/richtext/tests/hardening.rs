@@ -4,7 +4,7 @@
 use std::time::{Duration, Instant};
 
 use campfire_richtext::dom::Dom;
-use campfire_richtext::{AttachableResolver, GidLookup, RenderContext, SignedLookup, message_presentation};
+use campfire_richtext::{AttachableResolver, GidLookup, RenderContext, SignedLookup, editable_value, message_presentation};
 
 struct NoRecords;
 
@@ -121,4 +121,33 @@ fn deeply_nested_content_attachments_render_quickly() {
     let started = Instant::now();
     presentation(&body);
     assert_quick(started, "rendering 200 nested content attachments");
+}
+
+/// Every SGID names a user who has since been deleted.
+struct DeletedUsers;
+
+impl AttachableResolver for DeletedUsers {
+    fn locate_signed(&self, _sgid: &str) -> SignedLookup {
+        SignedLookup::MissingRecord { model_name: "User".into() }
+    }
+
+    fn find_gid(&self, _gid: &str) -> GidLookup {
+        GidLookup::NotFound
+    }
+}
+
+const DELETED_MENTION: &str = r#"<p>Hi <action-text-attachment sgid="eyJfcmFpbHMiOnsiZGF0YSI6ImdpZDovL2NhbXBmaXJlL1VzZXIvNj9leHBpcmVzX2luIiwicHVyIjoiYXR0YWNoYWJsZSJ9fQ==--fc4f83a239475557295b8e2f5ff55482bebc9bfe" content-type="application/vnd.campfire.mention"></action-text-attachment>, welcome</p>"#;
+
+#[test]
+fn a_mention_of_a_deleted_user_leaves_the_rest_of_the_message() {
+    let ctx = RenderContext { resolver: &DeletedUsers, request_host: None };
+    let html = message_presentation(DELETED_MENTION, &ctx).unwrap();
+    assert!(html.contains("Hi") && html.contains('☒') && html.contains("welcome"), "{html}");
+}
+
+#[test]
+fn a_mention_of_a_deleted_user_leaves_the_editor() {
+    let ctx = RenderContext { resolver: &DeletedUsers, request_host: None };
+    let value = editable_value(DELETED_MENTION, &ctx).unwrap().unwrap();
+    assert!(!value.contains("action-text-attachment") && value.contains("welcome"), "{value}");
 }

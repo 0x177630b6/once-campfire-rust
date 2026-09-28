@@ -418,6 +418,9 @@ Deliberate:
   `content` renders that content, attachments included; each level parses and sanitizes
   everything below it again, so a 336 KB body of nested ones took 10 seconds to render. Deeper
   levels now render empty. Campfire's composer doesn't nest them at all.
+- **A mention of a deleted user shows ☒.** Rails can't find a "missing" partial for users, so
+  the mention raised and blanked the whole message, and editing the message raised too. The rest of
+  the message now shows with ☒ in the mention's place, and the editor leaves the mention out.
 - **Not ported:** the duplicate `session_token` cookie Rails' Active Storage streaming sends; and
   legacy AES-CBC encrypted cookies, since Campfire started on GCM.
 
@@ -428,11 +431,6 @@ Not fully covered:
 - In rich text, 11 of 9,247 fuzz cases differ, all in the edit form's value for malformed embed
   markup. Active Storage attachments embedded in a message body, which Campfire's composer can't
   create, render as ☒.
-
-**Rails bugs the port reproduces faithfully,** worth fixing upstream first:
-
-- A mention of a deleted user blanks the whole message.
-- Editing a message with a missing attachment raises.
 
 ## How it was built
 
