@@ -413,8 +413,27 @@ fn pwa_manifest_and_service_worker() {
     }
     .render()
     .unwrap();
-    assert_eq!(json, golden(name, "json"));
+    // Rails HTML-escapes the values into the JSON (README, Known differences)
+    assert_eq!(json, golden(name, "json").replace("&amp;", "&"));
     assert_eq!(pwa::SERVICE_WORKER_JS, golden("service_worker", "js"));
+}
+
+#[test]
+fn pwa_manifest_is_valid_json_whatever_the_account_is_called() {
+    let asset_path = |logical: &str| format!("/assets/{logical}");
+    let name = r#"Back\slash "quoted" <b>&amp;</b>"#;
+    let json = pwa::Manifest {
+        account_name: Some(name.into()),
+        logo_path_small: "/account/logo?size=small&v=1".into(),
+        logo_path: "/account/logo?v=1".into(),
+        base_url: "http://campfire.test".into(),
+        asset_path: &asset_path,
+    }
+    .render()
+    .unwrap();
+    let manifest: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+    assert_eq!(manifest["name"], name);
+    assert_eq!(manifest["icons"][0]["src"], "/account/logo?size=small&v=1");
 }
 
 #[test]

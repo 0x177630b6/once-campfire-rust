@@ -387,6 +387,9 @@ Deliberate:
   (a keyword, hex, `rgb()`/`hsl()`, or a custom property like Lexxy's `var(--highlight-1)`), which
   is all Lexxy writes. It shows in the HTML body the bot API and webhooks send; message pages drop
   `style` altogether, as they did.
+- **The web app manifest is valid JSON.** Rails HTML-escapes the account name and URLs into
+  `webmanifest.json`, so a name with `\` or `"` broke the manifest and the small logo's URL read
+  `?size=small&amp;v=...`. They're JSON strings now.
 - **Content attachments nest at most 8 deep.** An `<action-text-attachment>` carrying HTML in its
   `content` renders that content, attachments included; each level parses and sanitizes
   everything below it again, so a 336 KB body of nested ones took 10 seconds to render. Deeper

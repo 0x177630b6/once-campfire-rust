@@ -9,7 +9,9 @@ use crate::helpers::{self as h, filters};
 /// `pwa/service_worker.js`, served verbatim.
 pub const SERVICE_WORKER_JS: &str = include_str!("../../templates/pwa/service_worker.js");
 
-/// `pwa/manifest.json.erb`. ERB escapes HTML even in JSON, and so does this.
+/// `pwa/manifest.json.erb`. ERB HTML-escapes the values into the JSON, so an account named `a\b`
+/// or `"a"` made the manifest invalid and the logo URL came out as `?size=small&amp;v=...`; the
+/// values are JSON strings here.
 #[derive(Template)]
 #[template(path = "pwa/manifest.json")]
 pub struct Manifest<'a> {
@@ -28,6 +30,11 @@ impl Manifest<'_> {
     /// `image_url(source)`.
     fn image_url(&self, source: &str) -> String {
         format!("{}{}", self.base_url, (self.asset_path)(source))
+    }
+
+    /// `value` as a JSON string, quotes included.
+    fn json(&self, value: &str) -> askama::filters::Safe<String> {
+        askama::filters::Safe(serde_json::to_string(value).expect("a string serializes"))
     }
 }
 
