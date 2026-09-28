@@ -38,7 +38,7 @@ rust HEAD: 5181aa4 (dirty: 0 files)
 [04:51:26] reference rep 1: cable 500 clients ready 500 lat all p50 43.071 p99 126.527 tput 27.5 msg/s 413 / 413
 [04:51:52] reference rep 1: cable 1000 clients ready 1000 lat all p50 76.415 p99 162.431 tput 14.1 msg/s 214 / 214
 [04:51:54] reference rep 1: upload median 50.1ms
-[04:51:55] reference rep 1: done -> /home/dhh/Work/basecamp/once-campfire-rust/bench/results/final-20260927/main/reference-1.json
+[04:51:55] reference rep 1: done -> ./bench/results/final-20260927/main/reference-1.json
 [04:52:45] load before run: 1.35 2.78 4.85 (waited 50s)
 [04:52:45] rust rep 1: starting (load: 1.35 2.78 4.85)
 [04:52:55] rust rep 1: cold start 234ms, idle 49MB (anon 46MB)
@@ -70,7 +70,7 @@ rust HEAD: 5181aa4 (dirty: 0 files)
 [04:57:12] rust rep 1: cable 500 clients ready 500 lat all p50 5.171 p99 6.715 tput 601.1 msg/s 9019 / 9019
 [04:57:37] rust rep 1: cable 1000 clients ready 1000 lat all p50 8.839 p99 13.311 tput 310.3 msg/s 4656 / 4656
 [04:57:39] rust rep 1: upload median 28.7ms
-[04:57:39] rust rep 1: done -> /home/dhh/Work/basecamp/once-campfire-rust/bench/results/final-20260927/main/rust-1.json
+[04:57:39] rust rep 1: done -> ./bench/results/final-20260927/main/rust-1.json
 [04:59:09] load before run: 1.28 3.12 4.43 (waited 90s)
 [04:59:09] rust-identity rep 1: starting (load: 1.28 3.12 4.43)
 [04:59:20] rust-identity rep 1: cold start 232ms, idle 47MB (anon 44MB)
@@ -98,7 +98,7 @@ rust HEAD: 5181aa4 (dirty: 0 files)
 [05:02:33] rust-identity rep 1: post_message c=1 2549.8 rps p50 0.35 p99 1.516 {'200': 20399} err 0
 [05:02:41] rust-identity rep 1: post_message c=16 5514.7 rps p50 2.481 p99 14.423 {'200': 44128} err 0
 [05:02:49] rust-identity rep 1: post_message c=64 5620.9 rps p50 10.391 p99 24.639 {'200': 45023} err 0
-[05:02:49] rust-identity rep 1: done -> /home/dhh/Work/basecamp/once-campfire-rust/bench/results/final-20260927/main/rust-identity-1.json
+[05:02:49] rust-identity rep 1: done -> ./bench/results/final-20260927/main/rust-identity-1.json
 [05:04:29] load before run: 1.47 3.37 4.25 (waited 100s)
 [05:04:29] rust-identity rep 2: starting (load: 1.47 3.37 4.25)
 [05:04:40] rust-identity rep 2: cold start 230ms, idle 48MB (anon 44MB)
@@ -126,7 +126,7 @@ rust HEAD: 5181aa4 (dirty: 0 files)
 [05:07:53] rust-identity rep 2: post_message c=1 2573.8 rps p50 0.346 p99 1.522 {'200': 20591} err 0
 [05:08:01] rust-identity rep 2: post_message c=16 5619.7 rps p50 2.417 p99 14.543 {'200': 44969} err 0
 [05:08:09] rust-identity rep 2: post_message c=64 5845.1 rps p50 9.991 p99 24.191 {'200': 46825} err 0
-[05:08:09] rust-identity rep 2: done -> /home/dhh/Work/basecamp/once-campfire-rust/bench/results/final-20260927/main/rust-identity-2.json
+[05:08:09] rust-identity rep 2: done -> ./bench/results/final-20260927/main/rust-identity-2.json
 [05:09:39] load before run: 1.49 3.91 4.38 (waited 90s)
 [05:09:39] rust rep 2: starting (load: 1.49 3.91 4.38)
 [05:09:50] rust rep 2: cold start 233ms, idle 49MB (anon 46MB)
@@ -158,7 +158,7 @@ rust HEAD: 5181aa4 (dirty: 0 files)
 [05:14:06] rust rep 2: cable 500 clients ready 500 lat all p50 4.871 p99 8.655 tput 626.4 msg/s 9401 / 9401
 [05:14:31] rust rep 2: cable 1000 clients ready 1000 lat all p50 8.991 p99 11.855 tput 304.2 msg/s 4566 / 4566
 [05:14:33] rust rep 2: upload median 27.7ms
-[05:14:34] rust rep 2: done -> /home/dhh/Work/basecamp/once-campfire-rust/bench/results/final-20260927/main/rust-2.json
+[05:14:34] rust rep 2: done -> ./bench/results/final-20260927/main/rust-2.json
 [05:15:54] load before run: 1.36 3.35 4.05 (waited 80s)
 [05:15:54] reference rep 2: starting (load: 1.36 3.35 4.05)
 [05:16:06] reference rep 2: cold start 2473ms, idle 308MB (anon 287MB)
@@ -190,7 +190,7 @@ rust HEAD: 5181aa4 (dirty: 0 files)
 [05:20:25] reference rep 2: cable 500 clients ready 500 lat all p50 44.351 p99 70.719 tput 26.2 msg/s 396 / 396
 [05:20:51] reference rep 2: cable 1000 clients ready 1000 lat all p50 75.711 p99 161.023 tput 15.0 msg/s 228 / 228
 [05:20:54] reference rep 2: upload median 54.9ms
-[05:20:55] reference rep 2: done -> /home/dhh/Work/basecamp/once-campfire-rust/bench/results/final-20260927/main/reference-2.json
+[05:20:55] reference rep 2: done -> ./bench/results/final-20260927/main/reference-2.json
 [05:21:55] load before run: 1.36 2.92 3.70 (waited 60s)
 [05:21:55] reference rep 3: starting (load: 1.36 2.92 3.70)
 [05:22:07] reference rep 3: cold start 2443ms, idle 309MB (anon 286MB)
@@ -222,7 +222,7 @@ rust HEAD: 5181aa4 (dirty: 0 files)
 [05:26:26] reference rep 3: cable 500 clients ready 500 lat all p50 43.743 p99 115.263 tput 27.0 msg/s 408 / 408
 [05:26:54] reference rep 3: cable 1000 clients ready 1000 lat all p50 85.119 p99 152.703 tput 12.7 msg/s 217 / 217
 [05:26:57] reference rep 3: upload median 55.4ms
-[05:26:58] reference rep 3: done -> /home/dhh/Work/basecamp/once-campfire-rust/bench/results/final-20260927/main/reference-3.json
+[05:26:58] reference rep 3: done -> ./bench/results/final-20260927/main/reference-3.json
 [05:27:58] load before run: 1.36 2.71 3.42 (waited 60s)
 [05:27:58] rust rep 3: starting (load: 1.36 2.71 3.42)
 [05:28:08] rust rep 3: cold start 222ms, idle 50MB (anon 46MB)
@@ -254,7 +254,7 @@ rust HEAD: 5181aa4 (dirty: 0 files)
 [05:32:25] rust rep 3: cable 500 clients ready 500 lat all p50 5.107 p99 21.519 tput 584.8 msg/s 8774 / 8774
 [05:32:49] rust rep 3: cable 1000 clients ready 1000 lat all p50 8.975 p99 11.447 tput 304.3 msg/s 4568 / 4568
 [05:32:51] rust rep 3: upload median 27.8ms
-[05:32:53] rust rep 3: done -> /home/dhh/Work/basecamp/once-campfire-rust/bench/results/final-20260927/main/rust-3.json
+[05:32:53] rust rep 3: done -> ./bench/results/final-20260927/main/rust-3.json
 [05:34:23] load before run: 1.41 3.45 3.66 (waited 90s)
 [05:34:23] rust-identity rep 3: starting (load: 1.41 3.45 3.66)
 [05:34:33] rust-identity rep 3: cold start 220ms, idle 47MB (anon 44MB)
@@ -282,7 +282,7 @@ rust HEAD: 5181aa4 (dirty: 0 files)
 [05:37:46] rust-identity rep 3: post_message c=1 2559.0 rps p50 0.35 p99 1.428 {'200': 20472} err 0
 [05:37:54] rust-identity rep 3: post_message c=16 5483.7 rps p50 2.475 p99 14.607 {'200': 43886} err 0
 [05:38:02] rust-identity rep 3: post_message c=64 5690.9 rps p50 10.271 p99 24.351 {'200': 45582} err 0
-[05:38:03] rust-identity rep 3: done -> /home/dhh/Work/basecamp/once-campfire-rust/bench/results/final-20260927/main/rust-identity-3.json
+[05:38:03] rust-identity rep 3: done -> ./bench/results/final-20260927/main/rust-identity-3.json
 [05:39:43] load before run: 1.39 3.98 4.03 (waited 100s)
 [05:39:43] rust-identity rep 4: starting (load: 1.39 3.98 4.03)
 [05:39:53] rust-identity rep 4: cold start 226ms, idle 48MB (anon 44MB)
@@ -310,7 +310,7 @@ rust HEAD: 5181aa4 (dirty: 0 files)
 [05:43:06] rust-identity rep 4: post_message c=1 2564.0 rps p50 0.345 p99 1.552 {'200': 20512} err 0
 [05:43:14] rust-identity rep 4: post_message c=16 5514.1 rps p50 2.455 p99 14.687 {'200': 44123} err 0
 [05:43:22] rust-identity rep 4: post_message c=64 5757.3 rps p50 10.143 p99 24.543 {'200': 46113} err 0
-[05:43:23] rust-identity rep 4: done -> /home/dhh/Work/basecamp/once-campfire-rust/bench/results/final-20260927/main/rust-identity-4.json
+[05:43:23] rust-identity rep 4: done -> ./bench/results/final-20260927/main/rust-identity-4.json
 [05:45:03] load before run: 1.36 4.18 4.31 (waited 100s)
 [05:45:03] rust rep 4: starting (load: 1.36 4.18 4.31)
 [05:45:13] rust rep 4: cold start 232ms, idle 47MB (anon 44MB)
@@ -342,7 +342,7 @@ rust HEAD: 5181aa4 (dirty: 0 files)
 [05:49:29] rust rep 4: cable 500 clients ready 500 lat all p50 5.111 p99 8.247 tput 613.0 msg/s 9199 / 9199
 [05:49:55] rust rep 4: cable 1000 clients ready 1000 lat all p50 8.431 p99 12.311 tput 302.4 msg/s 4541 / 4541
 [05:49:57] rust rep 4: upload median 28.3ms
-[05:49:58] rust rep 4: done -> /home/dhh/Work/basecamp/once-campfire-rust/bench/results/final-20260927/main/rust-4.json
+[05:49:58] rust rep 4: done -> ./bench/results/final-20260927/main/rust-4.json
 [05:51:18] load before run: 1.41 3.76 4.21 (waited 80s)
 [05:51:18] reference rep 4: starting (load: 1.41 3.76 4.21)
 [05:51:31] reference rep 4: cold start 2432ms, idle 309MB (anon 287MB)
@@ -374,7 +374,7 @@ rust HEAD: 5181aa4 (dirty: 0 files)
 [05:55:50] reference rep 4: cable 500 clients ready 500 lat all p50 44.095 p99 66.495 tput 27.1 msg/s 410 / 410
 [05:56:16] reference rep 4: cable 1000 clients ready 1000 lat all p50 78.847 p99 104.511 tput 13.6 msg/s 208 / 208
 [05:56:19] reference rep 4: upload median 55.4ms
-[05:56:19] reference rep 4: done -> /home/dhh/Work/basecamp/once-campfire-rust/bench/results/final-20260927/main/reference-4.json
+[05:56:19] reference rep 4: done -> ./bench/results/final-20260927/main/reference-4.json
 [05:57:19] load before run: 1.32 3.02 3.78 (waited 60s)
 [05:57:19] reference rep 5: starting (load: 1.32 3.02 3.78)
 [05:57:32] reference rep 5: cold start 2457ms, idle 314MB (anon 291MB)
@@ -406,7 +406,7 @@ rust HEAD: 5181aa4 (dirty: 0 files)
 [06:01:51] reference rep 5: cable 500 clients ready 500 lat all p50 43.775 p99 111.807 tput 27.0 msg/s 409 / 409
 [06:02:18] reference rep 5: cable 1000 clients ready 1000 lat all p50 79.167 p99 158.847 tput 13.5 msg/s 225 / 225
 [06:02:21] reference rep 5: upload median 55.5ms
-[06:02:21] reference rep 5: done -> /home/dhh/Work/basecamp/once-campfire-rust/bench/results/final-20260927/main/reference-5.json
+[06:02:21] reference rep 5: done -> ./bench/results/final-20260927/main/reference-5.json
 [06:03:12] load before run: 1.38 2.87 3.55 (waited 50s)
 [06:03:12] rust rep 5: starting (load: 1.38 2.87 3.55)
 [06:03:22] rust rep 5: cold start 229ms, idle 48MB (anon 44MB)
@@ -438,7 +438,7 @@ rust HEAD: 5181aa4 (dirty: 0 files)
 [06:07:38] rust rep 5: cable 500 clients ready 500 lat all p50 4.771 p99 8.527 tput 603.8 msg/s 9060 / 9060
 [06:08:03] rust rep 5: cable 1000 clients ready 1000 lat all p50 9.015 p99 14.623 tput 298.0 msg/s 4474 / 4474
 [06:08:05] rust rep 5: upload median 27.6ms
-[06:08:06] rust rep 5: done -> /home/dhh/Work/basecamp/once-campfire-rust/bench/results/final-20260927/main/rust-5.json
+[06:08:06] rust rep 5: done -> ./bench/results/final-20260927/main/rust-5.json
 [06:09:16] load before run: 1.46 3.30 3.64 (waited 70s)
 [06:09:16] rust-identity rep 5: starting (load: 1.46 3.30 3.64)
 [06:09:26] rust-identity rep 5: cold start 239ms, idle 48MB (anon 44MB)
@@ -466,7 +466,7 @@ rust HEAD: 5181aa4 (dirty: 0 files)
 [06:12:39] rust-identity rep 5: post_message c=1 2539.1 rps p50 0.351 p99 1.601 {'200': 20314} err 0
 [06:12:47] rust-identity rep 5: post_message c=16 5615.9 rps p50 2.427 p99 14.431 {'200': 44938} err 0
 [06:12:55] rust-identity rep 5: post_message c=64 5620.0 rps p50 10.399 p99 24.911 {'200': 45074} err 0
-[06:12:56] rust-identity rep 5: done -> /home/dhh/Work/basecamp/once-campfire-rust/bench/results/final-20260927/main/rust-identity-5.json
+[06:12:56] rust-identity rep 5: done -> ./bench/results/final-20260927/main/rust-identity-5.json
 ```
 date: 2026-09-27T04:46:24+02:00
 host: 7.2.5-4-omarchy, AMD Ryzen 9 9955HX 16-Core Processor, 32 threads, 91GB

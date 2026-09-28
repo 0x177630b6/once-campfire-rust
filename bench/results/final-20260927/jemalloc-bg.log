@@ -36,7 +36,7 @@ rust HEAD: 5181aa4 (dirty: 0 files)
 [07:09:20] rust rep 1: cable 500 clients ready 500 lat all p50 5.119 p99 8.063 tput 609.8 msg/s 9149 / 9149
 [07:09:44] rust rep 1: cable 1000 clients ready 1000 lat all p50 8.967 p99 15.807 tput 308.3 msg/s 4627 / 4627
 [07:09:46] rust rep 1: upload median 27.7ms
-[07:09:47] rust rep 1: done -> /home/dhh/Work/basecamp/once-campfire-rust/bench/results/final-20260927/jemalloc-bg/rust-1.json
+[07:09:47] rust rep 1: done -> ./bench/results/final-20260927/jemalloc-bg/rust-1.json
 [07:11:17] load before run: 1.35 2.98 3.10 (waited 90s)
 [07:11:17] rust rep 2: starting (load: 1.35 2.98 3.10)
 [07:11:28] rust rep 2: cold start 231ms, idle 50MB (anon 46MB)
@@ -68,7 +68,7 @@ rust HEAD: 5181aa4 (dirty: 0 files)
 [07:15:44] rust rep 2: cable 500 clients ready 500 lat all p50 5.107 p99 6.643 tput 600.8 msg/s 9015 / 9015
 [07:16:09] rust rep 2: cable 1000 clients ready 1000 lat all p50 9.183 p99 13.791 tput 288.6 msg/s 4332 / 4332
 [07:16:11] rust rep 2: upload median 28.2ms
-[07:16:12] rust rep 2: done -> /home/dhh/Work/basecamp/once-campfire-rust/bench/results/final-20260927/jemalloc-bg/rust-2.json
+[07:16:12] rust rep 2: done -> ./bench/results/final-20260927/jemalloc-bg/rust-2.json
 [07:17:42] load before run: 1.37 3.50 3.45 (waited 90s)
 [07:17:42] rust rep 3: starting (load: 1.37 3.50 3.45)
 [07:17:52] rust rep 3: cold start 233ms, idle 47MB (anon 44MB)
@@ -100,7 +100,7 @@ rust HEAD: 5181aa4 (dirty: 0 files)
 [07:22:09] rust rep 3: cable 500 clients ready 500 lat all p50 4.947 p99 7.323 tput 599.6 msg/s 8996 / 8996
 [07:22:34] rust rep 3: cable 1000 clients ready 1000 lat all p50 9.415 p99 13.455 tput 298.7 msg/s 4483 / 4483
 [07:22:36] rust rep 3: upload median 27.5ms
-[07:22:36] rust rep 3: done -> /home/dhh/Work/basecamp/once-campfire-rust/bench/results/final-20260927/jemalloc-bg/rust-3.json
+[07:22:36] rust rep 3: done -> ./bench/results/final-20260927/jemalloc-bg/rust-3.json
 ```
 date: 2026-09-27T07:04:13+02:00
 host: 7.2.5-4-omarchy, AMD Ryzen 9 9955HX 16-Core Processor, 32 threads, 91GB

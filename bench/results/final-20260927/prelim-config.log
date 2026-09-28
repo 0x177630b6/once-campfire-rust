@@ -37,7 +37,7 @@ rust HEAD: 5181aa4 (dirty: 0 files)
 [06:19:18] reference rep 1: cable 500 clients ready 500 lat all p50 44.863 p99 114.879 tput 25.6 msg/s 391 / 391
 [06:19:44] reference rep 1: cable 1000 clients ready 1000 lat all p50 75.391 p99 155.775 tput 14.4 msg/s 219 / 219
 [06:19:47] reference rep 1: upload median 51.0ms
-[06:19:48] reference rep 1: done -> /home/dhh/Work/basecamp/once-campfire-rust/bench/results/final-20260927/prelim-config/reference-1.json
+[06:19:48] reference rep 1: done -> ./bench/results/final-20260927/prelim-config/reference-1.json
 [06:20:38] load before run: 1.42 3.18 3.74 (waited 50s)
 [06:20:38] rust rep 1: starting (load: 1.42 3.18 3.74)
 [06:20:49] rust rep 1: cold start 293ms, idle 60MB (anon 57MB)
@@ -69,7 +69,7 @@ rust HEAD: 5181aa4 (dirty: 0 files)
 [06:25:05] rust rep 1: cable 500 clients ready 500 lat all p50 6.195 p99 8.439 tput 512.4 msg/s 7689 / 7689
 [06:25:31] rust rep 1: cable 1000 clients ready 1000 lat all p50 9.911 p99 13.039 tput 276.2 msg/s 4146 / 4146
 [06:25:33] rust rep 1: upload median 28.5ms
-[06:25:34] rust rep 1: done -> /home/dhh/Work/basecamp/once-campfire-rust/bench/results/final-20260927/prelim-config/rust-1.json
+[06:25:34] rust rep 1: done -> ./bench/results/final-20260927/prelim-config/rust-1.json
 [06:27:34] load before run: 1.27 4.08 4.20 (waited 120s)
 [06:27:34] rust rep 2: starting (load: 1.27 4.08 4.20)
 [06:27:44] rust rep 2: cold start 303ms, idle 63MB (anon 59MB)
@@ -101,7 +101,7 @@ rust HEAD: 5181aa4 (dirty: 0 files)
 [06:32:01] rust rep 2: cable 500 clients ready 500 lat all p50 6.071 p99 8.463 tput 472.7 msg/s 7094 / 7094
 [06:32:27] rust rep 2: cable 1000 clients ready 1000 lat all p50 10.095 p99 14.655 tput 245.5 msg/s 3684 / 3684
 [06:32:29] rust rep 2: upload median 27.9ms
-[06:32:30] rust rep 2: done -> /home/dhh/Work/basecamp/once-campfire-rust/bench/results/final-20260927/prelim-config/rust-2.json
+[06:32:30] rust rep 2: done -> ./bench/results/final-20260927/prelim-config/rust-2.json
 [06:34:20] load before run: 1.42 4.17 4.38 (waited 110s)
 [06:34:20] reference rep 2: starting (load: 1.42 4.17 4.38)
 [06:34:32] reference rep 2: cold start 2477ms, idle 320MB (anon 297MB)
@@ -133,7 +133,7 @@ rust HEAD: 5181aa4 (dirty: 0 files)
 [06:38:51] reference rep 2: cable 500 clients ready 500 lat all p50 44.863 p99 97.855 tput 25.8 msg/s 389 / 389
 [06:39:18] reference rep 2: cable 1000 clients ready 1000 lat all p50 76.991 p99 162.943 tput 13.3 msg/s 215 / 215
 [06:39:21] reference rep 2: upload median 57.9ms
-[06:39:22] reference rep 2: done -> /home/dhh/Work/basecamp/once-campfire-rust/bench/results/final-20260927/prelim-config/reference-2.json
+[06:39:22] reference rep 2: done -> ./bench/results/final-20260927/prelim-config/reference-2.json
 [06:40:32] load before run: 1.42 3.15 3.90 (waited 70s)
 [06:40:32] reference rep 3: starting (load: 1.42 3.15 3.90)
 [06:40:44] reference rep 3: cold start 2469ms, idle 319MB (anon 296MB)
@@ -165,7 +165,7 @@ rust HEAD: 5181aa4 (dirty: 0 files)
 [06:45:03] reference rep 3: cable 500 clients ready 500 lat all p50 43.903 p99 117.183 tput 26.5 msg/s 401 / 401
 [06:45:30] reference rep 3: cable 1000 clients ready 1000 lat all p50 77.311 p99 187.903 tput 14.2 msg/s 217 / 217
 [06:45:32] reference rep 3: upload median 55.5ms
-[06:45:33] reference rep 3: done -> /home/dhh/Work/basecamp/once-campfire-rust/bench/results/final-20260927/prelim-config/reference-3.json
+[06:45:33] reference rep 3: done -> ./bench/results/final-20260927/prelim-config/reference-3.json
 [06:46:43] load before run: 1.33 2.93 3.63 (waited 70s)
 [06:46:43] rust rep 3: starting (load: 1.33 2.93 3.63)
 [06:46:53] rust rep 3: cold start 313ms, idle 60MB (anon 57MB)
@@ -197,7 +197,7 @@ rust HEAD: 5181aa4 (dirty: 0 files)
 [06:51:10] rust rep 3: cable 500 clients ready 500 lat all p50 5.791 p99 8.099 tput 513.3 msg/s 7703 / 7703
 [06:51:35] rust rep 3: cable 1000 clients ready 1000 lat all p50 9.791 p99 14.759 tput 276.9 msg/s 4155 / 4155
 [06:51:38] rust rep 3: upload median 28.6ms
-[06:51:38] rust rep 3: done -> /home/dhh/Work/basecamp/once-campfire-rust/bench/results/final-20260927/prelim-config/rust-3.json
+[06:51:38] rust rep 3: done -> ./bench/results/final-20260927/prelim-config/rust-3.json
 ```
 date: 2026-09-27T06:12:56+02:00
 host: 7.2.5-4-omarchy, AMD Ryzen 9 9955HX 16-Core Processor, 32 threads, 91GB
