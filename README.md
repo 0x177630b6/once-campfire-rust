@@ -121,7 +121,7 @@ app. Every one of the 10,000 Rust clients subscribed in every run; Rails once go
 | Measurement | Rails | Rust | Rust advantage |
 |---|---|---|---|
 | Cold start (`docker run` until `/up` answers) | 2,536 ms | 135 ms | **19×** |
-| Idle memory (container) | 304 MB | 47 MB | **6.5×** |
+| Idle memory (container) | 304 MB | 14 MB | **22×** |
 | App process, 1,000 idle cable clients (Pss) | 642 MB | 234 MB | **2.7×** |
 | App process, 10,000 idle cable clients (Pss) | 1,479 MB | 582 MB | **2.5×** |
 | App process, 10,000 cable clients under load (Pss) | 2,083 MB | 876 MB | **2.4×** |
