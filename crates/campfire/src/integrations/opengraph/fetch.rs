@@ -4,6 +4,7 @@
 //! must be a 200 `text/html` of at most 5MB, by `Content-Length` and by what's actually read.
 
 use std::net::IpAddr;
+use std::time::Duration;
 
 use campfire_richtext::uri::{self, Uri};
 use hyper::Method;
@@ -15,6 +16,10 @@ use crate::integrations::net::Network;
 pub const ALLOWED_DOCUMENT_CONTENT_TYPE: &str = "text/html";
 pub const MAX_BODY_SIZE: usize = 5 * 1024 * 1024;
 pub const MAX_REDIRECTS: usize = 10;
+
+/// Each connect and each read; Rails leaves `Net::HTTP`'s 60 seconds. The unfurl as a whole has
+/// `UNFURL_DEADLINE`.
+const TIMEOUTS: Timeouts = Timeouts { open: Duration::from_secs(5), read: Duration::from_secs(5) };
 
 #[derive(Debug, thiserror::Error)]
 pub enum FetchError {
@@ -82,7 +87,7 @@ async fn send(net: &Network, url: &Uri, ip: IpAddr, method: Method) -> Result<ht
     let endpoint = Endpoint { https, host: host.clone(), port, pinned_ip: Some(ip) };
     let request = http::Request::net_http(method, http::request_uri(url), Some(host_header(&host, port, https)), Vec::new())
         .transport(false, &endpoint);
-    Ok(http::exchange(net, &endpoint, request, &Timeouts::default()).await?)
+    Ok(http::exchange(net, &endpoint, request, &TIMEOUTS).await?)
 }
 
 /// `Net::HTTPGenericRequest#initialize`: `uri.hostname`, plus the port unless it's the scheme's

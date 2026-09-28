@@ -7,7 +7,7 @@ use campfire_richtext::uri::{self, UriError};
 
 use super::document::{self, is_blank};
 use super::location::Location;
-use super::UnfurlError;
+use super::{UnfurlError, off_the_runtime};
 use crate::integrations::net::Network;
 
 const TWITTER_HOSTS: [&str; 4] = ["twitter.com", "www.twitter.com", "x.com", "www.x.com"];
@@ -25,7 +25,7 @@ impl Metadata {
     /// `Metadata.from_url(url)`
     pub async fn from_url(net: &Network, url: &str) -> Result<Self, UnfurlError> {
         let body = fetch_document(net, url).await?;
-        let found = document::opengraph_attributes(body.as_deref());
+        let found = off_the_runtime(move || document::opengraph_attributes(body.as_deref())).await;
         let og = |key: &str| found.iter().find(|(k, _)| *k == key).map(|(_, v)| v.clone());
 
         let canonical_url = valid_canonical_url(net, og("url"), url).await;
@@ -44,12 +44,11 @@ impl Metadata {
     /// `valid?`: sanitizes the title and description first (`before_validation`), then checks
     /// presence and, when there's an image, that it's a valid location.
     pub async fn validate(&mut self, net: &Network) -> Result<bool, UnfurlError> {
-        for key in ["title", "description"] {
-            let sanitized = match self.get(key) {
-                Some(value) => Some(sanitize(&strip_tags(value)?)?),
-                None => None,
-            };
-            assign(&mut self.attributes, key, sanitized);
+        const SANITIZED: [&str; 2] = ["title", "description"];
+        let values = SANITIZED.map(|key| self.get(key).map(str::to_string));
+        let sanitized = off_the_runtime(move || values.map(|value| value.map(|v| sanitize(&strip_tags(&v)?)).transpose())).await;
+        for (key, value) in SANITIZED.into_iter().zip(sanitized) {
+            assign(&mut self.attributes, key, value?);
         }
         let present = |key: &str| self.get(key).is_some_and(|v| !is_blank(v));
         let mut valid = present("title") && present("url") && present("description");

@@ -315,6 +315,10 @@ Deliberate:
   modules (libopenmpt), game-console music (libgme), JPEG XL and SVG frames, codec2 speech,
   teletext subtitles, and DASH/IMF manifests. Tracker modules and game-console music attached to
   a message are now stored without duration or bit rate, which Campfire never shows.
+- **Link unfurling is bounded in time.** Rails gives each connect and read of an unfurl 60
+  seconds, across up to 10 redirects and the image check. Now an unfurl gets 10 seconds in all and
+  5 per connect or read, and a page that takes longer unfurls nothing. At most 16 unfurls run at
+  once, and only a `meta` tag's first 256 attributes are read.
 - **Bot webhooks are bounded.** A delivery gets 60 seconds in all, on top of Rails' 7 per connect
   or read; one that runs out answers "Failed to respond within 60 seconds", as a 7-second timeout
   answers with its own. A reply larger than 100 MB (after decompression) fails the delivery and
