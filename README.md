@@ -389,6 +389,8 @@ Deliberate:
 - **Edge's install instructions render.** With an EdgeHTML user agent (`Edge/`), Rails answers
   profile and room pages with a 500 because the partial names an image that isn't there
   (`install-edge.svg`); the Rust app ships it.
+- **New-ping suggestions appear.** The user picker for a new ping asks for JSON; in Rails it asks
+  for anything, gets HTML, and never shows a suggestion.
 - **Not ported:** the duplicate `session_token` cookie Rails' Active Storage streaming sends; and
   legacy AES-CBC encrypted cookies, since Campfire started on GCM.
 
@@ -402,7 +404,6 @@ Not fully covered:
 
 **Rails bugs the port reproduces faithfully,** worth fixing upstream first:
 
-- New-ping autocomplete never shows suggestions (a plain fetch asks for JSON and gets HTML).
 - A mention of a deleted user blanks the whole message.
 - Editing a message with a missing attachment raises.
 

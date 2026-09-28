@@ -981,19 +981,9 @@
     - wait_for: "#direct_rooms_control .autocomplete__input input"
   covers: [rooms/directs/new, users/autocompletables/_template]
 
-# Reference bug, kept: lib/autocomplete/base_autocomplete_handler.js fetches
-# /autocompletable/users?query=… with a plain fetch (Accept: */*), so the controller answers with
-# the HTML prompt items, response.json() rejects, and the suggestion list stays empty. So no user
-# can be picked here (the old new_ping/selected state could never be reached).
-- id: interactions/sidebar/new_ping/autocomplete
-  as: david
-  path: /rooms/{{rooms.designers}}
-  matrix: { viewports: [desktop, laptop] }
-  steps:
-    - click: "#user_sidebar .direct__new"
-    - type: { selector: "#direct_rooms_control input[data-autocomplete-target=input]", text: "j" }
-    - wait_for: ".autocomplete__list"
-  covers: [rooms/directs/new, autocompletable/users/index]
+# lib/autocomplete/base_autocomplete_handler.js asks for JSON only in the Rust app's override: Rails
+# answers its plain fetch with HTML and the suggestion list stays empty, so there's no Rails page to
+# compare the new-ping suggestions with.
 
 - id: interactions/notifications_help
   as: david
