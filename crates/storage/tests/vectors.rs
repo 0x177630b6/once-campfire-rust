@@ -3,8 +3,11 @@
 //! Set `CAMPFIRE_STORAGE_VECTORS=/path/to/storage.json` to check against another run (e.g. one
 //! generated on a host whose libvips/ffmpeg match the local ones). Processed media is compared
 //! byte for byte only when the local libvips/ffmpeg versions match the ones that produced the
-//! vectors; otherwise the mismatch is reported and the byte checks are skipped.
+//! vectors; otherwise the mismatch is reported and the byte checks are skipped, unless
+//! `CAMPFIRE_REQUIRE_MEDIA_VECTORS` is set, as it is in the Dockerfile's toolchain stage that CI
+//! tests in: there a mismatch fails.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -234,10 +237,13 @@ impl Comparison {
         let compare_images = versions["libvips"] == local_vips.as_str();
         let compare_video = compare_images && versions["ffmpeg"] == local_ffmpeg.as_str();
         if !compare_images || !compare_video {
-            eprintln!(
-                "skipping byte comparisons that depend on versions: vectors have libvips {} / {}, local libvips {local_vips} / {local_ffmpeg}",
+            let versions = format!(
+                "vectors have libvips {} / {}, local libvips {local_vips} / {local_ffmpeg}",
                 versions["libvips"], versions["ffmpeg"]
             );
+            assert!(std::env::var_os("CAMPFIRE_REQUIRE_MEDIA_VECTORS").is_none(), "byte comparisons would be skipped: {versions}");
+            // Straight to stderr: libtest captures eprintln! from passing tests.
+            let _ = writeln!(std::io::stderr(), "note: skipping byte comparisons that depend on versions: {versions}");
         }
         Self { compare_images, compare_video, mismatches: vec![], identical: vec![] }
     }
