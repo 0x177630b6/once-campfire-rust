@@ -43,9 +43,10 @@ faster or better.
 - `cargo clippy --workspace --exclude html5ever --all-targets` should stay clean. (`html5ever` is a
   vendored copy with one backported fix and two small additions for Gumbo's parse limits, all
   recorded in its `Cargo.toml`, and identical to upstream otherwise.)
-- Format with `cargo fmt --all` (`rustfmt.toml`) before committing; CI runs `cargo fmt --all --check`.
-  The vendored html5ever has its own `rustfmt.toml` that turns formatting off, and generated tables
-  are marked `#[rustfmt::skip]`.
+- Format with `cargo fmt --all` (`rustfmt.toml`) before committing, and `bench/loadgen`, a workspace
+  of its own, with `cargo fmt --manifest-path bench/loadgen/Cargo.toml`; CI checks both. The
+  vendored html5ever has its own `rustfmt.toml` that turns formatting off, and generated tables are
+  marked `#[rustfmt::skip]`.
 - Put shared dependency versions in the root `[workspace.dependencies]`, and reference them with
   `foo.workspace = true`.
 - When matching existing behavior, read the reference's source. When it depends on Rails or gem
