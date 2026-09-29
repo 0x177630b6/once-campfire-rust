@@ -3,6 +3,8 @@
 //!
 //! libvips must be the same version as the reference image's for variants to be byte-identical.
 
+#![warn(clippy::undocumented_unsafe_blocks)]
+
 use std::ffi::{CStr, CString, c_char, c_double, c_int, c_void};
 use std::path::Path;
 use std::sync::OnceLock;
@@ -58,6 +60,8 @@ static INIT: OnceLock<std::result::Result<(), String>> = OnceLock::new();
 /// use rather than at boot, so a server that never touches an image doesn't pay for libvips. A
 /// failure is kept and returned every time: a second `vips_init` would report success.
 pub fn init() -> Result<()> {
+    // SAFETY: the OnceLock runs this once and other callers wait for it, so vips_init is never
+    // entered twice; argv0 and the operation name are static NUL-terminated strings.
     INIT.get_or_init(|| unsafe {
         if vips_init(c"campfire".as_ptr()) != 0 {
             return Err(format!("vips_init failed: {}", take_error()));
@@ -72,16 +76,20 @@ pub fn init() -> Result<()> {
 
 pub fn version() -> Result<String> {
     init()?;
+    // SAFETY: libvips returns its version as a static NUL-terminated string.
     Ok(unsafe { CStr::from_ptr(vips_version_string()).to_string_lossy().into_owned() })
 }
 
+/// One reference to a libvips image, never null (`wrap` checks), released on drop.
 pub struct Image(*mut VipsImage);
 
-// libvips images are immutable once built and reference counted with atomic refcounts.
+// SAFETY: GObject reference counts are atomic and libvips images are immutable once built, so an
+// Image may be read or dropped on another thread.
 unsafe impl Send for Image {}
 
 impl Drop for Image {
     fn drop(&mut self) {
+        // SAFETY: the Image owns this reference, and this is the only place it's released.
         unsafe { g_object_unref(self.0.cast()) }
     }
 }
@@ -99,6 +107,8 @@ impl Image {
     pub fn open_sequential(path: &Path) -> Result<Image> {
         init()?;
         let path = cstring(path)?;
+        // SAFETY: the path is NUL-terminated; the options are name/value pairs, each value of the
+        // C type libvips reads for it (an enum is a c_int), ending in a NULL name.
         Image::wrap(unsafe {
             vips_image_new_from_file(path.as_ptr(), c"access".as_ptr(), VIPS_ACCESS_SEQUENTIAL, std::ptr::null::<c_char>())
         })
@@ -110,24 +120,30 @@ impl Image {
         init()?;
         let path = cstring(path)?;
         let image = if loader_accepts_page(&path) {
+            // SAFETY: as in `open_sequential`; `page` is an int.
             unsafe { vips_image_new_from_file(path.as_ptr(), c"page".as_ptr(), 0 as c_int, std::ptr::null::<c_char>()) }
         } else {
+            // SAFETY: the path is NUL-terminated, and the option list is only its NULL terminator.
             unsafe { vips_image_new_from_file(path.as_ptr(), std::ptr::null::<c_char>()) }
         };
         Image::wrap(image)?.autorot()
     }
 
     pub fn width(&self) -> i32 {
+        // SAFETY: `self.0` is a live image.
         unsafe { vips_image_get_width(self.0) }
     }
 
     pub fn height(&self) -> i32 {
+        // SAFETY: `self.0` is a live image.
         unsafe { vips_image_get_height(self.0) }
     }
 
     /// `image.get(name)` for string fields such as `exif-ifd0-Orientation`; `None` when absent.
     pub fn get_string(&self, name: &str) -> Option<String> {
         let name = CString::new(name).ok()?;
+        // SAFETY: `self.0` is a live image and `name` is NUL-terminated. On success libvips hands
+        // back a NUL-terminated string of our own, freed with g_free once copied.
         unsafe {
             if vips_image_get_typeof(self.0, name.as_ptr()) == G_TYPE_INVALID {
                 return None;
@@ -145,6 +161,8 @@ impl Image {
 
     pub fn autorot(&self) -> Result<Image> {
         let mut out = std::ptr::null_mut();
+        // SAFETY: `self.0` is a live image, `out` receives a new reference on success, and the
+        // option list is only its NULL terminator.
         let status = unsafe { vips_autorot(self.0, &mut out, std::ptr::null::<c_char>()) };
         Image::wrap_out(status, out)
     }
@@ -155,6 +173,9 @@ impl Image {
         const MAX_COORD: i32 = 10_000_000;
         let (width, height) = (width.unwrap_or(MAX_COORD), height.unwrap_or(MAX_COORD));
         let mut thumbnail = std::ptr::null_mut();
+        // SAFETY: `self.0` is a live image and `thumbnail` receives a new reference on success. The
+        // options are name/value pairs with c_int values (libvips reads int, enum and gboolean
+        // arguments as int), ending in a NULL name.
         let status = unsafe {
             vips_thumbnail_image(
                 self.0,
@@ -172,6 +193,8 @@ impl Image {
         let thumbnail = Image::wrap_out(status, thumbnail)?;
         let mask = sharpen_mask()?;
         let mut sharpened = std::ptr::null_mut();
+        // SAFETY: both images are live and `sharpened` receives a new reference on success;
+        // `precision` is an enum passed as c_int, and the options end in a NULL name.
         let status = unsafe {
             vips_conv(thumbnail.0, &mut sharpened, mask.0, c"precision".as_ptr(), VIPS_PRECISION_INTEGER, std::ptr::null::<c_char>())
         };
@@ -181,6 +204,8 @@ impl Image {
     /// `write_to_file(path)`: the saver and its defaults are picked from the extension.
     pub fn write_to_file(&self, path: &Path) -> Result<()> {
         let path = cstring(path)?;
+        // SAFETY: `self.0` is a live image, the path is NUL-terminated, and the option list is only
+        // its NULL terminator.
         let status = unsafe { vips_image_write_to_file(self.0, path.as_ptr(), std::ptr::null::<c_char>()) };
         if status != 0 { Err(Error::Vips(take_error())) } else { Ok(()) }
     }
@@ -189,7 +214,9 @@ impl Image {
 /// `ImageProcessing::Vips::Processor::SHARPEN_MASK`: `new_from_array([[-1,-1,-1],[-1,32,-1],[-1,-1,-1]], 24)`.
 fn sharpen_mask() -> Result<Image> {
     let values: [c_double; 9] = [-1.0, -1.0, -1.0, -1.0, 32.0, -1.0, -1.0, -1.0, -1.0];
+    // SAFETY: `values` holds the 3 × 3 doubles libvips copies into the new image.
     let mask = Image::wrap(unsafe { vips_image_new_matrix_from_array(3, 3, values.as_ptr(), 9) })?;
+    // SAFETY: `mask` is a live image and the field names are NUL-terminated.
     unsafe {
         vips_image_set_double(mask.0, c"scale".as_ptr(), 24.0);
         vips_image_set_double(mask.0, c"offset".as_ptr(), 0.0);
@@ -203,6 +230,10 @@ fn sharpen_mask() -> Result<Image> {
 /// argument the loader doesn't have (jpegload, pngload) appends "no property named `page'" to
 /// libvips' error buffer.
 fn loader_accepts_page(path: &CStr) -> bool {
+    // SAFETY: `path` is NUL-terminated and the loader name libvips finds is static. The operation
+    // is only introspected, never built, and released once. `vips_object_get_args` fills `n`
+    // NUL-terminated names and their flags in arrays that belong to the operation, so they're read
+    // before it's released.
     unsafe {
         let loader = vips_foreign_find_load(path.as_ptr());
         if loader.is_null() {
@@ -214,7 +245,6 @@ fn loader_accepts_page(path: &CStr) -> bool {
             vips_error_clear();
             return false;
         }
-        // The arrays belong to `operation`, so they're read before it's unreferenced.
         let (mut names, mut flags, mut n) = (std::ptr::null(), std::ptr::null(), 0);
         let accepts = vips_object_get_args(operation, &mut names, &mut flags, &mut n) == 0
             && (0..n as usize).any(|i| CStr::from_ptr(*names.add(i)) == c"page" && optional_input(*flags.add(i)));
@@ -239,6 +269,7 @@ fn cstring(path: &Path) -> Result<CString> {
 /// shared by every thread, so the message can include another thread's error that was pending at
 /// the same time (and a `vips_error_clear` on another thread can drop this one's).
 fn take_error() -> String {
+    // SAFETY: libvips returns a NUL-terminated copy of the buffer (or NULL), ours to g_free.
     unsafe {
         let copy = vips_error_buffer_copy();
         if copy.is_null() {
