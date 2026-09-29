@@ -194,6 +194,29 @@ fn typing_stream_name(room: &campfire_db::Room) -> String {
     campfire_cable::naming::broadcasting_for("TypingNotificationsChannel", &[&room_gid(room).to_param()])
 }
 
+/// `safe_constantize` resolves "::TypingNotificationsChannel" to the class, whose broadcastings
+/// are named after the class alone, so both spellings share the room's typing stream.
+#[tokio::test]
+async fn typing_notifications_reach_the_room_however_the_channel_is_spelled() {
+    let app = start().await;
+    let prefixed = room_identifier("::TypingNotificationsChannel", id("designers"));
+    let plain = room_identifier("TypingNotificationsChannel", id("designers"));
+    let mut typist = app.connect("jz").await;
+    let mut reader = app.connect("kevin").await;
+    typist.confirm(&prefixed).await;
+    reader.confirm(&plain).await;
+
+    typist.perform(&prefixed, json!({ "action": "start" })).await;
+    let start = format!(r#"{{"action":"start","user":{{"id":{},"name":"JZ"}}}}"#, id("jz"));
+    assert_eq!(reader.next_text().await, delivery(&plain, &start));
+    assert_eq!(typist.next_text().await, delivery(&prefixed, &start));
+
+    reader.perform(&plain, json!({ "action": "stop" })).await;
+    let stop = format!(r#"{{"action":"stop","user":{{"id":{},"name":"Kevin"}}}}"#, id("kevin"));
+    assert_eq!(typist.next_text().await, delivery(&prefixed, &stop));
+    assert_eq!(reader.next_text().await, delivery(&plain, &stop));
+}
+
 /// A subscription whose `subscribed` failed has no room: typing there is an error, not a panic
 /// that takes the whole connection down.
 #[tokio::test]

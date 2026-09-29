@@ -63,7 +63,8 @@ impl<U: Send + Sync + 'static> Channel<U> for EmptyChannel {}
 /// rejection and transmissions.
 pub struct Subscription<U: Send + Sync + 'static> {
     pub(crate) server: Server<U>,
-    pub(crate) class_name: String,
+    /// The registered class name, whatever spelling the client resolved it with.
+    pub(crate) class_name: Arc<str>,
     /// The raw identifier the client subscribed with; params are parsed from it when asked for
     /// (subscriptions live as long as their sockets, and are many).
     pub(crate) identifier: Arc<str>,
