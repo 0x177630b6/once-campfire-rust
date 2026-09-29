@@ -150,6 +150,16 @@ fn a_tag_with_too_many_attributes_is_refused_quickly() {
     assert_refused_quickly(&format!("<b {}>x</b>", attributes.join(" ")), "a tag with 64,000 attributes");
 }
 
+#[test]
+fn elements_misplaced_in_a_table_parse_in_linear_time() {
+    // Foster parenting inserts each of them before the table. Finding the table from the front of
+    // its parent's children made that quadratic: 480 KB of them took 1.5 seconds.
+    let body = format!("<table>{}", "<br>".repeat(200_000));
+    let started = Instant::now();
+    assert!(to_plain_text(&body, &ctx()).is_ok());
+    assert_quick(started, "800 KB of <br>s in a table");
+}
+
 /// Every SGID names a user who has since been deleted.
 struct DeletedUsers;
 

@@ -719,7 +719,9 @@ impl TreeSink for Sink {
 
     fn append_before_sibling(&self, sibling: &NodeId, new_node: NodeOrText<NodeId>) {
         let parent = self.nodes.borrow()[*sibling].parent.expect("sibling has a parent");
-        let index = self.nodes.borrow()[parent].children.iter().position(|c| c == sibling).unwrap();
+        // From the end: foster parenting inserts before an open table, which is its parent's last
+        // child, so a body of thousands of misplaced elements in a table stays linear.
+        let index = self.nodes.borrow()[parent].children.iter().rposition(|c| c == sibling).unwrap();
         self.insert_at(parent, index, new_node);
     }
 
