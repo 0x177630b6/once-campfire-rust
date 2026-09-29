@@ -7,7 +7,7 @@ performance, security). What follows is the synthesized plan; section 5 is the o
 
 ## 1. Verdict
 
-The workspace is in good shape. Crates are small and well commented, and each one cites the Rails, Go or Rack source it follows. Libraries use thiserror and the binary uses anyhow. Statics use std `LazyLock`/`OnceLock` throughout. Almost every `unsafe` block has a SAFETY comment. The direct dependency list is short, and nothing in Cargo.lock matches an active RustSec advisory.
+The workspace is in good shape. Crates are small and well commented, and each one cites the Rails, Go or Rack source it follows. Libraries use thiserror and the binary uses anyhow. Statics use std `LazyLock`/`OnceLock` throughout. Outside the libvips FFI, every `unsafe` block has a SAFETY comment; the 18 in vips.rs have none yet (§3.2). The direct dependency list is short, and nothing in Cargo.lock matches an active RustSec advisory.
 
 Nearly every hand-written piece a reader would question should stay. That covers params, cookies, the Journey router, the WebSocket code, the sanitizer, the useragent port, rqrcode, Marcel and Marshal, the libvips FFI, the HTTP client, the Web Push crypto and the caches. Each exists because no crate reproduces the Rails, Go or performance behaviour the app needs.
 
@@ -137,7 +137,7 @@ The plan:
    - storage JSON: drop the U+2028/U+2029 escapes.
    - room.rs `to_i`: use Ruby's whitespace set (including `\v`) and accept `0d`.
    - `cast_integer`: run `/\A\s*[+-]?\d/`, then `to_i`, then a range check (the SQLite adapter's 8-byte integer, not `ActiveModel::Type::Integer.new`, which is 4 bytes).
-   - assets: use storage's `byte_ranges`.
+   - assets: fix its own `byte_ranges` copy in place to match storage's Rack-faithful one. Depending on storage would pull the database and crypto stack into `campfire_assets` for one helper; the shared copy arrives with `ruby_compat` in step 3.
    - kit/format.rs:293 and deflater `to_f`: `q=0.5.1` should give 0.5.
    - `q=` with no value should mean 1.0 in format.rs:168-173 and deflater.rs:131-136. Today `identity;q=` gets a 406 where Rails gives 200.
    - storage `query_escape`: fix the set or the comment.
@@ -319,7 +319,7 @@ About 250–400 lines disappear, and each Ruby behaviour is defined and tested o
    - Search sanitizing: `[^\w&&\p{Age=15.0}]` matches the 776-line generated `word_ranges.rs` exactly (0 mismatches over every scalar value), so the table and its oracle script can go.
    - Push: add `PushSubscription::permitted_endpoint_host()` and `validate(Option<IpAddr>)`. The controller's Mutex-and-HashMap resolve dance (push_subscriptions.rs:121-141) goes away.
    - Move Blob#destroy's SQL and `delete_attachment` into campfire_storage. Today it is duplicated at active_storage.rs:618 and attachments.rs:140.
-   - Warm the vips and ffmpeg probes at boot in `spawn_blocking`, with a warning when ffmpeg is missing.
+   - Warm the ffmpeg probe at boot in `spawn_blocking`, with a warning when ffmpeg is missing. Leave libvips lazy: its only probe, `vips::version()`, initializes it (2.6–13.5 MB Pss, §3.2).
 
 ## 5. Suggested order of work
 
