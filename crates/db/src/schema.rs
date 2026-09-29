@@ -16,6 +16,7 @@ use crate::time::{Clock, Timestamp};
 pub const SCHEMA_SQL: &str = include_str!("schema.sql");
 
 /// Every migration in `reference/db/migrate`, oldest first.
+#[rustfmt::skip]
 pub const MIGRATION_VERSIONS: &[&str] = &[
     "20231215043540",
     "20231220143106",
