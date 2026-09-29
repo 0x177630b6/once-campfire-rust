@@ -4,7 +4,9 @@
 use std::time::{Duration, Instant};
 
 use campfire_richtext::dom::Dom;
-use campfire_richtext::{AttachableResolver, GidLookup, RenderContext, SignedLookup, editable_value, message_presentation};
+use campfire_richtext::{
+    AttachableResolver, GidLookup, RenderContext, SignedLookup, editable_value, message_presentation, to_plain_text,
+};
 
 struct NoRecords;
 
@@ -121,6 +123,31 @@ fn deeply_nested_content_attachments_render_quickly() {
     let started = Instant::now();
     presentation(&body);
     assert_quick(started, "rendering 200 nested content attachments");
+}
+
+/// Both the page and the search index (which is written inside the database transaction) have to
+/// refuse `body`.
+fn assert_refused_quickly(body: &str, what: &str) {
+    let started = Instant::now();
+    assert!(message_presentation(body, &ctx()).is_err(), "{what} rendered");
+    assert!(to_plain_text(body, &ctx()).is_err(), "{what} was indexed");
+    assert_quick(started, what);
+}
+
+#[test]
+fn deeply_nested_elements_are_refused_quickly() {
+    // Gumbo's depth limit is enforced as the tree is built. Checked on the finished tree, 400 KB
+    // of nested <div>s took 16 seconds, since html5ever's scope checks walk every open element.
+    assert_refused_quickly(&"<div>".repeat(80_000), "400 KB of nested <div>s");
+    assert_refused_quickly(&"<a><b>".repeat(80_000), "480 KB of <a><b>");
+    assert_refused_quickly(&"<a><div><div>".repeat(30_000), "390 KB of <a><div><div>");
+}
+
+#[test]
+fn a_tag_with_too_many_attributes_is_refused_quickly() {
+    // Each attribute is checked against the tag's others for a duplicate, up to Gumbo's limit
+    let attributes: Vec<String> = (1..=64_000).map(|i| format!("a{i}=1")).collect();
+    assert_refused_quickly(&format!("<b {}>x</b>", attributes.join(" ")), "a tag with 64,000 attributes");
 }
 
 /// Every SGID names a user who has since been deleted.
