@@ -564,6 +564,10 @@ fn tree_builder_opts() -> TreeBuilderOpts {
 /// Gumbo's tree depth limit. Before it reads each token, Gumbo stops, as if the input had ended
 /// there, once the stack of open elements holds more than `max_tree_depth` elements, and Nokogiri
 /// adds one to the limit for a fragment's `html` element (nokogiri's ext/nokogiri/gumbo.c).
+///
+/// So the stack is checked as soon as a token has been handled, before the tokenizer reads on:
+/// the next token can be all the rest of the input. Gumbo doesn't check after the end of the
+/// input, though, when text left pending in a table can reopen formatting elements past the limit.
 struct DepthLimit<'input> {
     tree_builder: TreeBuilder<NodeId, Sink>,
     input: &'input BufferQueue,
@@ -592,11 +596,12 @@ impl TokenSink for DepthLimit<'_> {
         if self.exceeded.get() {
             return TokenSinkResult::Continue;
         }
-        if self.tree_builder.open_elements_len() > Self::MAX_OPEN_ELEMENTS {
+        let reads_on = !matches!(token, Token::EOFToken);
+        let result = self.tree_builder.process_token(token, line_number);
+        if reads_on && self.tree_builder.open_elements_len() > Self::MAX_OPEN_ELEMENTS {
             self.stop();
-            return TokenSinkResult::Continue;
         }
-        self.tree_builder.process_token(token, line_number)
+        result
     }
 
     fn end(&self) {
@@ -839,6 +844,12 @@ mod tests {
         // The adoption agency moves blocks back up, and what counts is how deep they were
         assert_eq!(parse(&format!("<b>{}{}</b>", s(300), div(10)).repeat(3)), Ok(()));
         assert_eq!(parse(&format!("<b>{}{}</b>{}", s(390), div(10), div(300))), Err(TreeDepthExceeded));
+        // Text pending in a table reopens the <b>s past the limit when the input ends, and Gumbo
+        // doesn't check after that
+        let bs: String = (1..=399).map(|i| format!("<b id={i}>")).collect();
+        let reopened = format!("<p>{bs}</p><div><div><table>x");
+        assert_eq!(parse(&reopened), Ok(()));
+        assert_eq!(parse(&format!("{reopened}<!---->")), Err(TreeDepthExceeded));
     }
 
     #[test]

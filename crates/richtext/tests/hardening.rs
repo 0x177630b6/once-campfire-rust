@@ -146,13 +146,21 @@ fn deeply_nested_elements_are_refused_quickly() {
 #[test]
 fn the_rest_of_a_body_is_not_read_once_it_is_too_deep() {
     // Gumbo stops there. Tokenizing the rest of a 16 MB body (kit's request body limit) only to
-    // throw it away took 200 ms a parse, and a message is parsed several times.
-    let body = format!("{}{}", "<div>".repeat(401), "<a><b>".repeat(16 * 1024 * 1024 / 6));
-    let started = Instant::now();
-    assert!(message_presentation(&body, &ctx()).is_err() && to_plain_text(&body, &ctx()).is_err());
-    // Copying the body to parse it is all that's left
-    let bound = if cfg!(debug_assertions) { Duration::from_secs(1) } else { Duration::from_millis(100) };
-    assert!(started.elapsed() < bound, "refusing 16 MB took {:?}", started.elapsed());
+    // throw it away took 200 ms a parse, and a message is parsed several times. Stopping once the
+    // next token has been read isn't enough, as it can be all the rest: a comment took 130 ms.
+    let too_deep = "<div>".repeat(401);
+    let rest = "x".repeat(16 * 1024 * 1024);
+    for (what, body) in [
+        ("tags", format!("{too_deep}{}", "<a><b>".repeat(rest.len() / 6))),
+        ("a comment", format!("{too_deep}<!--{rest}")),
+        ("a tag name", format!("{too_deep}<{rest}")),
+    ] {
+        let started = Instant::now();
+        assert!(message_presentation(&body, &ctx()).is_err() && to_plain_text(&body, &ctx()).is_err());
+        // Copying the body to parse it is all that's left
+        let bound = if cfg!(debug_assertions) { Duration::from_secs(1) } else { Duration::from_millis(100) };
+        assert!(started.elapsed() < bound, "refusing 16 MB of {what} took {:?}", started.elapsed());
+    }
 }
 
 #[test]
