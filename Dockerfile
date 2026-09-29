@@ -109,6 +109,12 @@ ENV LIBRARY_PATH=/opt/vips/lib
 # arm64 kernels come with 4 or 16 KB pages (the Raspberry Pi 5 uses 16 KB), and built for 16 KB it
 # runs on both.
 ARG TARGETARCH
+# Hermes: optional overrides of the release profile for memory-constrained build hosts (fat LTO with
+# one codegen unit needs several GB for the final link). Unset = the workspace's own profile. Cargo
+# reads them from the environment: e.g. --build-arg CARGO_PROFILE_RELEASE_LTO=thin.
+ARG CARGO_PROFILE_RELEASE_LTO
+ARG CARGO_PROFILE_RELEASE_CODEGEN_UNITS
+ARG CARGO_BUILD_JOBS
 
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
