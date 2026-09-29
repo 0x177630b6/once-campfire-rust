@@ -25,7 +25,7 @@ protocol recordings all come from running the real Rails app.
 | `rails_compat` | Rails' signed and encrypted cookies, signed IDs, signed global IDs, Turbo stream names and bcrypt, byte-compatible with Rails so sessions carry over |
 | `kit` | Rack, Action Dispatch and Thruster, on Axum: Rails-style nested params, sessions, flash, format negotiation, forgery protection by `Sec-Fetch-Site`, ETags and gzip built from a page's cached parts, plus an in-process front server with TLS and ACME, HTTP/2 and Thruster's response cache |
 | `db` | Active Record over the existing schema (rusqlite), with the same callbacks, timestamps and STI values, and a Rails-compatible fixture loader |
-| `richtext` | The Action Text pipeline: sanitizing, mentions, opengraph embeds and autolinking, byte-identical to Rails on a 647-case corpus apart from the deliberate differences below |
+| `richtext` | The Action Text pipeline: sanitizing, mentions, opengraph embeds and autolinking, byte-identical to Rails on a 658-case corpus apart from the deliberate differences below |
 | `storage` | Active Storage: the same blob keys, disk layout, variants (libvips) and video previews (ffmpeg), with byte-identical thumbnails |
 | `cable` | The Action Cable protocol server and pub/sub, frame-for-frame with Rails, on a WebSocket implementation of its own that shares and compresses broadcasts |
 | `assets` | Propshaft and importmap-rails, with identical fingerprinted filenames and tags |
@@ -467,7 +467,7 @@ Not fully covered:
 
 - HTTP-01 ACME validation is only unit-tested. TLS-ALPN-01 was tested end to end against a local
   ACME server.
-- Rich text is checked against Rails on a 647-case corpus, 400 of them fuzzed, which matches
+- Rich text is checked against Rails on a 658-case corpus, 400 of them fuzzed, which matches
   exactly apart from the deliberate differences above. Active Storage attachments embedded in a
   message body, which Campfire's composer can't create, render as ☒.
 
