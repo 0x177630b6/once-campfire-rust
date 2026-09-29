@@ -5,7 +5,7 @@
 
 use std::ffi::{CStr, CString, c_char, c_double, c_int, c_void};
 use std::path::Path;
-use std::sync::Once;
+use std::sync::OnceLock;
 
 use crate::{Error, Result};
 
@@ -51,23 +51,28 @@ unsafe extern "C" {
     fn g_free(mem: *mut c_void);
 }
 
-static INIT: Once = Once::new();
+static INIT: OnceLock<std::result::Result<(), String>> = OnceLock::new();
 
 /// `vips_init`, then the loader restrictions of `config/initializers/vips.rb`:
-/// `Vips.block_untrusted(true)` and `Vips.block("VipsForeignLoadOpenslide", true)`.
-pub fn init() {
-    INIT.call_once(|| unsafe {
+/// `Vips.block_untrusted(true)` and `Vips.block("VipsForeignLoadOpenslide", true)`. Runs on first
+/// use rather than at boot, so a server that never touches an image doesn't pay for libvips. A
+/// failure is kept and returned every time: a second `vips_init` would report success.
+pub fn init() -> Result<()> {
+    INIT.get_or_init(|| unsafe {
         if vips_init(c"campfire".as_ptr()) != 0 {
-            panic!("vips_init failed: {}", take_error());
+            return Err(format!("vips_init failed: {}", take_error()));
         }
         vips_block_untrusted_set(1);
         vips_operation_block_set(c"VipsForeignLoadOpenslide".as_ptr(), 1);
-    });
+        Ok(())
+    })
+    .clone()
+    .map_err(Error::Vips)
 }
 
-pub fn version() -> String {
-    init();
-    unsafe { CStr::from_ptr(vips_version_string()).to_string_lossy().into_owned() }
+pub fn version() -> Result<String> {
+    init()?;
+    Ok(unsafe { CStr::from_ptr(vips_version_string()).to_string_lossy().into_owned() })
 }
 
 pub struct Image(*mut VipsImage);
@@ -92,7 +97,7 @@ impl Image {
 
     /// `Vips::Image.new_from_file(path, access: :sequential)`, as the image analyzer opens files.
     pub fn open_sequential(path: &Path) -> Result<Image> {
-        init();
+        init()?;
         let path = cstring(path)?;
         Image::wrap(unsafe {
             vips_image_new_from_file(path.as_ptr(), c"access".as_ptr(), VIPS_ACCESS_SEQUENTIAL, std::ptr::null::<c_char>())
@@ -102,7 +107,7 @@ impl Image {
     /// `ImageProcessing::Vips::Processor.load_image(path, page: 0)`: `page: 0` only reaches loaders
     /// that accept it (`Utils.select_valid_loader_options`), then `autorot`.
     pub fn load_for_processing(path: &Path) -> Result<Image> {
-        init();
+        init()?;
         let path = cstring(path)?;
         let image = if loader_accepts_page(&path) {
             unsafe { vips_image_new_from_file(path.as_ptr(), c"page".as_ptr(), 0 as c_int, std::ptr::null::<c_char>()) }

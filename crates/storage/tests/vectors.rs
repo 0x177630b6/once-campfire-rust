@@ -229,7 +229,7 @@ struct Comparison {
 
 impl Comparison {
     fn new(versions: &J) -> Self {
-        let local_vips = campfire_storage::vips::version();
+        let local_vips = campfire_storage::vips::version().unwrap();
         let local_ffmpeg = ffmpeg_version();
         let compare_images = versions["libvips"] == local_vips.as_str();
         let compare_video = compare_images && versions["ffmpeg"] == local_ffmpeg.as_str();
