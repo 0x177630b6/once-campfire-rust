@@ -498,3 +498,26 @@ async fn blob_byte_ranges_are_served_from_the_file() {
     let unsatisfiable = send(router, ranged(&format!("bytes={}-", file.len() + 10))).await;
     assert_eq!(unsatisfiable.status, StatusCode::RANGE_NOT_SATISFIABLE);
 }
+
+/// `ContentDisposition.format` transliterates the ASCII `filename=` with I18n's whole table, not
+/// just Latin-1.
+#[tokio::test]
+async fn proxied_blobs_name_their_file_like_rails() {
+    let Some(test) = boot_seeded().await else { return };
+    let router = &test.booted.router;
+    test.booted.app.db.write(|tx| Ok(tx.conn().execute("UPDATE active_storage_blobs SET filename = 'Łódź.jpg' WHERE id = 5", [])?)).await.unwrap();
+    let proxy_path = vectors().blobs[0].redirect_path.replacen("/redirect/", "/proxy/", 1);
+    let request = |range: Option<&str>| {
+        let mut request = Request::get(&proxy_path).header(header::HOST, "campfire.test");
+        if let Some(range) = range {
+            request = request.header("range", range);
+        }
+        request.body(Body::empty()).unwrap()
+    };
+
+    let expected = Some("inline; filename=\"Lodz.jpg\"; filename*=UTF-8''%C5%81%C3%B3d%C5%BA.jpg");
+    let whole = send(router, request(None)).await;
+    assert_eq!((whole.status, whole.header("content-disposition")), (StatusCode::OK, expected));
+    let ranged = send(router, request(Some("bytes=0-9"))).await;
+    assert_eq!((ranged.status, ranged.header("content-disposition")), (StatusCode::PARTIAL_CONTENT, expected));
+}
