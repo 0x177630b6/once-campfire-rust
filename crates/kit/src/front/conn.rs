@@ -6,6 +6,11 @@
 //! - HTTP_WRITE_TIMEOUT bounds the rest of the exchange, from the request to the response's end;
 //! - HTTP_IDLE_TIMEOUT closes a keep-alive connection with no request in flight.
 //!
+//! Over HTTP/1, hyper's header timer (HTTP_READ_TIMEOUT) also runs while a keep-alive connection
+//! waits for its next request, from the end of the previous response, so an idle HTTP/1 connection
+//! closes after the shorter of the two. Go waited HTTP_IDLE_TIMEOUT for the next request's first
+//! bytes and only then started HTTP_READ_TIMEOUT.
+//!
 //! An upgraded connection (Action Cable's WebSocket) has none: Go clears the deadlines when
 //! `httputil.ReverseProxy` hijacks it.
 
@@ -206,6 +211,7 @@ where
         }};
     }
     let io = TokioIo::new(io);
+    // hyper's HTTP/1 header read timeout doubles as its idle timer (see the module doc).
     match protocol {
         Protocol::Http1 => {
             let mut builder = hyper::server::conn::http1::Builder::new();
