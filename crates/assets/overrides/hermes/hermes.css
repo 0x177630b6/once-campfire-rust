@@ -1,0 +1,500 @@
+/* Hermes fork: the voice features' styles (docs/hermes-gemini-live.md).
+ *
+ * Linked only by the Hermes templates (hermes/_composer_buttons, hermes/voice), never by
+ * `stylesheet_link_tag :all` (build.rs leaves `hermes/` out of it), so every page without them stays
+ * byte-identical to the reference. Built on Campfire's own variables and components: .btn,
+ * .btn--negative, the message bubble colour, the flash look, pulsing-outline, the submitting dots. */
+
+/* ---------------------------------------------------------------------------------------------
+ * Composer: touch targets */
+
+@media (pointer: coarse) {
+  .composer .btn {
+    --btn-size: 2.75rem;
+  }
+}
+
+/* ---------------------------------------------------------------------------------------------
+ * Composer: voice note (record, then send) */
+
+.hermes-voice-note:not([hidden]) {
+  align-items: center;
+  display: flex;
+  flex-shrink: 0;
+  gap: var(--inline-space-half);
+  min-inline-size: 0;
+  position: relative;
+}
+
+.hermes-voice-note__meter {
+  align-items: center;
+  display: none;
+  flex: 1 1 auto;
+  gap: var(--inline-space);
+  min-inline-size: 0;
+}
+
+.hermes-voice-note__timer {
+  align-items: center;
+  display: inline-flex;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  gap: 0.4em;
+  white-space: nowrap;
+}
+
+.hermes-voice-note__dot {
+  animation: hermes-blink 1s steps(2, jump-none) infinite;
+  background: var(--color-negative);
+  block-size: 0.6em;
+  border-radius: 50%;
+  inline-size: 0.6em;
+}
+
+.hermes-voice-note__level {
+  background: var(--color-border-darker);
+  block-size: 0.3rem;
+  border-radius: 1rem;
+  flex: 1 1 3rem;
+  max-inline-size: 8rem;
+  min-inline-size: 1.5rem;
+  overflow: hidden;
+
+  &::after {
+    background: var(--color-negative);
+    block-size: 100%;
+    content: "";
+    display: block;
+    transform: scaleX(var(--hermes-level, 0));
+    transform-origin: left;
+    transition: transform 90ms linear;
+  }
+}
+
+.hermes-voice-note__warning {
+  color: var(--color-negative);
+  flex: 1 1 auto;
+  font-weight: 600;
+  line-height: 1.15;
+  min-inline-size: 0;
+
+  &:empty { display: none; }
+}
+
+/* The last 30 seconds: the warning takes the level meter's place (narrow phones). */
+.hermes-voice-note__meter:has(.hermes-voice-note__warning:not(:empty)) .hermes-voice-note__level {
+  display: none;
+}
+
+.hermes-voice-note__icon-send { display: none; }
+
+/* While recording, the input row becomes a recording bar: bin, dot + timer + level, send. */
+.hermes-voice-note[data-recording] {
+  flex: 1 1 auto;
+
+  .hermes-voice-note__meter { display: flex; }
+  .hermes-voice-note__icon-record { display: none; }
+  .hermes-voice-note__icon-send { display: inline; }
+
+  /* Looks like the composer's Send button (.btn--reversed), pulsing like .btn--pulsing. */
+  .hermes-voice-note__toggle {
+    --btn-background: var(--color-text);
+    --btn-border-color: transparent;
+    --btn-color: var(--color-text-reversed);
+
+    animation: pulsing-outline 2s infinite both;
+    margin-inline-start: auto;
+    outline: 0 solid var(--color-negative);
+
+    img { filter: invert(100%); }
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  .hermes-voice-note[data-recording] .hermes-voice-note__toggle img { filter: invert(0%); }
+}
+
+.composer__input:has(.hermes-voice-note[data-recording]) {
+  :is(.composer__input-hint, .composer__attachment-btn, .composer__rich-text-btn, .hermes-live-link, button[name="send"]),
+  div:has(> lexxy-editor) {
+    display: none !important;
+  }
+}
+
+.composer:has(.hermes-voice-note[data-recording]) .composer__context-btn {
+  display: none;
+}
+
+.hermes-voice-note__error {
+  background: var(--color-text);
+  border-radius: 0.75em;
+  color: var(--color-text-reversed);
+  font-size: 0.8rem;
+  font-weight: normal;
+  inline-size: max-content;
+  inset-block-end: calc(100% + 0.5rem);
+  inset-inline-end: 0;
+  max-inline-size: min(80vw, 22rem);
+  padding: 0.5em 0.75em;
+  position: absolute;
+  z-index: 10;
+}
+
+@keyframes hermes-blink {
+  50% { opacity: 0.25; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hermes-voice-note__dot,
+  .hermes-voice-note[data-recording] .hermes-voice-note__toggle,
+  .voice__control::before { animation: none; }
+}
+
+/* ---------------------------------------------------------------------------------------------
+ * Composer: link to the live voice report. Touch screens get a visible label under the icon
+ * (no hover title there), in the same footprint as the round buttons. */
+
+.hermes-live-link__text { display: none; }
+
+@media (pointer: coarse) {
+  .composer .hermes-live-link {
+    --btn-border-radius: 0.9em;
+
+    aspect-ratio: auto;
+    display: inline-flex;
+    flex-direction: column;
+    gap: 0.1em;
+    inline-size: auto;
+    min-inline-size: var(--btn-size);
+    padding-inline: 0.2em;
+
+    img { inline-size: 1.15em; }
+  }
+
+  .hermes-live-link__text {
+    display: block;
+    font-size: 0.6rem;
+    font-weight: 600;
+    line-height: 1;
+  }
+}
+
+/* ---------------------------------------------------------------------------------------------
+ * Audio attachments */
+
+.hermes-audio {
+  display: flex;
+  flex-direction: column;
+  gap: var(--block-space-half);
+  inline-size: min(22rem, calc(100vw - 7rem));
+  max-inline-size: 100%;
+
+  audio {
+    block-size: 2.5rem;
+    inline-size: 100%;
+  }
+}
+
+.hermes-audio__meta {
+  align-items: center;
+  display: flex;
+  gap: var(--inline-space-half);
+  justify-content: space-between;
+  min-inline-size: 0;
+}
+
+.hermes-audio__label {
+  align-items: center;
+  display: inline-flex;
+  gap: 0.4em;
+  min-inline-size: 0;
+  opacity: 0.8;
+}
+
+/* ---------------------------------------------------------------------------------------------
+ * Live voice report page (/rooms/:id/voice) */
+
+/* The room nav pulls its title pill left over the account logo on wide screens; here it follows
+   the back button instead. */
+#nav .room--current.voice__title {
+  margin-inline-start: 0;
+}
+
+.voice {
+  block-size: 100dvh;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: var(--block-space);
+  inline-size: 100%;
+  margin-inline: auto;
+  max-inline-size: 48rem;
+  padding-block: var(--navbar-height) 0;
+  padding-inline: var(--inline-space-double);
+}
+
+.voice__intro {
+  margin: 0;
+  text-align: center;
+  text-wrap: pretty;
+}
+
+.voice__transcript {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: var(--block-space-half);
+  min-block-size: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--block-space-half) 0.4rem;
+
+  /* Newest at the bottom, even when there are only a few lines. */
+  &::before {
+    content: "";
+    flex: 1 1 auto;
+  }
+}
+
+.voice__line {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2em;
+  margin: 0;
+  max-inline-size: 85%;
+}
+
+.voice__role {
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  opacity: 0.8;
+  padding-inline: 0.9em;
+  text-transform: uppercase;
+}
+
+.voice__bubble {
+  background-color: var(--color-message-bg);
+  border-radius: 0.66em;
+  overflow-wrap: anywhere;
+  padding: 0.5em 0.9em;
+}
+
+.voice__line--model { align-self: flex-start; }
+
+.voice__line--user {
+  align-self: flex-end;
+  text-align: end;
+
+  .voice__bubble {
+    background-color: var(--color-selected);
+    text-align: start;
+  }
+}
+
+.voice__line--partial .voice__bubble::after {
+  animation: hermes-blink 1s steps(2, jump-none) infinite;
+  content: " …";
+}
+
+/* Error, closed, unavailable: Campfire's flash colours, in the page flow. */
+.voice__notice {
+  align-items: flex-start;
+  background: color-mix(in oklch, var(--color-negative) 14%, var(--color-bg));
+  border: 1px solid var(--color-negative);
+  border-radius: 0.8em;
+  display: flex;
+  gap: var(--inline-space);
+  padding: 0.75em 1em;
+
+  &[hidden] { display: none; }
+
+  img {
+    flex-shrink: 0;
+    margin-block-start: 0.1em;
+  }
+
+  p { margin: 0; }
+
+  details {
+    font-size: 0.8rem;
+    margin-block-start: 0.4em;
+    opacity: 0.8;
+  }
+
+  code { overflow-wrap: anywhere; }
+
+  .voice__help { white-space: pre-line; }
+}
+
+.voice__notice-icon {
+  align-items: center;
+  background: var(--color-negative);
+  border-radius: 50%;
+  block-size: 1.8em;
+  display: grid;
+  flex-shrink: 0;
+  inline-size: 1.8em;
+  place-items: center;
+
+  img { margin: 0; }
+}
+
+.voice__confirm {
+  align-items: center;
+  border: 1px solid var(--color-border-darker);
+  border-radius: 0.8em;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--block-space-half) var(--inline-space);
+  justify-content: center;
+  padding: 0.75em 1em;
+  text-align: center;
+
+  &[hidden] { display: none; }
+
+  p { flex-basis: 100%; margin: 0; }
+}
+
+/* Done: a success card instead of the control bar. */
+.voice__result {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  gap: var(--block-space);
+  padding-block: var(--block-space) max(var(--block-space), env(safe-area-inset-bottom));
+  text-align: center;
+
+  &[hidden] { display: none; }
+
+  p { margin: 0; }
+}
+
+.voice__result-icon {
+  background-color: var(--color-positive);
+  block-size: 3.5rem;
+  border-radius: 50%;
+  display: grid;
+  inline-size: 3.5rem;
+  place-items: center;
+}
+
+.voice__result-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--inline-space);
+  justify-content: center;
+}
+
+/* The control bar, at the bottom. */
+.voice__bar {
+  align-items: center;
+  border-block-start: 1px solid var(--color-border);
+  display: grid;
+  gap: var(--block-space-half) var(--inline-space-double);
+  grid-template-columns: auto minmax(0, 1fr);
+  padding-block: var(--block-space) max(var(--block-space), env(safe-area-inset-bottom));
+
+  [data-voice-state="done"] & { display: none; }
+}
+
+.voice__control {
+  --voice-level: 0;
+
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  position: relative;
+
+  /* Mic level ring, drawn only while live. */
+  &::before {
+    border: 3px solid var(--color-negative);
+    border-radius: 50%;
+    content: "";
+    inset: 0;
+    opacity: 0;
+    pointer-events: none;
+    position: absolute;
+    transform: scale(calc(1 + var(--voice-level) * 0.35));
+    transition: transform 100ms linear, opacity 200ms;
+  }
+
+  [data-voice-state="live"][data-voice-activity="listening"] &::before {
+    opacity: calc(0.25 + var(--voice-level) * 0.75);
+  }
+}
+
+.voice__toggle {
+  --btn-size: 4.5rem;
+
+  img { inline-size: 1.9rem; }
+
+  .voice__icon-hangup { display: none; inline-size: 2.5rem; }
+
+  [data-voice-state="live"] &,
+  [data-voice-state="finishing"] & {
+    .voice__icon-mic { display: none; }
+    .voice__icon-hangup { display: inline; }
+  }
+
+  /* Idle / resume: Campfire's primary look. */
+  &.btn--reversed img { filter: invert(100%); }
+
+  /* Hang up: .btn--negative, glyph colour explicit so both schemes read. */
+  &.btn--negative img { filter: invert(100%); }
+}
+
+@media (prefers-color-scheme: dark) {
+  .voice__toggle.btn--reversed img { filter: invert(0%); }
+  .voice__toggle.btn--negative img { filter: invert(0%); }
+}
+
+.voice__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15em;
+  min-inline-size: 0;
+}
+
+.voice__status-line {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--inline-space);
+}
+
+.voice__status {
+  font-weight: 600;
+  margin: 0;
+}
+
+.voice__timer {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.8;
+
+  &[hidden] { display: none; }
+}
+
+.voice__hint {
+  font-size: 0.85rem;
+  margin: 0;
+  opacity: 0.8;
+
+  &:empty { display: none; }
+}
+
+.voice__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--inline-space);
+  grid-column: 1 / -1;
+
+  &:not(:has(> :not([hidden]))) { display: none; }
+
+  .btn { font-size: 0.9rem; }
+}
+
+@media (min-width: 40rem) {
+  .voice__bar { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .voice__actions { grid-column: auto; justify-content: flex-end; }
+}

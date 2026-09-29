@@ -106,11 +106,13 @@ fn main() {
     code.push_str("];\n");
 
     // Propshaft::Helper#all_stylesheets_paths: every text/css asset's logical path, sorted.
+    // Hermes fork: except the overrides' `hermes/` stylesheets, which only the Hermes templates
+    // link, so that every other page keeps the reference's exact `<link>` tags.
     code.push_str("pub(crate) static STYLESHEETS: &[&str] = &[\n");
     for (index, _) in by_logical
         .iter()
         .enumerate()
-        .filter(|(_, e)| propshaft::extname(&e.0) == ".css")
+        .filter(|(_, e)| propshaft::extname(&e.0) == ".css" && !e.0.starts_with("hermes/"))
     {
         writeln!(code, "    {:?},", by_logical[index].0).unwrap();
     }
