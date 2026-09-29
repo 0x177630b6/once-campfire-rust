@@ -46,15 +46,21 @@ jobs:
           path: |
             .cargo-home/registry
             target
-          key: cargo-${{ hashFiles('Cargo.lock') }}
+          key: cargo-${{ hashFiles('Cargo.lock', 'bench/loadgen/Cargo.lock') }}
           restore-keys: cargo-
 
-      - name: Clippy and tests
+      # Each check runs even when an earlier one fails, so one run shows every failure. The loadgen
+      # is a workspace of its own, built into target/bench (as bench/run does) so the cache keeps it.
+      - name: Rustfmt, clippy and tests
         run: |
           docker run --rm --user "$(id -u):$(id -g)" \
             --volume "$PWD:/src" --workdir /src \
             --env HOME=/tmp --env CARGO_HOME=/src/.cargo-home --env CARGO_TERM_COLOR=always \
-            campfire-toolchain sh -euc '
-              cargo clippy --locked --workspace --exclude html5ever --all-targets -- -D warnings
-              cargo test --locked --workspace --exclude html5ever
+            campfire-toolchain sh -uc '
+              status=0
+              cargo fmt --all --check || status=1
+              cargo clippy --locked --workspace --exclude html5ever --all-targets -- -D warnings || status=1
+              cargo clippy --locked --manifest-path bench/loadgen/Cargo.toml --target-dir target/bench --all-targets -- -D warnings || status=1
+              cargo test --locked --no-fail-fast --workspace --exclude html5ever || status=1
+              exit $status
             '
