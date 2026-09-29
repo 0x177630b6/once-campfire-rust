@@ -21,6 +21,30 @@ const PLAYBACK_LEAD_S = 0.05
 
 const LABELS = { user: "Employé", model: "Assistant" }
 
+// Every start-up step has a deadline, so a stalled step ends with a message naming it instead of
+// an endless "Connexion en cours…".
+const STEP_TIMEOUT_MS = { mic: 60000, audio: 10000, token: 15000, connect: 20000 }
+
+export class StepTimeout extends Error {
+  constructor(step) {
+    super(`timeout: ${step}`)
+    this.step = step
+  }
+}
+
+export function withTimeout(promise, ms, step) {
+  let timer
+  const deadline = new Promise((_, reject) => { timer = setTimeout(() => reject(new StepTimeout(step)), ms) })
+  return Promise.race([promise, deadline]).finally(() => clearTimeout(timer))
+}
+
+const STEP_LABELS = {
+  mic: "autorisation du micro",
+  audio: "démarrage de l'audio du navigateur",
+  token: "ouverture de session sur le serveur Campfire",
+  connect: "connexion au service vocal Google (generativelanguage.googleapis.com)"
+}
+
 export const MESSAGES = {
   idle: "Appuyez sur « Démarrer » puis décrivez l'incident à voix haute.",
   insecure: "Le micro n'est disponible qu'en HTTPS : ouvrez cette page via une adresse https://.",
@@ -335,12 +359,18 @@ export class LiveSession {
   // has acknowledged the setup. Messages are decoded in order through a per-socket queue and only
   // dispatched while that socket is the current one.
   async #open(handle) {
-    const { token, ws_url } = await this.fetchToken()
+    const { token, ws_url } = await withTimeout(this.fetchToken(), STEP_TIMEOUT_MS.token, "token")
     const socket = this.createSocket(`${ws_url}?access_token=${encodeURIComponent(token)}`)
     socket.binaryType = "arraybuffer"
 
     return new Promise((resolve, reject) => {
       let settled = false
+      const deadline = setTimeout(() => {
+        if (settled) return
+        settled = true
+        closeQuietly(socket)
+        reject(new StepTimeout("connect"))
+      }, STEP_TIMEOUT_MS.connect)
       let inbox = Promise.resolve()
 
       socket.onopen = () => socket.send(JSON.stringify(setupMessage(handle)))
@@ -353,6 +383,7 @@ export class LiveSession {
           if (!settled) {
             if (message.setupComplete) {
               settled = true
+              clearTimeout(deadline)
               resolve(socket)
             }
           } else if (socket === this.socket) {
@@ -366,6 +397,7 @@ export class LiveSession {
       socket.onclose = ({ code, reason }) => {
         if (!settled) {
           settled = true
+          clearTimeout(deadline)
           reject(new ConnectError(code, reason))
         } else if (socket === this.socket && !this.closed) {
           this.socket = null
@@ -524,7 +556,7 @@ export default class extends Controller {
 
     try {
       if (!this.context || this.context.state === "closed") await this.#startAudio()
-      await this.context.resume()
+      await withTimeout(this.context.resume().catch(() => {}), 3000, "audio").catch(() => {})
       const { resumed } = await this.session.restart()
       if (this.state !== "starting") return
 
@@ -669,19 +701,21 @@ export default class extends Controller {
 
   async #startAudio() {
     this.context = new AudioContext()
-    const resumed = this.context.resume()
+    this.context.resume().catch(() => {})
 
     try {
-      this.stream = await navigator.mediaDevices.getUserMedia({
+      this.stream = await withTimeout(navigator.mediaDevices.getUserMedia({
         audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true }
-      })
+      }), STEP_TIMEOUT_MS.mic, "mic")
     } catch (error) {
-      error.micError = true
+      if (!(error instanceof StepTimeout)) error.micError = true
       throw error
     }
 
-    await resumed
-    await this.context.audioWorklet.addModule(this.workletUrlValue)
+    // Some browsers (iOS Safari) leave resume() pending after the permission prompt: don't block
+    // on it, and resume again once the mic is open.
+    await withTimeout(this.context.resume().catch(() => {}), 3000, "audio").catch(() => {})
+    await withTimeout(this.context.audioWorklet.addModule(this.workletUrlValue), STEP_TIMEOUT_MS.audio, "audio")
 
     this.source = this.context.createMediaStreamSource(this.stream)
     this.worklet = new AudioWorkletNode(this.context, "pcm-capture", {
@@ -820,8 +854,9 @@ export default class extends Controller {
         default:                return `${MESSAGES.micError} (${error.name || "erreur"})`
       }
     }
-    if (error instanceof TokenError) return error.status === 429 ? MESSAGES.rateLimited : MESSAGES.tokenError
-    if (error instanceof ConnectError) return MESSAGES.connectError
+    if (error instanceof StepTimeout) return `Bloqué à l'étape « ${STEP_LABELS[error.step] || error.step} ». Réessayez ; si cela se reproduit, signalez cette étape.`
+    if (error instanceof TokenError) return error.status === 429 ? MESSAGES.rateLimited : `${MESSAGES.tokenError} (HTTP ${error.status})`
+    if (error instanceof ConnectError) return `${MESSAGES.connectError} (code ${error.code}${error.reason ? `, ${error.reason}` : ""})`
     return `${MESSAGES.connectError} (${error?.message || error})`
   }
 
