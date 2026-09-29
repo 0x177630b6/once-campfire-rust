@@ -15,12 +15,13 @@ http-body-util = "0.1"
 bytes = "1"
 tokio-tungstenite = "0.29"
 futures-util = "0.3"
-hdrhistogram = "7"
+hdrhistogram = { version = "7", default-features = false }
 serde_json = "1"
 regex = "1"
-# `loadgen gzip`: the app's deflate backend (flate2's default, miniz_oxide) against zlib-rs.
+# `loadgen gzip`: zlib-rs, the app's deflate backend, against miniz_oxide, flate2's default.
+# `runtime_detection` gives zlib-rs the `std` its SIMD feature detection needs.
 miniz_oxide = "0.9"
-flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
+flate2 = { version = "1", default-features = false, features = ["zlib-rs", "runtime_detection"] }
 
 [profile.release]
 debug = false
