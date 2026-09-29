@@ -415,6 +415,8 @@ cases:
     body: 'ATTRS_401'
   - name: malformed html document
     body: '<!DOCTYPE html><html><head><title>t</title></head><body><p>b</p></body></html>'
+  - name: malformed html tags in the body
+    body: '<p>a</p><html lang="en" dir="rtl"><p>b</p><html lang="fr" title="t" dir="ltr">c<body class="x">d'
   - name: malformed nested formatting
     body: '<b><b><b><b><b>deep</b></b></b></b></b><i><i>x'
   - name: malformed div in span

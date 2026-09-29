@@ -4417,6 +4417,28 @@
       }
     },
     {
+      "name": "malformed html tags in the body",
+      "host": "once.campfire.test",
+      "body": "<p>a</p><html lang=\"en\" dir=\"rtl\"><p>b</p><html lang=\"fr\" title=\"t\" dir=\"ltr\">c<body class=\"x\">d",
+      "presentation": {
+        "ok": "<div class=\"lexxy-content\">\n  <p>a</p><p>b</p>cd\n</div>\n"
+      },
+      "presentation_raised": null,
+      "presentation_raised_message": null,
+      "plain_text": {
+        "ok": "a\n\nb\n\ncd"
+      },
+      "editable": {
+        "ok": "<p>a</p><p>b</p>cd"
+      },
+      "mentioned": {
+        "ok": []
+      },
+      "filtered": {
+        "ok": "<p>a</p><p>b</p>cd"
+      }
+    },
+    {
       "name": "malformed nested formatting",
       "host": "once.campfire.test",
       "body": "<b><b><b><b><b>deep</b></b></b></b></b><i><i>x",

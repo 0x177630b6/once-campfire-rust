@@ -3,7 +3,7 @@
 
 use std::time::{Duration, Instant};
 
-use campfire_richtext::dom::Dom;
+use campfire_richtext::dom::{Dom, MAX_ATTRIBUTES};
 use campfire_richtext::{
     AttachableResolver, GidLookup, RenderContext, SignedLookup, editable_value, message_presentation, to_plain_text,
 };
@@ -148,6 +148,23 @@ fn a_tag_with_too_many_attributes_is_refused_quickly() {
     // Each attribute is checked against the tag's others for a duplicate, up to Gumbo's limit
     let attributes: Vec<String> = (1..=64_000).map(|i| format!("a{i}=1")).collect();
     assert_refused_quickly(&format!("<b {}>x</b>", attributes.join(" ")), "a tag with 64,000 attributes");
+}
+
+#[test]
+fn html_tags_in_the_body_parse_in_linear_time() {
+    // Each one's attributes go to the fragment's root <html> element, unless it has them already.
+    // Checking every one against all the root had collected made 800 KB of them take 1.5 seconds.
+    let body: String = (0..200)
+        .map(|tag| {
+            let names: Vec<String> = (1..=MAX_ATTRIBUTES).map(|i| format!("a{}", tag * MAX_ATTRIBUTES + i)).collect();
+            format!("<html {}>", names.join(" "))
+        })
+        .collect();
+    assert!(body.len() > 500_000);
+    let started = Instant::now();
+    assert_eq!(to_plain_text(&body, &ctx()).unwrap(), "");
+    assert_eq!(presentation(&body), presentation(""));
+    assert_quick(started, "550 KB of <html> tags, each with 400 new attributes");
 }
 
 #[test]

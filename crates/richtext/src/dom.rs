@@ -623,6 +623,11 @@ impl Sink {
         nodes.len() - 1
     }
 
+    /// The `html` element html5ever puts the fragment's nodes under (see `ParsedTree::fragment_root`).
+    fn is_fragment_root(&self, id: NodeId) -> bool {
+        self.nodes.borrow()[id].parent == Some(self.get_document())
+    }
+
     fn detach(&self, id: NodeId) {
         let mut nodes = self.nodes.borrow_mut();
         if let Some(parent) = nodes[id].parent.take() {
@@ -729,6 +734,12 @@ impl TreeSink for Sink {
     }
 
     fn add_attrs_if_missing(&self, target: &NodeId, attrs: Vec<Attribute>) {
+        // An <html> tag in the body gives its attributes to the fragment's root <html> element,
+        // which parse_nodes never reads. Merging them there would compare each one with all the
+        // root had collected, so a body of <html> tags would take quadratic time.
+        if self.is_fragment_root(*target) {
+            return;
+        }
         if let NodeData::Element(e) = &mut self.nodes.borrow_mut()[*target].data {
             for a in attrs {
                 if !e.attrs.iter().any(|existing| existing.name == a.name) {
