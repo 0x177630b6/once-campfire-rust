@@ -738,19 +738,6 @@ async fn request_ids_are_sanitized_passthroughs() {
     assert_eq!(reply.header("x-request-id"), Some("abc-123script"));
 }
 
-async fn slow(c: &mut Ctx) -> Result {
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-    Ok(c.head(StatusCode::OK))
-}
-
-#[tokio::test]
-async fn request_timeout_is_408() {
-    let config = KitConfig { request_timeout: Some(std::time::Duration::from_millis(20)), ..KitConfig::default() };
-    let app = campfire_kit::app(Router::new().route("/slow", campfire_kit::get(slow)), kit_with(config));
-    let reply = send(&app, get("/slow").body(AxumBody::empty()).unwrap()).await;
-    assert_eq!(reply.status, StatusCode::REQUEST_TIMEOUT);
-}
-
 #[tokio::test]
 async fn serves_with_peer_addresses_and_shuts_down_gracefully() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};

@@ -24,7 +24,6 @@ tokio        = { version = "1", features = ["full"] }
 # (for axum::serve) and `ws` in their dev-dependencies.
 axum         = { version = "0.8", default-features = false, features = ["tokio"] }
 tower        = "0.5"
-tower-http   = { version = "0.6", features = ["limit", "timeout", "fs"] }
 hyper        = "1"
 serde        = { version = "1", features = ["derive"] }
 serde_json   = { version = "1", features = ["preserve_order"] }

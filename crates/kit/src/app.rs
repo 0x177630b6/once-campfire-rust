@@ -2,7 +2,6 @@
 
 use std::any::Any;
 use std::sync::Arc;
-use std::time::Duration;
 
 use axum::http::{HeaderName, HeaderValue};
 
@@ -28,8 +27,6 @@ pub struct KitConfig {
     pub error_pages: ErrorPages,
     /// Largest request body accepted; `None` is unlimited, like Puma.
     pub max_body_bytes: Option<usize>,
-    /// Per-request timeout (`408` when exceeded); `None` disables it.
-    pub request_timeout: Option<Duration>,
 }
 
 impl Default for KitConfig {
@@ -43,7 +40,6 @@ impl Default for KitConfig {
             default_headers: rails_default_headers(),
             error_pages: ErrorPages::default(),
             max_body_bytes: None,
-            request_timeout: None,
         }
     }
 }

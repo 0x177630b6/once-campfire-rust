@@ -380,12 +380,8 @@ pub async fn not_found(State(kit): State<Kit>, req: axum::extract::Request) -> a
 }
 
 /// Finish an app router: Rails-style 404s for unknown paths *and* unknown methods (Axum would say
-/// 405), the Kit state, the pre-routing middleware, and the configured request timeout.
+/// 405), the Kit state and the pre-routing middleware.
 pub fn app(router: Router<Kit>, kit: Kit) -> Router {
     let routed = router.fallback(not_found).method_not_allowed_fallback(not_found).with_state(kit.clone());
-    let mut app = Router::new().fallback_service(routed).layer(axum::middleware::from_fn_with_state(kit.clone(), rails_middleware));
-    if let Some(timeout) = kit.config().request_timeout {
-        app = app.layer(tower_http::timeout::TimeoutLayer::with_status_code(StatusCode::REQUEST_TIMEOUT, timeout));
-    }
-    app
+    Router::new().fallback_service(routed).layer(axum::middleware::from_fn_with_state(kit, rails_middleware))
 }
