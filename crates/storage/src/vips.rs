@@ -15,7 +15,9 @@ struct VipsImage {
 }
 
 const VIPS_ARGUMENT_REQUIRED: c_int = 1;
+const VIPS_ARGUMENT_CONSTRUCT: c_int = 2;
 const VIPS_ARGUMENT_INPUT: c_int = 16;
+const VIPS_ARGUMENT_DEPRECATED: c_int = 64;
 const VIPS_ACCESS_SEQUENTIAL: c_int = 1;
 const VIPS_SIZE_DOWN: c_int = 2;
 const VIPS_PRECISION_INTEGER: c_int = 0;
@@ -33,7 +35,7 @@ unsafe extern "C" {
     fn vips_error_clear();
     fn vips_foreign_find_load(filename: *const c_char) -> *const c_char;
     fn vips_operation_new(name: *const c_char) -> *mut c_void;
-    fn vips_object_get_argument_flags(object: *mut c_void, name: *const c_char) -> c_int;
+    fn vips_object_get_args(object: *mut c_void, names: *mut *const *const c_char, flags: *mut *const c_int, n_args: *mut c_int) -> c_int;
     fn vips_image_new_from_file(name: *const c_char, ...) -> *mut VipsImage;
     fn vips_image_new_matrix_from_array(width: c_int, height: c_int, array: *const c_double, size: c_int) -> *mut VipsImage;
     fn vips_image_set_double(image: *mut VipsImage, name: *const c_char, d: c_double);
@@ -190,8 +192,11 @@ fn sharpen_mask() -> Result<Image> {
     Ok(mask)
 }
 
-/// Whether the loader libvips picks for `path` has an optional `page` input (ruby-vips'
-/// `Introspect#optional_input`).
+/// Whether the loader libvips picks for `path` has an optional `page` input, as
+/// `Utils.select_valid_loader_options` asks ruby-vips' `Introspect`. The whole argument table is
+/// read, like `Introspect`'s `vips_argument_map`: asking `vips_object_get_argument_flags` for an
+/// argument the loader doesn't have (jpegload, pngload) appends "no property named `page'" to
+/// libvips' error buffer.
 fn loader_accepts_page(path: &CStr) -> bool {
     unsafe {
         let loader = vips_foreign_find_load(path.as_ptr());
@@ -204,10 +209,20 @@ fn loader_accepts_page(path: &CStr) -> bool {
             vips_error_clear();
             return false;
         }
-        let flags = vips_object_get_argument_flags(operation, c"page".as_ptr());
+        // The arrays belong to `operation`, so they're read before it's unreferenced.
+        let (mut names, mut flags, mut n) = (std::ptr::null(), std::ptr::null(), 0);
+        let accepts = vips_object_get_args(operation, &mut names, &mut flags, &mut n) == 0
+            && (0..n as usize).any(|i| CStr::from_ptr(*names.add(i)) == c"page" && optional_input(*flags.add(i)));
         g_object_unref(operation);
-        flags & VIPS_ARGUMENT_INPUT != 0 && flags & VIPS_ARGUMENT_REQUIRED == 0
+        accepts
     }
+}
+
+/// `Introspect#optional_input` (ruby-vips vips/operation.rb): construct-time inputs that aren't
+/// required, counting deprecated required ones as optional.
+fn optional_input(flags: c_int) -> bool {
+    let required = flags & VIPS_ARGUMENT_REQUIRED != 0 && flags & VIPS_ARGUMENT_DEPRECATED == 0;
+    flags & VIPS_ARGUMENT_CONSTRUCT != 0 && flags & VIPS_ARGUMENT_INPUT != 0 && !required
 }
 
 fn cstring(path: &Path) -> Result<CString> {
@@ -215,8 +230,9 @@ fn cstring(path: &Path) -> Result<CString> {
     CString::new(path.as_os_str().as_bytes()).map_err(|_| Error::Vips("path contains a NUL byte".into()))
 }
 
-/// libvips' error buffer is process-wide; `vips_error_buffer_copy` takes and clears it under
-/// libvips' lock, so concurrent calls don't read each other's errors.
+/// libvips' error buffer, taken and cleared in one step by `vips_error_buffer_copy`. The buffer is
+/// shared by every thread, so the message can include another thread's error that was pending at
+/// the same time (and a `vips_error_clear` on another thread can drop this one's).
 fn take_error() -> String {
     unsafe {
         let copy = vips_error_buffer_copy();
@@ -226,5 +242,22 @@ fn take_error() -> String {
         let message = CStr::from_ptr(copy).to_string_lossy().trim_end().to_string();
         g_free(copy.cast());
         message
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn page_goes_only_to_loaders_that_take_it() {
+        let moon = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../reference/test/fixtures/files/moon.jpg");
+        let image = Image::load_for_processing(&moon).unwrap().resize_to_limit(Some(8), Some(8)).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        for (format, accepts) in [("jpg", false), ("png", false), ("gif", true), ("webp", true)] {
+            let path = dir.path().join(format!("moon.{format}"));
+            image.write_to_file(&path).unwrap();
+            assert_eq!(loader_accepts_page(&cstring(&path).unwrap()), accepts, "{format}");
+        }
     }
 }

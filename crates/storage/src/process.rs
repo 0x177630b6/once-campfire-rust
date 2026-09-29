@@ -155,6 +155,33 @@ fn wait_until(child: &mut Child, deadline: Instant) -> std::io::Result<Option<Ex
 mod tests {
     use super::*;
 
+    fn fixture(name: &str) -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../reference/test/fixtures/files").join(name)
+    }
+
+    fn thumbnail(input: &Path, size: i64, format: &str) -> Result<NamedTempFile> {
+        transform(input, &Variation::resize_to_limit(size, size, Some(format)))
+    }
+
+    #[test]
+    fn a_failing_variant_reports_its_own_error_after_many_variants() {
+        // libvips' error buffer is process-wide and holds 10 KB. Probing JPEG and PNG loaders for
+        // `page` used to append "no property named `page'" to it on every variant, until it was
+        // full and the next real error was cut off.
+        let jpeg = thumbnail(&fixture("moon.jpg"), 8, "jpg").unwrap();
+        let png = thumbnail(jpeg.path(), 8, "png").unwrap();
+        for _ in 0..200 {
+            thumbnail(jpeg.path(), 4, "webp").unwrap();
+            thumbnail(png.path(), 4, "webp").unwrap();
+        }
+
+        let corrupt = tempfile::Builder::new().suffix(".jpg").tempfile().unwrap();
+        std::fs::write(corrupt.path(), b"\xFF\xD8\xFF\xE0 not really a JPEG").unwrap();
+        let Err(Error::Vips(message)) = thumbnail(corrupt.path(), 4, "webp") else { panic!("a corrupt JPEG made a variant") };
+        assert!(message.contains("JPEG datastream contains no image"), "{message}");
+        assert!(!message.contains("no property named"), "{message}");
+    }
+
     #[test]
     fn output_within_captures_a_quick_child() {
         let mut command = Command::new("sh");
