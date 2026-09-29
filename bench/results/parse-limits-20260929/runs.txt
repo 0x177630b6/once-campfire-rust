@@ -1,0 +1,27 @@
+# message_presentation / to_plain_text, native release build, best of 3 runs (200 for bodies under
+# 4 KB; one for a run over a second) (timing.rs)
+# before: d3d6585 (Gumbo's limits checked on the finished tree)
+small message (50 bytes): presentation 11.873µs (Ok(138)), plain text 1.583µs (Ok(36))
+paragraphs (221184 bytes): presentation 14.617681ms (Ok(221222)), plain text 2.962344ms (Ok(186622))
+<div> x 400 (2000 bytes): presentation 3.266771ms (Err(Parse(TreeDepthExceeded))), plain text 848.693µs (Ok(0))
+<div> x 20k (100000 bytes): presentation 978.974048ms (Err(Parse(TreeDepthExceeded))), plain text 977.670263ms (Err(Parse(TreeDepthExceeded)))
+<div> x 80k (400000 bytes): presentation 16.096373968s (Err(Parse(TreeDepthExceeded))), plain text 16.021542499s (Err(Parse(TreeDepthExceeded)))
+<a><b> x 80k (480000 bytes): presentation 1.385540536s (Err(Parse(TreeDepthExceeded))), plain text 1.408975643s (Err(Parse(TreeDepthExceeded)))
+<a><div><div> x 30k (390000 bytes): presentation 10.726055901s (Err(Parse(TreeDepthExceeded))), plain text 9.809452196s (Err(Parse(TreeDepthExceeded)))
+<b> with 32k attributes (276902 bytes): presentation 716.456566ms (Err(Parse(TooManyAttributes))), plain text 709.779293ms (Err(Parse(TooManyAttributes)))
+<table> and <br> x 120k (480007 bytes): presentation 1.587815498s (Ok(480053)), plain text 1.479408755s (Ok(0))
+# after: 7d6fb18 (limits enforced while parsing; foster parenting finds the table from the end)
+small message (50 bytes): presentation 11.032µs (Ok(138)), plain text 1.473µs (Ok(36))
+paragraphs (221184 bytes): presentation 13.804276ms (Ok(221222)), plain text 2.833451ms (Ok(186622))
+<div> x 400 (2000 bytes): presentation 3.099242ms (Err(Parse(TreeDepthExceeded))), plain text 817.041µs (Ok(0))
+<div> x 20k (100000 bytes): presentation 1.571669ms (Err(Parse(TreeDepthExceeded))), plain text 1.568213ms (Err(Parse(TreeDepthExceeded)))
+<div> x 80k (400000 bytes): presentation 5.128708ms (Err(Parse(TreeDepthExceeded))), plain text 5.136634ms (Err(Parse(TreeDepthExceeded)))
+<a><b> x 80k (480000 bytes): presentation 6.219536ms (Err(Parse(TreeDepthExceeded))), plain text 6.188084ms (Err(Parse(TreeDepthExceeded)))
+<a><div><div> x 30k (390000 bytes): presentation 5.717092ms (Err(Parse(TreeDepthExceeded))), plain text 5.698384ms (Err(Parse(TreeDepthExceeded)))
+<b> with 32k attributes (276902 bytes): presentation 3.370764ms (Err(Parse(TooManyAttributes))), plain text 3.35871ms (Err(Parse(TooManyAttributes)))
+<table> and <br> x 120k (480007 bytes): presentation 89.811185ms (Ok(480053)), plain text 18.812288ms (Ok(0))
+
+# For scale: Nokogiri 1.19.4 in campfire-reference, Nokogiri::HTML5::Document.new.fragment alone
+<div> x 80k (400000 bytes): 0.2 ms (tree depth limit exceeded)
+<b> with 32k attributes (276902 bytes): 2.6 ms (attributes per element limit exceeded)
+<table> and <br> x 120k (480007 bytes): 41.2 ms
