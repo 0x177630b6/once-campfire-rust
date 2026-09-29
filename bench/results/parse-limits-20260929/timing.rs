@@ -19,6 +19,9 @@ impl AttachableResolver for NoRecords {
 fn main() {
     let ctx = RenderContext { resolver: &NoRecords, request_host: Some("once.campfire.test".into()) };
     let attributes = |n: usize| format!("<b {}>x</b>", (1..=n).map(|i| format!("a{i}=1")).collect::<Vec<_>>().join(" "));
+    let html_tags = |n: usize| -> String {
+        (0..n).map(|t| format!("<html {}>", (1..=400).map(|i| format!("a{}", t * 400 + i)).collect::<Vec<_>>().join(" "))).collect()
+    };
     let bodies = [
         ("small message", "<p>Hello <b>world</b>, see https://example.com</p>".to_string()),
         ("paragraphs", "<p>Some text here and there.</p>".repeat(216 * 1024 / 32)),
@@ -29,6 +32,8 @@ fn main() {
         ("<a><div><div> x 30k", "<a><div><div>".repeat(30_000)),
         ("<b> with 32k attributes", attributes(32_000)),
         ("<table> and <br> x 120k", format!("<table>{}", "<br>".repeat(120_000))),
+        ("<html> x 200, each with 400 new attributes", html_tags(200)),
+        ("<div> x 401 then <a><b> to 16 MB", format!("{}{}", "<div>".repeat(401), "<a><b>".repeat(16 * 1024 * 1024 / 6))),
     ];
     for (name, body) in bodies {
         // Best of a few runs for the quick ones
