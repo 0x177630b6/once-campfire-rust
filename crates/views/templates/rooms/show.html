@@ -6,7 +6,7 @@
   <meta name="current-room-id" content="{{ show.room.id }}">
 {%- endblock %}
 
-{%- block nav %}{% let room = &show.room %}{% include "rooms/show/_nav.html" %}{% if let Some(voice_path) = show.voice_path %}{% include "hermes/_voice_button.html" %}{% endif %}{% endblock %}
+{%- block nav %}{% let room = &show.room %}{% include "rooms/show/_nav.html" %}{% endblock %}
 
 {%- block sidebar %}{{ h::sidebar_turbo_frame_tag(Some(h::routes::user_sidebar().as_str()), "") }}{% endblock %}
 

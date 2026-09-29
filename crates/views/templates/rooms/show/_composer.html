@@ -25,6 +25,7 @@
                   <input type="file" data-action="composer#filePicked" multiple />
                   <span class="for-screen-reader">Attach a file</span>
                 </label>
+                {%- include "hermes/_composer_buttons.html" %}
 
                 <button class="btn btn--borderless txt-small flex-item-no-shrink composer__rich-text-btn" type="button" data-action="composer#toggleToolbar">
                   <img class="colorize--black" aria-hidden="true" src="{{ ctx.asset("text-options.svg") }}" width="20" height="20" />

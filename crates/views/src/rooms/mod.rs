@@ -78,9 +78,14 @@ pub struct ShowView {
     pub join_code: String,
     /// `Turbo::StreamsChannel.signed_stream_name([room, :messages])`.
     pub messages_stream_name: String,
-    /// Hermes fork: the live voice report page, when that feature is on (the nav's mic button).
+    /// Hermes fork: the live voice report page, when that feature is on (the composer's
+    /// waveform button, `hermes/_composer_buttons`).
     #[serde(default)]
     pub voice_path: Option<String>,
+    /// Hermes fork: the composer's record-a-voice-note button (`hermes/_composer_buttons`).
+    /// Always on in the app; off by default so the reference goldens render the upstream composer.
+    #[serde(default)]
+    pub voice_note: bool,
 }
 
 /// `rooms/show`.

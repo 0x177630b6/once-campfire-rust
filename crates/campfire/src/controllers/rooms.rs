@@ -212,6 +212,7 @@ async fn render_show(c: &mut Ctx, room: Room) -> Result {
                 join_code: Account::first(conn)?.map(|account| account.join_code).unwrap_or_default(),
                 messages_stream_name: rails_compat::turbo::signed_stream_name(&app.secrets, &[&room_gid, "messages"]),
                 voice_path: app.gemini_live.as_ref().map(|_| crate::controllers::voice::voice_path(room.id)),
+                voice_note: true,
             })
         })
         .await

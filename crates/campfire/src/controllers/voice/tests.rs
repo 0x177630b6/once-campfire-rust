@@ -62,7 +62,8 @@ async fn everything_is_404_while_the_feature_is_off() {
 
     let room = david.get(&format!("/rooms/{ALL_TALK}")).await;
     assert_eq!(room.status, StatusCode::OK);
-    assert!(!room.text().contains("/voice\""), "no mic button");
+    assert!(!room.text().contains("/voice\""), "no live button");
+    assert!(room.text().contains(r#"data-controller="voice-note""#), "voice notes don't need Gemini");
 }
 
 #[tokio::test]
@@ -71,7 +72,10 @@ async fn the_page_wires_the_voice_controller() {
     let mut david = app.david();
 
     let room = david.get(&format!("/rooms/{ALL_TALK}")).await;
-    assert!(room.text().contains(&format!(r#"href="/rooms/{ALL_TALK}/voice""#)), "the mic button");
+    assert!(
+        room.text().contains(&format!(r#"href="/rooms/{ALL_TALK}/voice" data-turbo-frame="_top""#)),
+        "the composer's live button"
+    );
 
     let page = david.get(&voice_path(ALL_TALK)).await;
     assert_eq!(page.status, StatusCode::OK, "{}", page.text());
