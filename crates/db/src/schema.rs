@@ -9,7 +9,6 @@
 //! migration order. All queries in this crate name their columns, so both work.
 
 use rusqlite::{Connection, OptionalExtension, params};
-use sha1::{Digest, Sha1};
 
 use crate::error::{Error, Result};
 use crate::time::{Clock, Timestamp};
@@ -154,11 +153,6 @@ fn table_exists(conn: &Connection, name: &str) -> Result<bool> {
         .exists([name])?)
 }
 
-/// SHA1 hex of a schema file, as Rails computes it for `schema_sha1`.
-pub fn schema_sha1(contents: &[u8]) -> String {
-    hex::encode(Sha1::digest(contents))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -168,8 +162,9 @@ mod tests {
 
     #[test]
     fn schema_sha1_matches_reference_schema_rb() {
+        use sha1::{Digest, Sha1};
         let contents = std::fs::read(format!("{REFERENCE}/schema.rb")).unwrap();
-        assert_eq!(schema_sha1(&contents), SCHEMA_SHA1);
+        assert_eq!(hex::encode(Sha1::digest(contents)), SCHEMA_SHA1);
     }
 
     #[test]
