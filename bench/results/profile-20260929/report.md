@@ -2,7 +2,9 @@
 
 `bench/profile cpu --label main` with gperftools' `libprofiler.so` (SIGPROF at 1 kHz), native
 release build with line tables, server on cores 8–11 and load generator on 12–15. Each target's
-folded stacks and rollup are beside this file (`cpu-<target>.folded`, `cpu-<target>.top.md`).
+rollup is beside this file (`cpu-<target>.top.md`); the folded stacks the shares below were
+computed from are ~150 MB each, so they aren't committed (`bench/.gitignore`) and come back by
+rerunning the command.
 Another project's fuzzer ran on cores 2, 6 and 18–23 throughout; a profile's shares are less
 sensitive to that than throughput is.
 
