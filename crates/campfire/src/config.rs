@@ -25,6 +25,10 @@
 //!   in the process, so it's bounded like Rails' `MemoryStore` (default `size` 32 MB), evicting the
 //!   least recently used fragments. See `campfire_views::fragment_cache`.
 //!
+//! - Hermes fork, live voice incident reports (Gemini Live, see docs/hermes-gemini-live.md):
+//!   `GEMINI_API_KEY` turns the feature on; `GEMINI_LIVE_MODEL`, `GEMINI_LIVE_VOICE_BOT`,
+//!   `GEMINI_LIVE_TOKENS_PER_HOUR` and `GEMINI_LIVE_EXTRA_INSTRUCTIONS` tune it ([`GeminiLiveConfig`]).
+//!
 //! Storage paths mirror `Rails.root.join("storage")`: the database under `db/`, blobs under
 //! `files/` (`config/storage.yml`), backups under `backups/` (`script/admin/prepare-backup`).
 
@@ -55,6 +59,47 @@ pub struct Config {
     /// Hermes fork: lifetime of the signed `message.attachment.path` in bot webhooks
     /// (`HERMES_ATTACHMENT_URL_TTL_MINUTES`, default 60).
     pub webhook_attachment_ttl: jiff::SignedDuration,
+    /// Hermes fork: live voice incident reports; `None` (routes 404, no mic button) unless
+    /// `GEMINI_API_KEY` is set.
+    pub gemini_live: Option<GeminiLiveConfig>,
+}
+
+/// Hermes fork: what the live voice report (`controllers::voice`) needs from the environment.
+#[derive(Debug, Clone)]
+pub struct GeminiLiveConfig {
+    /// `GEMINI_API_KEY`: stays on the server; browsers only get single-use ephemeral tokens.
+    pub api_key: ApiKey,
+    /// `GEMINI_LIVE_MODEL` (default `models/gemini-3.8-live`; a bare name gets `models/`).
+    pub model: String,
+    /// `GEMINI_LIVE_VOICE_BOT`: the bot the report @mentions, by user id or exact name. Unset,
+    /// the room's only active bot (a room with none or several can't take reports).
+    pub voice_bot: Option<String>,
+    /// `GEMINI_LIVE_TOKENS_PER_HOUR`: tokens one user may mint per rolling hour (default 10).
+    pub tokens_per_hour: usize,
+    /// `GEMINI_LIVE_EXTRA_INSTRUCTIONS`: appended to the interviewer's system instruction.
+    pub extra_instructions: Option<String>,
+}
+
+pub const DEFAULT_GEMINI_LIVE_MODEL: &str = "models/gemini-3.8-live";
+
+/// A secret that never shows in `Debug` output (the config is logged on some errors).
+#[derive(Clone, PartialEq, Eq)]
+pub struct ApiKey(String);
+
+impl ApiKey {
+    pub fn new(key: impl Into<String>) -> Self {
+        Self(key.into())
+    }
+
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for ApiKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ApiKey([REDACTED])")
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -144,7 +189,26 @@ impl Config {
             webhook_attachment_ttl: jiff::SignedDuration::from_mins(
                 i64::try_from(number("HERMES_ATTACHMENT_URL_TTL_MINUTES", 60)?.max(1)).unwrap_or(60),
             ),
+            gemini_live: match present("GEMINI_API_KEY") {
+                Some(key) => Some(GeminiLiveConfig {
+                    api_key: ApiKey::new(key.trim()),
+                    model: gemini_model_name(present("GEMINI_LIVE_MODEL").as_deref()),
+                    voice_bot: present("GEMINI_LIVE_VOICE_BOT").map(|bot| bot.trim().to_string()),
+                    tokens_per_hour: number("GEMINI_LIVE_TOKENS_PER_HOUR", 10)?.max(1),
+                    extra_instructions: present("GEMINI_LIVE_EXTRA_INSTRUCTIONS"),
+                }),
+                None => None,
+            },
         })
+    }
+}
+
+/// `models/<name>`, as `BidiGenerateContentSetup.model` wants it.
+fn gemini_model_name(model: Option<&str>) -> String {
+    match model.map(str::trim) {
+        None => DEFAULT_GEMINI_LIVE_MODEL.to_string(),
+        Some(model) if model.starts_with("models/") => model.to_string(),
+        Some(model) => format!("models/{model}"),
     }
 }
 
@@ -223,6 +287,30 @@ mod tests {
         assert_eq!(subject(&[("VAPID_SUBJECT", "mailto:ops@example.com"), ("TLS_DOMAIN", "chat.example.com")]), "mailto:ops@example.com");
         assert_eq!(subject(&[("TLS_DOMAIN", " , chat.example.com,other.example.com")]), "https://chat.example.com");
         assert_eq!(subject(&[("VAPID_SUBJECT", " ")]), "https://github.com/basecamp/once-campfire-rust");
+    }
+
+    #[test]
+    fn gemini_live_is_off_without_a_key() {
+        assert!(config(&[("SECRET_KEY_BASE", "abc"), ("GEMINI_API_KEY", " ")]).unwrap().gemini_live.is_none());
+        let live = config(&[("SECRET_KEY_BASE", "abc"), ("GEMINI_API_KEY", "k")]).unwrap().gemini_live.unwrap();
+        assert_eq!(live.model, "models/gemini-3.8-live");
+        assert_eq!((live.voice_bot, live.tokens_per_hour, live.extra_instructions), (None, 10, None));
+        assert_eq!(format!("{:?}", live.api_key), "ApiKey([REDACTED])");
+    }
+
+    #[test]
+    fn gemini_live_settings() {
+        let live = config(&[
+            ("SECRET_KEY_BASE", "abc"),
+            ("GEMINI_API_KEY", "k"),
+            ("GEMINI_LIVE_MODEL", "gemini-live-x"),
+            ("GEMINI_LIVE_VOICE_BOT", " Hermes "),
+            ("GEMINI_LIVE_TOKENS_PER_HOUR", "3"),
+        ])
+        .unwrap()
+        .gemini_live
+        .unwrap();
+        assert_eq!((live.model.as_str(), live.voice_bot.as_deref(), live.tokens_per_hour), ("models/gemini-live-x", Some("Hermes"), 3));
     }
 
     #[test]

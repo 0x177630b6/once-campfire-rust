@@ -42,6 +42,8 @@ pub struct AppState {
     /// `Rails.cache` for view fragments (`cache message do`), current during every request
     /// and every render outside one.
     pub fragment_cache: Arc<FragmentCache>,
+    /// Hermes fork: live voice incident reports; `None` unless `GEMINI_API_KEY` is set.
+    pub gemini_live: Option<crate::integrations::gemini_live::GeminiLive>,
 }
 
 impl AppState {
@@ -101,6 +103,9 @@ pub async fn boot(config: Config) -> anyhow::Result<Booted> {
 
     let fragment_cache = FragmentCache::new(config.fragment_cache_bytes);
     let web_push = crate::integrations::web_push_pool(&config, &db);
+    let gemini_live = config.gemini_live.clone().map(|live| {
+        crate::integrations::gemini_live::GeminiLive::new(live, crate::integrations::net::Network::system())
+    });
     let app = Arc::new(AppState {
         config,
         secrets,
@@ -112,6 +117,7 @@ pub async fn boot(config: Config) -> anyhow::Result<Booted> {
         jobs,
         web_push,
         fragment_cache,
+        gemini_live,
     });
 
     let mut registry = jobs::Registry::with_core_jobs();
