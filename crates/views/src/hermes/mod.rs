@@ -28,6 +28,8 @@ pub struct VoiceView {
     pub token_url: String,
     /// `POST`: the confirmed report, published in the room.
     pub report_url: String,
+    /// `POST`: an `ask_hermes` question, answered by the Hermes agent; only with `HERMES_ASK_URL`.
+    pub ask_url: Option<String>,
     /// The digested `voice/pcm-worklet.js`, for `audioWorklet.addModule`.
     pub worklet_url: String,
 }

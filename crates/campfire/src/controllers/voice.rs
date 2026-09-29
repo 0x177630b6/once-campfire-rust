@@ -6,8 +6,11 @@
 //! - `POST /rooms/:room_id/voice/report`: the confirmed report (the `submit_incident` arguments
 //!   plus the transcript, as JSON), posted in the room as the current user with an @mention of the
 //!   Hermes bot, through the same path as `MessagesController#create`.
+//! - `POST /rooms/:room_id/voice/ask`: the interviewer's `ask_hermes` question (`{"question"}`),
+//!   forwarded to the Hermes bridge (`HERMES_ASK_URL`); answers `{"answer"}`. 404 unless
+//!   `HERMES_ASK_URL` is set too.
 //!
-//! All three 404 unless `GEMINI_API_KEY` is set, and run `ApplicationController`'s chain
+//! All four 404 unless `GEMINI_API_KEY` is set, and run `ApplicationController`'s chain
 //! (session only, no bots, `Sec-Fetch-Site` forgery protection for the POSTs) and `RoomScoped`'s
 //! membership check.
 
@@ -22,6 +25,7 @@ use crate::controllers::presenters::Presenter;
 use crate::controllers::presenters::accounts::attachable_sgid;
 use crate::controllers::presenters::page::{self, db_error};
 use crate::integrations::gemini_live::{self, GeminiLive, Interview, MintError};
+use crate::integrations::hermes_ask::{self, AskError, Question};
 
 /// The page's path, for the room nav's mic button.
 pub fn voice_path(room_id: i64) -> String {
@@ -36,6 +40,10 @@ pub fn voice_report_path(room_id: i64) -> String {
     format!("/rooms/{room_id}/voice/report")
 }
 
+pub fn voice_ask_path(room_id: i64) -> String {
+    format!("/rooms/{room_id}/voice/ask")
+}
+
 /// The AudioWorklet the page's controller loads (`crates/assets/overrides/voice/pcm-worklet.js`).
 pub const WORKLET_ASSET: &str = "voice/pcm-worklet.js";
 
@@ -47,12 +55,14 @@ pub async fn show(c: &mut Ctx) -> Result {
     let (_, room) = concerns::set_room(c).await?;
     let room_name = room_display_name(c, &room).await?;
     let worklet_url = campfire_assets::try_asset_path(WORKLET_ASSET).map_err(Error::internal)?;
+    let ask_url = feature(c)?.ask_enabled().then(|| voice_ask_path(room.id));
     let view = campfire_views::hermes::VoiceView {
         room_id: room.id,
         room_name,
         room_url: campfire_routes::room(room.id),
         token_url: voice_token_path(room.id),
         report_url: voice_report_path(room.id),
+        ask_url,
         worklet_url,
     };
     page::framed_page!(c, StatusCode::OK, |ctx| campfire_views::hermes::VoiceShow { ctx, voice: &view }).await
@@ -77,6 +87,7 @@ pub async fn token(c: &mut Ctx) -> Result {
         room_name: &room_name,
         user_name: &user.name,
         extra_instructions: config.extra_instructions.as_deref(),
+        ask_hermes: live.ask_enabled(),
         now,
     }
     .token_request();
@@ -127,11 +138,52 @@ pub async fn report(c: &mut Ctx) -> Result {
     c.json(StatusCode::CREATED, &json!({ "message_id": message.id, "message_url": message_url }))
 }
 
+pub async fn ask(c: &mut Ctx) -> Result {
+    ask_feature(c)?;
+    before_actions(c, Before::default()).await?;
+    let (_, room) = concerns::set_room(c).await?;
+    let user = require_current_user(c)?.clone();
+    let question = c.request_params.get("question").and_then(Param::as_str).map(|q| q.split_whitespace().collect::<Vec<_>>().join(" "));
+    let Some(question) = question.filter(|q| !q.is_empty()) else {
+        return json_error(c, StatusCode::UNPROCESSABLE_ENTITY, "invalid_question", "La question est vide.");
+    };
+    let question = hermes_ask::truncate_chars(&question, hermes_ask::MAX_QUESTION_CHARS);
+    if !ask_feature(c)?.allow_ask(user.id, c.now()) {
+        return json_error(c, StatusCode::TOO_MANY_REQUESTS, "rate_limited", "Trop de questions posées à Hermes ; réessayez plus tard.");
+    }
+
+    let room_name = room_display_name(c, &room).await?;
+    let asker = ask_feature(c)?.asker().ok_or(Error::NotFound)?;
+    let length = question.chars().count();
+    let started = std::time::Instant::now();
+    let result = asker.ask(Question { room_id: room.id, user_name: user.name.clone(), room_name, question }).await;
+    let elapsed_ms = started.elapsed().as_millis() as u64;
+    match result {
+        Ok(answer) => {
+            tracing::info!(room_id = room.id, user_id = user.id, question_chars = length, answer_chars = answer.chars().count(), elapsed_ms, "Hermes answered a live voice question");
+            c.json(StatusCode::OK, &json!({ "answer": answer }))
+        }
+        Err(AskError::Timeout) => {
+            tracing::warn!(room_id = room.id, user_id = user.id, elapsed_ms, "Hermes did not answer a live voice question in time");
+            json_error(c, StatusCode::GATEWAY_TIMEOUT, "upstream_timeout", "Hermes n’a pas répondu à temps.")
+        }
+        Err(error) => {
+            tracing::warn!(room_id = room.id, user_id = user.id, elapsed_ms, %error, "could not ask Hermes a live voice question");
+            json_error(c, StatusCode::BAD_GATEWAY, "upstream_error", "Hermes est injoignable pour le moment.")
+        }
+    }
+}
+
 // --- Helpers ------------------------------------------------------------------------------------
 
 /// The feature's state, or 404 while it's off.
 fn feature(c: &Ctx) -> Result<&GeminiLive> {
     c.app().gemini_live.as_ref().ok_or(Error::NotFound)
+}
+
+/// The feature's state when `ask_hermes` is on too (`HERMES_ASK_URL`), or 404.
+fn ask_feature(c: &Ctx) -> Result<&GeminiLive> {
+    feature(c).ok().filter(|live| live.ask_enabled()).ok_or(Error::NotFound)
 }
 
 fn json_error(c: &mut Ctx, status: StatusCode, code: &str, message: &str) -> Result {

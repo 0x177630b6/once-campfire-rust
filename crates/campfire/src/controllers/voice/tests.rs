@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 use super::*;
 use crate::controllers::presenters::test_support::*;
 use crate::integrations::gemini_live::TokenMinter;
+use crate::integrations::hermes_ask::{HermesAsker, MAX_QUESTION_CHARS};
 use crate::integrations::net::BoxFuture;
 use crate::integrations::test_support::{FakeServer, Route};
 
@@ -154,6 +155,119 @@ async fn token_requests_are_rate_limited_and_upstream_failures_are_502() {
     assert_eq!(failed.status, StatusCode::BAD_GATEWAY);
     assert_eq!(failed.json()["error"], "upstream_error");
     assert!(!failed.text().contains("test-key"));
+}
+
+// --- ask_hermes -----------------------------------------------------------------------------------
+
+/// Answers every question with a fixed result, recording them.
+struct FakeAsker {
+    questions: Mutex<Vec<crate::integrations::hermes_ask::Question>>,
+    reply: fn() -> std::result::Result<String, AskError>,
+}
+
+impl HermesAsker for FakeAsker {
+    fn ask(&self, question: crate::integrations::hermes_ask::Question) -> BoxFuture<'_, std::result::Result<String, AskError>> {
+        self.questions.lock().unwrap().push(question);
+        let reply = (self.reply)();
+        Box::pin(async move { reply })
+    }
+}
+
+fn install_asker(app: &TestApp, reply: fn() -> std::result::Result<String, AskError>) -> Arc<FakeAsker> {
+    let asker = Arc::new(FakeAsker { questions: Mutex::new(Vec::new()), reply });
+    app.booted.app.gemini_live.as_ref().unwrap().set_asker(asker.clone());
+    asker
+}
+
+#[tokio::test]
+async fn ask_is_404_without_hermes_ask_url() {
+    let Some(app) = TestApp::boot_with(LIVE).await else { return };
+    let minter = install(&app, FakeMinter::default());
+    let mut david = app.david();
+    let asked = david.write(json_post(&voice_ask_path(ALL_TALK), &json!({ "question": "Qui appeler ?" }))).await;
+    assert_eq!(asked.status, StatusCode::NOT_FOUND);
+    assert!(!david.get(&voice_path(ALL_TALK)).await.text().contains("data-voice-ask-url-value"));
+    assert_eq!(david.write(json_post(&voice_token_path(ALL_TALK), &json!({}))).await.status, StatusCode::OK);
+    let declarations = minter.requests.lock().unwrap()[0]["bidiGenerateContentSetup"]["tools"][0]["functionDeclarations"].clone();
+    assert_eq!(declarations.as_array().unwrap().len(), 1, "only submit_incident: {declarations}");
+
+    // And everything is 404 without Gemini, HERMES_ASK_URL or not.
+    let Some(app) = TestApp::boot_with(&[("HERMES_ASK_URL", "http://127.0.0.1:9/ask/s3cret")]).await else { return };
+    let asked = app.david().write(json_post(&voice_ask_path(ALL_TALK), &json!({ "question": "Qui appeler ?" }))).await;
+    assert_eq!(asked.status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn ask_forwards_the_question_to_the_bridge_and_returns_the_answer() {
+    let reply = Route::new("POST", "*", "/ask/s3cret", 200).header("Content-Type", "application/json").body(r#"{"answer":"Appelez Marc au poste 12."}"#);
+    let bridge = FakeServer::start(vec![reply]).await;
+    let url = format!("http://{}/ask/s3cret", bridge.addr);
+    let Some(app) = TestApp::boot_with(&[("GEMINI_API_KEY", "test-key"), ("HERMES_ASK_URL", url.as_str())]).await else { return };
+    let minter = install(&app, FakeMinter::default());
+    let mut david = app.david();
+
+    let page = david.get(&voice_path(ALL_TALK)).await.text();
+    assert!(page.contains(&format!(r#"data-voice-ask-url-value="/rooms/{ALL_TALK}/voice/ask""#)), "{page}");
+    assert!(!page.contains("s3cret"), "the bridge URL never reaches the browser");
+    assert_eq!(david.write(json_post(&voice_token_path(ALL_TALK), &json!({}))).await.status, StatusCode::OK);
+    let setup = minter.requests.lock().unwrap()[0]["bidiGenerateContentSetup"].clone();
+    assert_eq!(setup["tools"][0]["functionDeclarations"][1]["name"], "ask_hermes");
+    assert!(setup["systemInstruction"]["parts"][0]["text"].as_str().unwrap().contains("ask_hermes"));
+
+    let asked = david.write(json_post(&voice_ask_path(ALL_TALK), &json!({ "question": "  Qui   appeler\npour une fuite ? " }))).await;
+    assert_eq!(asked.status, StatusCode::OK, "{}", asked.text());
+    assert_eq!(asked.json(), json!({ "answer": "Appelez Marc au poste 12." }));
+    let received = bridge.received();
+    assert_eq!(received.len(), 1);
+    assert_eq!(received[0].target, "/ask/s3cret");
+    let forwarded: Value = serde_json::from_slice(&received[0].body).unwrap();
+    assert_eq!(forwarded, json!({ "room_id": ALL_TALK, "user_name": "David", "room_name": "All Talk", "question": "Qui appeler pour une fuite ?" }));
+
+    // Capped at MAX_QUESTION_CHARS characters.
+    let long = "é".repeat(MAX_QUESTION_CHARS * 2);
+    assert_eq!(david.write(json_post(&voice_ask_path(ALL_TALK), &json!({ "question": long }))).await.status, StatusCode::OK);
+    let forwarded: Value = serde_json::from_slice(&bridge.received()[1].body).unwrap();
+    let question = forwarded["question"].as_str().unwrap();
+    assert_eq!(question.chars().count(), MAX_QUESTION_CHARS);
+    assert!(question.ends_with('…'));
+
+    // Membership, forgery protection, validation, no GET: none of them reach the bridge.
+    let question = json!({ "question": "Qui appeler ?" });
+    assert_eq!(david.write(json_post(&voice_ask_path(DIRECT_KEVIN_BENDER), &question)).await.status, StatusCode::NOT_FOUND);
+    let cross_site = david.send(json_post(&voice_ask_path(ALL_TALK), &question).header("sec-fetch-site", "cross-site")).await;
+    assert_eq!(cross_site.status, StatusCode::UNPROCESSABLE_ENTITY);
+    let blank = david.write(json_post(&voice_ask_path(ALL_TALK), &json!({ "question": "   " }))).await;
+    assert_eq!(blank.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(blank.json()["error"], "invalid_question");
+    assert_eq!(david.get(&voice_ask_path(ALL_TALK)).await.status, StatusCode::NOT_FOUND);
+    assert_eq!(app.anonymous().write(json_post(&voice_ask_path(ALL_TALK), &question)).await.status, StatusCode::FOUND);
+    assert_eq!(bridge.received().len(), 2);
+}
+
+#[tokio::test]
+async fn ask_timeouts_are_504_failures_502_and_questions_rate_limited() {
+    let env = [("GEMINI_API_KEY", "test-key"), ("HERMES_ASK_URL", "http://127.0.0.1:9/ask/s3cret"), ("HERMES_ASKS_PER_HOUR", "3")];
+    let Some(app) = TestApp::boot_with(&env).await else { return };
+    let question = json!({ "question": "Qui appeler ?" });
+    let mut david = app.david();
+
+    let asker = install_asker(&app, || Err(AskError::Timeout));
+    let timed_out = david.write(json_post(&voice_ask_path(ALL_TALK), &question)).await;
+    assert_eq!(timed_out.status, StatusCode::GATEWAY_TIMEOUT);
+    assert_eq!(timed_out.json(), json!({ "error": "upstream_timeout", "message": "Hermes n’a pas répondu à temps." }));
+    assert_eq!(asker.questions.lock().unwrap()[0].room_id, ALL_TALK);
+
+    install_asker(&app, || Err(AskError::Status(500)));
+    let failed = david.write(json_post(&voice_ask_path(ALL_TALK), &question)).await;
+    assert_eq!(failed.status, StatusCode::BAD_GATEWAY);
+    assert_eq!(failed.json()["error"], "upstream_error");
+    assert!(!failed.text().contains("s3cret"));
+
+    install_asker(&app, || Ok("OK".into()));
+    assert_eq!(david.write(json_post(&voice_ask_path(ALL_TALK), &question)).await.status, StatusCode::OK);
+    let limited = david.write(json_post(&voice_ask_path(ALL_TALK), &question)).await;
+    assert_eq!(limited.status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(limited.json()["error"], "rate_limited");
 }
 
 #[tokio::test]
@@ -301,6 +415,7 @@ fn routes_come_after_the_rails_table() {
     assert_eq!(found(Method::GET, "/rooms/7/voice"), Some(("hermes/voice#show", Some("7".into()))));
     assert_eq!(found(Method::POST, "/rooms/7/voice/token"), Some(("hermes/voice#token", Some("7".into()))));
     assert_eq!(found(Method::POST, "/rooms/7/voice/report"), Some(("hermes/voice#report", Some("7".into()))));
+    assert_eq!(found(Method::POST, "/rooms/7/voice/ask"), Some(("hermes/voice#ask", Some("7".into()))));
     assert_eq!(found(Method::GET, "/rooms/7/voice/token"), None);
     // The Rails routes still win where they match.
     assert_eq!(found(Method::GET, "/rooms/7").map(|(endpoint, _)| endpoint), Some("rooms#show"));

@@ -319,6 +319,7 @@ static HERMES_ROUTES: LazyLock<Vec<Route>> = LazyLock::new(|| {
         get("/rooms/:room_id/voice(.:format)", "hermes/voice#show", voice::show),
         post("/rooms/:room_id/voice/token(.:format)", "hermes/voice#token", voice::token),
         post("/rooms/:room_id/voice/report(.:format)", "hermes/voice#report", voice::report),
+        post("/rooms/:room_id/voice/ask(.:format)", "hermes/voice#ask", voice::ask),
     ]
 });
 

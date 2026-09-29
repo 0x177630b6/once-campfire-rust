@@ -28,6 +28,8 @@
 //! - Hermes fork, live voice incident reports (Gemini Live, see docs/hermes-gemini-live.md):
 //!   `GEMINI_API_KEY` turns the feature on; `GEMINI_LIVE_MODEL`, `GEMINI_LIVE_VOICE_BOT`,
 //!   `GEMINI_LIVE_TOKENS_PER_HOUR` and `GEMINI_LIVE_EXTRA_INSTRUCTIONS` tune it ([`GeminiLiveConfig`]).
+//!   `HERMES_ASK_URL` (the Hermes bridge's `/ask/<secret>` URL, a secret: never logged) lets the
+//!   interviewer ask Hermes mid-interview (`ask_hermes`), `HERMES_ASKS_PER_HOUR` caps it per user.
 //!
 //! Storage paths mirror `Rails.root.join("storage")`: the database under `db/`, blobs under
 //! `files/` (`config/storage.yml`), backups under `backups/` (`script/admin/prepare-backup`).
@@ -78,6 +80,11 @@ pub struct GeminiLiveConfig {
     pub tokens_per_hour: usize,
     /// `GEMINI_LIVE_EXTRA_INSTRUCTIONS`: appended to the interviewer's system instruction.
     pub extra_instructions: Option<String>,
+    /// `HERMES_ASK_URL`: the Hermes bridge's `POST /ask/<secret>` (an http(s) URL; the path
+    /// carries a secret, so it's kept redacted). Set, the interviewer gets the `ask_hermes` tool.
+    pub hermes_ask_url: Option<ApiKey>,
+    /// `HERMES_ASKS_PER_HOUR`: `ask_hermes` questions one user may ask per rolling hour (default 30).
+    pub hermes_asks_per_hour: usize,
 }
 
 pub const DEFAULT_GEMINI_LIVE_MODEL: &str = "models/gemini-3.8-live";
@@ -196,6 +203,11 @@ impl Config {
                     voice_bot: present("GEMINI_LIVE_VOICE_BOT").map(|bot| bot.trim().to_string()),
                     tokens_per_hour: number("GEMINI_LIVE_TOKENS_PER_HOUR", 10)?.max(1),
                     extra_instructions: present("GEMINI_LIVE_EXTRA_INSTRUCTIONS"),
+                    hermes_ask_url: match present("HERMES_ASK_URL") {
+                        Some(url) => Some(hermes_ask_url(url.trim())?),
+                        None => None,
+                    },
+                    hermes_asks_per_hour: number("HERMES_ASKS_PER_HOUR", 30)?.max(1),
                 }),
                 None => None,
             },
@@ -210,6 +222,17 @@ fn gemini_model_name(model: Option<&str>) -> String {
         Some(model) if model.starts_with("models/") => model.to_string(),
         Some(model) => format!("models/{model}"),
     }
+}
+
+/// `HERMES_ASK_URL` must be an absolute http(s) URL with a host. The error never quotes it: its
+/// path is a secret.
+fn hermes_ask_url(url: &str) -> anyhow::Result<ApiKey> {
+    let parsed = campfire_richtext::uri::parse(url).ok();
+    let valid = parsed.is_some_and(|uri| uri.is_http() && uri.host.as_deref().is_some_and(|host| !host.is_empty()));
+    if !valid {
+        bail!("HERMES_ASK_URL must be an http:// or https:// URL (e.g. http://campfire-bridge:8645/ask/<secret>)");
+    }
+    Ok(ApiKey::new(url))
 }
 
 /// The install's own HTTPS URL when it has a TLS domain; the project's otherwise.
@@ -295,6 +318,7 @@ mod tests {
         let live = config(&[("SECRET_KEY_BASE", "abc"), ("GEMINI_API_KEY", "k")]).unwrap().gemini_live.unwrap();
         assert_eq!(live.model, "models/gemini-3.8-live");
         assert_eq!((live.voice_bot, live.tokens_per_hour, live.extra_instructions), (None, 10, None));
+        assert_eq!((live.hermes_ask_url, live.hermes_asks_per_hour), (None, 30));
         assert_eq!(format!("{:?}", live.api_key), "ApiKey([REDACTED])");
     }
 
@@ -311,6 +335,24 @@ mod tests {
         .gemini_live
         .unwrap();
         assert_eq!((live.model.as_str(), live.voice_bot.as_deref(), live.tokens_per_hour), ("models/gemini-live-x", Some("Hermes"), 3));
+    }
+
+    #[test]
+    fn hermes_ask_url_is_a_redacted_http_url() {
+        let with = |url: &str| config(&[("SECRET_KEY_BASE", "abc"), ("GEMINI_API_KEY", "k"), ("HERMES_ASK_URL", url), ("HERMES_ASKS_PER_HOUR", "5")]);
+        let live = with(" http://campfire-bridge:8645/ask/s3cret ").unwrap().gemini_live.unwrap();
+        let url = live.hermes_ask_url.unwrap();
+        assert_eq!(url.expose(), "http://campfire-bridge:8645/ask/s3cret");
+        assert_eq!(format!("{url:?}"), "ApiKey([REDACTED])");
+        assert_eq!(live.hermes_asks_per_hour, 5);
+        for bad in ["campfire-bridge:8645/ask/s3cret", "ftp://host/ask/s3cret", "/ask/s3cret"] {
+            let error = with(bad).unwrap_err().to_string();
+            assert!(error.contains("HERMES_ASK_URL") && !error.contains("s3cret"), "{error}");
+        }
+        let blank = config(&[("SECRET_KEY_BASE", "abc"), ("GEMINI_API_KEY", "k"), ("HERMES_ASK_URL", "")]).unwrap();
+        assert!(blank.gemini_live.unwrap().hermes_ask_url.is_none(), "compose's ${{VAR:+…}} gives an empty value");
+        // Without Gemini there's no live session to ask from.
+        assert!(config(&[("SECRET_KEY_BASE", "abc"), ("HERMES_ASK_URL", "http://x/ask/s")]).unwrap().gemini_live.is_none());
     }
 
     #[test]

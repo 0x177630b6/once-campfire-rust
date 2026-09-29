@@ -20,7 +20,7 @@
 {%- endblock %}
 
 {%- block content %}
-<section class="voice" data-controller="voice" data-voice-state="idle" data-voice-activity="listening" data-voice-token-url-value="{{ voice.token_url }}" data-voice-report-url-value="{{ voice.report_url }}" data-voice-worklet-url-value="{{ voice.worklet_url }}" data-voice-room-url-value="{{ voice.room_url }}" data-voice-room-name-value="{{ voice.room_name }}">
+<section class="voice" data-controller="voice" data-voice-state="idle" data-voice-activity="listening" data-voice-token-url-value="{{ voice.token_url }}" data-voice-report-url-value="{{ voice.report_url }}"{% if let Some(ask_url) = voice.ask_url %} data-voice-ask-url-value="{{ ask_url }}"{% endif %} data-voice-worklet-url-value="{{ voice.worklet_url }}" data-voice-room-url-value="{{ voice.room_url }}" data-voice-room-name-value="{{ voice.room_name }}">
   <p class="voice__intro txt-small">Racontez l’incident&nbsp;: l’assistant pose les questions manquantes puis publie le compte rendu dans «&nbsp;{{ voice.room_name }}&nbsp;» après votre accord.</p>
 
   <div class="voice__transcript" data-voice-target="transcript" aria-live="off" aria-label="Transcription"></div>

@@ -8,6 +8,8 @@
 //! - [`webhook`]: `Webhook#deliver` for bots: intentionally unguarded, 7-second timeouts.
 //! - [`search`]: the query sanitizing in `SearchesController#query`.
 //! - [`gemini_live`]: Hermes fork, Gemini Live ephemeral tokens for the live voice report.
+//! - [`hermes_ask`]: Hermes fork, the live voice interviewer's `ask_hermes` questions, forwarded
+//!   to the Hermes bridge (`HERMES_ASK_URL`).
 //! - [`register_jobs`]: `Room::PushMessageJob` and `Bot::WebhookJob` for the job runner.
 //!
 //! The three HTTP clients share only plumbing ([`net`]); each keeps its own policy (see
@@ -15,6 +17,7 @@
 //! (Ruby scripts run in the reference) live in testdata/oracle.
 
 pub mod gemini_live;
+pub mod hermes_ask;
 mod jobs;
 pub mod net;
 pub mod opengraph;
