@@ -78,6 +78,9 @@ pub struct ShowView {
     pub join_code: String,
     /// `Turbo::StreamsChannel.signed_stream_name([room, :messages])`.
     pub messages_stream_name: String,
+    /// Hermes fork: the live voice report page, when that feature is on (the nav's mic button).
+    #[serde(default)]
+    pub voice_path: Option<String>,
 }
 
 /// `rooms/show`.

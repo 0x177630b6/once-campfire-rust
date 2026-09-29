@@ -63,6 +63,11 @@ pub struct TestApp {
 impl TestApp {
     /// `None` (and a note) when the seed hasn't been built.
     pub async fn boot() -> Option<TestApp> {
+        Self::boot_with(&[]).await
+    }
+
+    /// [`TestApp::boot`] with more environment variables (Hermes fork: e.g. `GEMINI_API_KEY`).
+    pub async fn boot_with(env: &[(&str, &str)]) -> Option<TestApp> {
         let Some(seed) = seed_dir() else {
             eprintln!("skipping: parity/.seed/default isn't built (parity/bin/seed build default)");
             return None;
@@ -78,7 +83,7 @@ impl TestApp {
             "DISABLE_SSL" => Some("true".into()),
             "APP_VERSION" | "GIT_REVISION" => Some("parity".into()),
             "CAMPFIRE_STORAGE_PATH" => Some(root.clone()),
-            _ => None,
+            _ => env.iter().find(|(key, _)| *key == name).map(|(_, value)| value.to_string()),
         })
         .unwrap();
         Some(TestApp { booted: boot(config).await.unwrap(), _dir: dir })

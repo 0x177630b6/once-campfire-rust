@@ -42,6 +42,7 @@ pub mod searches;
 pub mod sessions;
 pub mod unfurl_links;
 pub mod users;
+pub mod voice;
 pub mod welcome;
 
 /// Anything that can serve a route: every `async fn(&mut Ctx) -> Result` qualifies.
@@ -311,6 +312,16 @@ static ROUTES: LazyLock<Vec<Route>> = LazyLock::new(|| {
     ]
 });
 
+/// Hermes fork: routes the reference doesn't have, tried only when no Rails route matches, so the
+/// table above stays identical to `bin/rails routes`.
+static HERMES_ROUTES: LazyLock<Vec<Route>> = LazyLock::new(|| {
+    vec![
+        get("/rooms/:room_id/voice(.:format)", "hermes/voice#show", voice::show),
+        post("/rooms/:room_id/voice/token(.:format)", "hermes/voice#token", voice::token),
+        post("/rooms/:room_id/voice/report(.:format)", "hermes/voice#report", voice::report),
+    ]
+});
+
 /// The single Axum entry point: find the route, install its path params, run its action.
 pub async fn dispatch(c: &mut Ctx) -> Result {
     let path = normalize_path(c.request.path());
@@ -325,8 +336,15 @@ pub async fn dispatch(c: &mut Ctx) -> Result {
 /// The first route matching `method` and the normalized `path`, with its path parameters
 /// (defaults, then captures, then `controller`/`action`). HEAD requests match GET routes.
 pub fn recognize(method: &Method, path: &str) -> Result<Option<(&'static Route, ParamMap)>> {
+    match recognize_in(routes(), method, path)? {
+        Some(found) => Ok(Some(found)),
+        None => recognize_in(&HERMES_ROUTES, method, path),
+    }
+}
+
+fn recognize_in(table: &'static [Route], method: &Method, path: &str) -> Result<Option<(&'static Route, ParamMap)>> {
     let verb = if *method == Method::HEAD { &Method::GET } else { method };
-    for route in routes() {
+    for route in table {
         if route.verb != *verb {
             continue;
         }
