@@ -121,19 +121,11 @@ where
         kit.clock().clone(),
     );
 
-    let failure = match (&path_params, &query_params, &body_params) {
-        (Err(_), _, _) => Some(Error::BadRequest("Invalid path parameters".into())),
-        (_, Err(e), _) | (_, _, Err(e)) => Some(clone_error(e)),
-        _ => None,
-    };
-    let mut ctx = Ctx::new(
-        kit,
-        request,
-        path_params.unwrap_or_default(),
-        query_params.unwrap_or_default(),
-        body_params.unwrap_or_default(),
-        cookies,
-    );
+    let (path_params, path_error) = split(path_params.map_err(|_| Error::BadRequest("Invalid path parameters".into())));
+    let (query_params, query_error) = split(query_params);
+    let (body_params, body_error) = split(body_params);
+    let failure = path_error.or(query_error).or(body_error);
+    let mut ctx = Ctx::new(kit, request, path_params, query_params, body_params, cookies);
     let result = match failure {
         Some(error) => Err(error),
         None => {
@@ -155,10 +147,12 @@ fn panic_error(panic: Box<dyn std::any::Any + Send>) -> Error {
     Error::internal(anyhow::anyhow!("action panicked: {message}"))
 }
 
-fn clone_error(error: &Error) -> Error {
-    match error {
-        Error::Status(status) => Error::Status(*status),
-        other => Error::BadRequest(other.to_string()),
+/// A parsed value and no error, or the default (so the error page still gets a context) and the
+/// error.
+fn split<T: Default>(result: Result<T>) -> (T, Option<Error>) {
+    match result {
+        Ok(value) => (value, None),
+        Err(error) => (T::default(), Some(error)),
     }
 }
 

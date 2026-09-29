@@ -235,10 +235,12 @@ impl Client {
         self.send(json!({ "command": "message", "identifier": identifier, "data": data.to_string() })).await;
     }
 
-    /// The next frame, skipping pings.
+    /// The next frame, skipping pings (which don't extend the 5s it has to arrive in, so a
+    /// missing frame fails the test rather than waiting through heartbeats forever).
     pub async fn next(&mut self) -> Frame {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         loop {
-            let message = tokio::time::timeout(Duration::from_secs(5), self.socket.next()).await.expect("a frame within 5s");
+            let message = tokio::time::timeout_at(deadline, self.socket.next()).await.expect("a frame within 5s");
             return match message {
                 Some(Ok(WsMessage::Text(text))) if text.starts_with(r#"{"type":"ping""#) => continue,
                 Some(Ok(WsMessage::Text(text))) => Frame::Text(text.to_string()),

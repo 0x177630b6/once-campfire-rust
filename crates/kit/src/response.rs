@@ -124,8 +124,9 @@ fn percent_escape(s: &str, keep: impl Fn(u8) -> bool) -> String {
     out
 }
 
-/// `I18n.transliterate` with the default rules: Latin letters lose their accents, anything else
-/// non-ASCII becomes `?`.
+/// `I18n.transliterate` for Latin-1: its letters lose their accents, and anything else non-ASCII
+/// becomes `?`. I18n's own table covers more (`Ł` is `L`); Active Storage downloads, whose
+/// filenames come from users, use campfire_storage's copy of it instead.
 fn transliterate(s: &str) -> String {
     s.chars()
         .map(|c| {

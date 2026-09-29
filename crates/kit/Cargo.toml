@@ -53,4 +53,5 @@ tower = { workspace = true, features = ["util"] }
 tempfile.workspace = true
 hyper = { workspace = true, features = ["client", "http1", "http2"] }
 tokio-tungstenite.workspace = true
+tracing-subscriber.workspace = true
 x509-parser.workspace = true
