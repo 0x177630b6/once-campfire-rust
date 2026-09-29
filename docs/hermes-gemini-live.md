@@ -6,6 +6,11 @@ room, as that employee**, with an @mention of the Hermes bot. The mention fires 
 exactly as a typed @mention would, so the Hermes bridge and its `incident-report` skill take it
 from there (Fizzy card etc.).
 
+During the interview the assistant can also **ask Hermes** (`ask_hermes`, with `HERMES_ASK_URL`):
+a procedure, the incidents already open on the Fizzy board, a contact… It says « Je vérifie auprès
+d'Hermes… », the page forwards the question through Campfire to the Hermes bridge, and the
+assistant speaks the answer and carries on with the interview.
+
 This is a fork-only feature: none of it exists in the reference app or upstream
 `once-campfire-rust`. Everything is off unless `GEMINI_API_KEY` is set.
 
@@ -19,6 +24,10 @@ POST /rooms/:id/voice/token ─────────────▶ POST v1al
          model/instructions/tools/transcription locked in the token
 mic 16 kHz PCM ══WSS (BidiGenerateContentConstrained, {"setup":{}})══▶ Gemini Live
      ◀══ 24 kHz audio + input/output transcriptions
+tool call ask_hermes(question)             (only with HERMES_ASK_URL; Gemini waits for the answer)
+POST /rooms/:id/voice/ask ───────────────▶ POST HERMES_ASK_URL ─────────────────▶ bridge /ask/<secret>
+     ◀── 200 {answer} ◀──────────────────── {answer} ◀──── Hermes /v1/responses ◀┘
+toolResponse {result: answer} ══▶ Gemini speaks it, resumes the interview
 tool call submit_incident(...)
 POST /rooms/:id/voice/report ────────────▶ message as Current.user, "@Hermes …"
                                             broadcast + deliver_webhooks_to_bots ──▶ bot webhook
@@ -27,8 +36,9 @@ POST /rooms/:id/voice/report ────────────▶ message as 
 
 The API key never reaches the browser. The browser only gets a single-use ephemeral token whose
 `bidiGenerateContentSetup` fixes the model, the French interviewer instructions (with the room and
-user names frozen in, as quoted data), the `submit_incident` declaration, audio transcription both
-ways, session resumption and sliding-window context compression.
+user names frozen in, as quoted data), the `submit_incident` declaration (plus `ask_hermes` and its
+paragraph of instructions when `HERMES_ASK_URL` is set), audio transcription both ways, session
+resumption and sliding-window context compression.
 
 ## Configuration
 
@@ -39,12 +49,14 @@ ways, session resumption and sliding-window context compression.
 | `GEMINI_LIVE_VOICE_BOT` | unset | The bot the report @mentions: a bot **user id** (e.g. `3`) or its **exact name** (e.g. `Hermes`). It must be an active bot **member of the room**. Unset: the room's only active bot; a room with none or several answers 422 `bot_not_in_room`. |
 | `GEMINI_LIVE_TOKENS_PER_HOUR` | `10` | Tokens one user may mint per rolling hour (in memory, per process) before 429. |
 | `GEMINI_LIVE_EXTRA_INSTRUCTIONS` | unset | Text appended to the interviewer's system instruction (e.g. site-specific questions). |
+| `HERMES_ASK_URL` | unset (`ask_hermes` off) | The Hermes bridge's ask endpoint, e.g. `http://campfire-bridge:8645/ask/<BRIDGE_ASK_SECRET>`. Its path is a secret: never logged, never sent to the browser (`Debug` redacted, and a malformed value fails the boot without being quoted). Only read with `GEMINI_API_KEY`. |
+| `HERMES_ASKS_PER_HOUR` | `30` | `ask_hermes` questions one user may ask per rolling hour (in memory, per process) before 429. |
 
 Browsers only allow the microphone on a secure origin: serve Campfire over HTTPS (or localhost).
 
 ## Routes and contract
 
-All three answer 404 while the feature is off, run `ApplicationController`'s chain (session
+All four answer 404 while the feature is off (`/voice/ask` also while `HERMES_ASK_URL` is unset), run `ApplicationController`'s chain (session
 cookie only, bots denied, `Sec-Fetch-Site` forgery protection on the POSTs, so same-origin `fetch`
 needs no token) and `RoomScoped#set_room` (404 unless the user is a member of the room). They live in
 a separate route table tried after the Rails one (`controllers::HERMES_ROUTES`), so the Rails table
@@ -58,6 +70,7 @@ HTML page in the application layout (Turbo-Frame requests get the frame layout).
 <section class="voice" data-controller="voice"
   data-voice-token-url-value="/rooms/:room_id/voice/token"
   data-voice-report-url-value="/rooms/:room_id/voice/report"
+  data-voice-ask-url-value="/rooms/:room_id/voice/ask"          only with HERMES_ASK_URL
   data-voice-worklet-url-value="/assets/voice/pcm-worklet-<digest>.js"
   data-voice-room-url-value="/rooms/:room_id"
   data-voice-room-name-value="<room display name>">
@@ -125,6 +138,42 @@ function schema).
 `submit_incident` parameters (all strings): `title` and `summary` (required), `what_happened`,
 `location`, `occurred_at`, `people_involved`, `injuries`, `actions_taken`, `severity`
 (`low` | `medium` | `high` | `critical`).
+
+### `POST /rooms/:room_id/voice/ask`
+
+The interviewer's `ask_hermes`. JSON body `{"question": "…"}`: whitespace folded to single
+spaces, cut at 1,000 characters (`…`). Campfire forwards, server-side, `{"room_id", "user_name",
+"room_name" (the display name), "question"}` to `HERMES_ASK_URL` over the `integrations::net`
+client (10 s to connect, 60 s in all) and answers `200 {"answer": "…"}`. Errors, JSON
+`{"error": code, "message": French text}`: `422 invalid_question` (blank), `429 rate_limited`
+(`HERMES_ASKS_PER_HOUR`), `504 upstream_timeout` (no answer within 60 s, or the bridge's own 504:
+it gives Hermes 55 s), `502 upstream_error` (anything else). One log line per question: room,
+user, lengths and duration, never the text.
+
+`ask_hermes` declaration: one required string parameter, `question`; a French description (the
+company's internal agent: procedures, existing or open incidents on the Fizzy board, contacts,
+anything company-specific; the answer can take several seconds). No `behavior` field: the default
+blocking call was checked against the live API on 2026-09-29 (the model says it's checking, waits
+for the `toolResponse`, then speaks the answer; 8 s tested). `NON_BLOCKING` + `INTERRUPT` worked
+too, `WHEN_IDLE` never delivered the answer. The system instruction gets a paragraph (before the
+quoted context): when the employee asks something company-specific or a company fact is missing,
+say « Je vérifie auprès d'Hermes… », call `ask_hermes`, give the answer in one or two sentences and
+resume; never invent company procedures; if Hermes doesn't answer, say so; such questions aren't
+off-topic; `ask_hermes` publishes nothing. `submit_incident` is unchanged.
+
+The page (`#askHermes` in `voice_controller.js`) POSTs the question (same-origin, same headers as
+the report) with a 65 s client timeout, and answers the tool call with `{result: answer}` or
+`{error: "Hermes n’a pas répondu."}`. While it waits the status reads « Hermes consulté… », and the
+transcript shows a centred, dashed « Question à Hermes » note (the question, then « En attente de
+la réponse… » → « Réponse reçue » or « Pas de réponse »). The answer itself isn't repeated there:
+the assistant speaks it, so it's in the assistant's next bubble. These notes stay **out of the
+report's transcript** (and of the reconnection recap): the assistant's own lines already carry
+« Je vérifie auprès d'Hermes… » and the answer.
+
+The bridge side (`campfire-bridge/server.py` in the Hermes repo, `BRIDGE_ASK_SECRET`) prefixes
+the question with `[user in room]` and a voice-style instruction (French, 1–3 short sentences, no
+markdown, say so if unknown), chains it on the room's own `voice:<room_id>` thread (apart from the
+room's chat thread), and strips leftover markdown from the answer.
 
 ### `POST /rooms/:room_id/voice/report`
 
@@ -209,8 +258,9 @@ of `stylesheet_link_tag :all`, so every page without Hermes features keeps the r
 | Path | What |
 |---|---|
 | `crates/campfire/src/config.rs` | `GeminiLiveConfig`, `ApiKey` (redacted `Debug`) |
-| `crates/campfire/src/integrations/gemini_live.rs` | Token request body, system instruction, `submit_incident`, `HttpMinter` (the existing `integrations::net` HTTP/1.1 + rustls client, no new crate), `TokenMinter` trait (tests swap it), rate limiter |
-| `crates/campfire/src/controllers/voice.rs` | The three actions, `IncidentReport` (caps, escaping, markup) |
+| `crates/campfire/src/integrations/gemini_live.rs` | Token request body, system instruction, `submit_incident` and `ask_hermes` declarations, `HttpMinter` (the existing `integrations::net` HTTP/1.1 + rustls client, no new crate), `TokenMinter` trait (tests swap it), rate limiters, the asker |
+| `crates/campfire/src/integrations/hermes_ask.rs` | `HttpAsker` (`POST HERMES_ASK_URL`, same client), `HermesAsker` trait (tests swap it), question cap |
+| `crates/campfire/src/controllers/voice.rs` | The four actions, `IncidentReport` (caps, escaping, markup) |
 | `crates/campfire/src/controllers/mod.rs` | `HERMES_ROUTES`, tried after the Rails table |
 | `crates/campfire/src/app.rs` | `AppState::gemini_live` |
 | `crates/views/src/hermes/`, `crates/views/templates/hermes/` | The page, the composer's voice buttons (`_composer_buttons.html`) and the inline audio player |
@@ -221,12 +271,16 @@ of `stylesheet_link_tag :all`, so every page without Hermes features keeps the r
 ## Tests
 
 - `integrations::gemini_live::tests`: request body shape, quoting of names, extra instructions, rate
-  limit, and the HTTP minter against a fake server (path, `x-goog-api-key`, body; 403 and garbage
-  replies are errors).
+  limit, `ask_hermes` declared (and its instructions added) only when enabled, and the HTTP minter
+  against a fake server (path, `x-goog-api-key`, body; 403 and garbage replies are errors).
+- `integrations::hermes_ask::tests`: the asker against a fake bridge (path, JSON body, answer;
+  504 → timeout, other statuses and blank answers are errors, the secret never in an error).
 - `controllers::voice::tests`: feature off → 404 and no live button (the voice-note one stays);
   the page's data values and worklet URL (served as JavaScript); token route builds the locked setup through an injected
   minter, forgery protection, membership, 429, 502; report membership / validation / no-bot room;
-  the bot-mention webhook proof above; report escaping and caps; route order.
+  the bot-mention webhook proof above; report escaping and caps; route order; `ask`: 404 without
+  `HERMES_ASK_URL` (and no `ask_hermes` in the token), forwarding to a fake bridge and the answer,
+  the question cap, membership / forgery / blank question, 504 on timeout, 502, 429.
 - `crates/views/tests/hermes_views.rs`: the page renders; the composer's buttons are absent with both
   flags off (the goldens' input) and present, in place, with each on; voice notes get a player and a
   compact line, other audio files keep their file link.
