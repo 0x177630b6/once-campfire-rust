@@ -24,7 +24,7 @@ http-body-util.workspace = true
 futures-util.workspace = true
 uuid.workspace = true
 hyper = { workspace = true, features = ["server", "http1", "http2"] }
-hyper-util = { workspace = true, features = ["server", "server-auto", "service", "http1", "http2", "tokio"] }
+hyper-util = { workspace = true, features = ["server", "server-auto", "http1", "http2", "tokio"] }
 flate2.workspace = true
 crc32fast.workspace = true
 memchr.workspace = true
@@ -48,10 +48,7 @@ test-support = []
 
 [dev-dependencies]
 campfire_kit = { path = ".", features = ["test-support"] }
-tower = { workspace = true, features = ["util"] }
-tempfile.workspace = true
 hyper = { workspace = true, features = ["client", "http1", "http2"] }
 # tests/front.rs: a WebSocket backend behind the front server
 axum = { workspace = true, features = ["ws"] }
 tokio-tungstenite.workspace = true
-x509-parser.workspace = true
