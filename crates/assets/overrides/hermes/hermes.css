@@ -297,6 +297,32 @@
   content: " …";
 }
 
+/* A question the assistant put to Hermes (ask_hermes): a small centred note, not a speaker. */
+.voice__line--hermes {
+  align-items: center;
+  align-self: center;
+  font-size: 0.85rem;
+  max-inline-size: 92%;
+  text-align: center;
+
+  .voice__bubble {
+    background-color: transparent;
+    border: 1px dashed var(--color-border-darker);
+    font-style: italic;
+  }
+}
+
+.voice__hermes-state {
+  opacity: 0.75;
+
+  .voice__line--pending &::after {
+    animation: hermes-blink 1s steps(2, jump-none) infinite;
+    content: " …";
+  }
+
+  .voice__line--failed & { color: var(--color-negative); opacity: 1; }
+}
+
 /* Error, closed, unavailable: Campfire's flash colours, in the page flow. */
 .voice__notice {
   align-items: flex-start;

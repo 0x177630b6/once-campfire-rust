@@ -8,7 +8,11 @@ import { Controller } from "@hotwired/stimulus"
 // microphone is captured by voice/pcm-worklet.js (16 kHz Int16LE mono, ~100 ms chunks); the
 // model answers with 24 kHz Int16LE mono audio and incremental transcriptions of both sides.
 // When the model calls `submit_incident`, its arguments plus the accumulated transcript are
-// POSTed to the report URL, which publishes the message in the room as the current user.
+// POSTed to the report URL, which publishes the message in the room as the current user. When the
+// page has an ask URL (HERMES_ASK_URL on the server), the model can also call `ask_hermes`: the
+// question is POSTed there, Campfire asks the Hermes agent, and the answer goes back to the model
+// as the tool response, which it then speaks. The page shows each question as a small « Hermes »
+// line; those lines stay out of the report's transcript (the assistant's spoken answer is in it).
 //
 // The protocol lives in LiveSession (no DOM, no audio) so it can be exercised on its own; the
 // Stimulus controller wires it to the microphone, the speaker and the page.
@@ -21,6 +25,8 @@ const INPUT_RATE = 16000
 const OUTPUT_RATE = 24000
 const INPUT_MIME = `audio/pcm;rate=${INPUT_RATE}`
 const FINISH_TIMEOUT_MS = 10000
+// The server gives the bridge 60 s (and the bridge gives Hermes 55 s); a little more here.
+const ASK_TIMEOUT_MS = 65000
 const PLAYBACK_LEAD_S = 0.05
 
 // The report's transcript says « Employé »; the page says « Vous ».
@@ -86,6 +92,12 @@ export const MESSAGES = {
   submitting: "Publication du compte rendu…",
   submitError: "La publication du compte rendu a échoué. L’assistant va vous proposer de réessayer.",
   finishing: "Compte rendu publié. L’assistant termine…",
+  asking: "Hermes consulté…",
+  askLabel: "Question à Hermes",
+  askPending: "En attente de la réponse…",
+  askAnswered: "Réponse reçue",
+  askFailed: "Pas de réponse",
+  askToolError: "Hermes n’a pas répondu.",
   published: "Compte rendu publié",
   publishedIn: (room) => `Compte rendu publié dans «${NB}${room}${NB}».`
 }
@@ -542,7 +554,7 @@ export function formatClock(seconds) {
 export default class extends Controller {
   static targets = [ "toggle", "label", "control", "status", "timer", "hint", "transcript", "notice", "noticeBody",
     "confirm", "cancel", "resume", "restart", "result", "resultText", "messageLink", "announcer" ]
-  static values = { tokenUrl: String, reportUrl: String, workletUrl: String, roomUrl: String, roomName: String }
+  static values = { tokenUrl: String, reportUrl: String, askUrl: String, workletUrl: String, roomUrl: String, roomName: String }
 
   connect() {
     this.state = "idle"
@@ -727,8 +739,37 @@ export default class extends Controller {
     })
   }
 
-  async #handleToolCall({ name, args }) {
-    if (name !== "submit_incident") return { error: `Outil inconnu : ${name}` }
+  #handleToolCall({ name, args }) {
+    if (name === "submit_incident") return this.#submitIncident(args)
+    if (name === "ask_hermes" && this.askUrlValue) return this.#askHermes(args)
+    return { error: `Outil inconnu : ${name}` }
+  }
+
+  // `ask_hermes`: the answer (or an error the assistant tells the employee about) is the tool
+  // response. The assistant waits for it (blocking function call), having said « Je vérifie
+  // auprès d'Hermes… ».
+  async #askHermes(args) {
+    const question = String(args?.question || "").trim()
+    if (!question) return { error: "Question vide." }
+
+    const line = this.#appendHermesLine(question)
+    this.#setTransient(MESSAGES.asking)
+    this.#announce(`${MESSAGES.askLabel}${NB}: ${question}`)
+
+    try {
+      const answer = await this.#postQuestion(question)
+      this.#settleHermesLine(line, true)
+      return { result: answer }
+    } catch (error) {
+      console.warn("voice: ask_hermes failed", error)
+      this.#settleHermesLine(line, false)
+      return { error: MESSAGES.askToolError }
+    } finally {
+      if (this.transient === MESSAGES.asking) this.#setTransient(null)
+    }
+  }
+
+  async #submitIncident(args) {
     if (this.submitted) return { result: "already_submitted" }
 
     this.#setTransient(MESSAGES.submitting)
@@ -822,6 +863,25 @@ export default class extends Controller {
     })
     if (!response.ok) throw new Error(`HTTP ${response.status}`)
     return response.json().catch(() => ({}))
+  }
+
+  // Resolves with the answer text; rejects on an HTTP error, a network error or ASK_TIMEOUT_MS.
+  async #postQuestion(question) {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), ASK_TIMEOUT_MS)
+    try {
+      const response = await fetch(this.askUrlValue, {
+        method: "POST", credentials: "same-origin", headers: this.#headers,
+        body: JSON.stringify({ question }), signal: controller.signal
+      })
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      const body = await response.json()
+      const answer = typeof body?.answer === "string" ? body.answer.trim() : ""
+      if (!answer) throw new Error("empty answer")
+      return answer
+    } finally {
+      clearTimeout(timer)
+    }
   }
 
   get #headers() {
@@ -1033,6 +1093,38 @@ export default class extends Controller {
     this.lastLineText.data = frenchSpacing(line.text)
     this.#markPartial(this.lastLineElement)
     this.#stickTranscript()
+  }
+
+  // A « Hermes » line in the transcript: the question, and below it where the answer stands. Not
+  // part of `this.transcript` (so not in the report); the assistant's next words start a new
+  // bubble below it.
+  #appendHermesLine(question) {
+    this.transcript.endTurn()
+    this.#markPartial(null)
+    this.lastLine = null
+
+    const element = document.createElement("div")
+    element.className = "voice__line voice__line--hermes voice__line--pending"
+    const label = document.createElement("span")
+    label.className = "voice__role"
+    label.textContent = MESSAGES.askLabel
+    const bubble = document.createElement("p")
+    bubble.className = "voice__bubble"
+    bubble.textContent = frenchSpacing(question)
+    const state = document.createElement("span")
+    state.className = "voice__hermes-state txt-small"
+    state.textContent = MESSAGES.askPending
+    element.append(label, bubble, state)
+    this.transcriptTarget.append(element)
+    this.#stickTranscript()
+    return element
+  }
+
+  #settleHermesLine(element, answered) {
+    element.classList.remove("voice__line--pending")
+    element.classList.toggle("voice__line--failed", !answered)
+    const state = element.querySelector(".voice__hermes-state")
+    if (state) state.textContent = answered ? MESSAGES.askAnswered : MESSAGES.askFailed
   }
 
   #stickTranscript() {
