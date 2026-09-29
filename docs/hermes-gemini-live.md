@@ -61,12 +61,41 @@ HTML page in the application layout (Turbo-Frame requests get the frame layout).
   data-voice-worklet-url-value="/assets/voice/pcm-worklet-<digest>.js"
   data-voice-room-url-value="/rooms/:room_id"
   data-voice-room-name-value="<room display name>">
-  <button data-voice-target="toggle" data-action="voice#toggle">Démarrer</button>
-  <p data-voice-target="status">…</p>
-  <div data-voice-target="transcript"></div>
-  <div data-voice-target="result" hidden></div>
+  <div data-voice-target="transcript" aria-live="off"></div>      chat bubbles, newest at the bottom
+  <div data-voice-target="notice" role="alert" hidden>…</div>      errors (+ « Détails techniques »)
+  <div data-voice-target="confirm" hidden>…</div>                  « Recommencer » confirmation
+  <div data-voice-target="result" hidden>…</div>                   success card, « Voir le message »
+  <div class="voice__bar">                                         bottom control bar
+    <div data-voice-target="control">                              mic-level ring (--voice-level)
+      <button data-voice-target="toggle" data-action="voice#toggle">…</button>
+    </div>
+    <p data-voice-target="status">…</p> <span data-voice-target="timer">00:00</span>
+    <p data-voice-target="hint"></p>
+    Annuler (cancel) · Reprendre (resume → voice#retry) · Recommencer (restart)
+  </div>
+  <p data-voice-target="announcer" role="status" class="for-screen-reader"></p>
 </section>
 ```
+
+The page (title « Rapport vocal », the room name in the intro) is a column: intro, transcript (the
+only part that scrolls, `flex: 1`), and a bottom bar with a 72 px round button: a mic (Campfire's
+primary look) to start or resume, a hang-up (`.btn--negative`) while live. `data-voice-state` is
+`idle | starting | live | finishing | stopped | closed | error | unavailable | done`; while live,
+`data-voice-activity` is `speaking` while the assistant's audio plays (« L’assistant parle… ») and
+`listening` otherwise (« À vous », with the mic-level ring from the worklet chunks' RMS and a
+running `mm:ss` clock). Right after setup the controller sends a short text instruction
+(`KICKOFF_TEXT`) so the assistant speaks first; text input isn't transcribed, so it's neither on
+the page nor in the report. « Raccrocher » keeps the transcript and the session: « Reprendre »
+(`retry()`) reconnects with a fresh token and replays the transcript; « Recommencer » wipes it after
+an in-page confirmation. Publishing is by voice (« Dites « c’est bon » à l’assistant pour
+publier. »). Error sentences stay plain; HTTP/WebSocket codes and hostnames go in a
+« Détails techniques » disclosure and `console.warn`. Screen readers get the step while starting,
+each completed assistant turn once (the transcript itself is `aria-live="off"`), and the focus moves
+to « Voir le message » when done. Styles: `hermes/hermes.css` (below).
+
+The layout's viewport meta (upstream `layouts/application`) has no `viewport-fit=cover`, so
+`env(safe-area-inset-bottom)` is 0 in Safari's browser tab (content already stops above the home
+indicator there); the bar still honours it where it's set.
 
 The worklet URL is the Propshaft-digested path of `voice/pcm-worklet.js`, resolved through the asset
 manifest (`campfire_assets::try_asset_path`); it's served like every digested asset
@@ -141,8 +170,12 @@ The room composer gets up to two buttons after the attachment (paperclip) button
 `hermes/_composer_buttons.html`:
 
 - **Voice note** (microphone, always on: `ShowView::voice_note`, set by `rooms#show`). Tap to record,
-  tap again to stop and send; the bin discards; a red "● 0:07" timer runs meanwhile; recording stops
-  and sends by itself at 5 minutes. `voice_note_controller.js` records with `MediaRecorder`
+  tap again to stop and send; the bin discards (and gives the focus back to the mic). While
+  recording, the input row becomes a recording bar (hermes/hermes.css hides the text field, the
+  attachment, rich-text and live buttons and the composer's Send, via `:has()`): bin, a blinking red
+  dot with the timer, a level meter (`AnalyserNode`), and the record button turned into a pulsing
+  send arrow (« Envoyer le message vocal »). At 4:30 « Envoi automatique dans 30 s » replaces the
+  meter; recording stops and sends by itself at 5 minutes. `voice_note_controller.js` records with `MediaRecorder`
   (`audio/webm;codecs=opus`, else `audio/mp4` for Safari, else `audio/ogg;codecs=opus`, else the
   browser's default) and names the file `note-vocale-YYYYMMDD-HHMMSS.webm|m4a|ogg` with a plain
   `audio/*` type. The file goes through the composer's own attachment path: the controller fires
@@ -151,13 +184,25 @@ The room composer gets up to two buttons after the attachment (paperclip) button
   `client_message_id` and the Turbo Stream answer are those of a picked file. Like Send, that also
   sends any text typed in the composer. The button stays hidden where the browser can't record; on
   plain HTTP it shows and explains that HTTPS is needed.
-- **Live report** (waveform, only when `ShowView::voice_path` is set, i.e. `GEMINI_API_KEY`): a
-  link to `/rooms/:id/voice`, out of the composer's turbo frame (`data-turbo-frame="_top"`). It
-  replaces the room nav's mic button of v0.1.1-hermes.2.
+- **Live report** (headset, only when `ShowView::voice_path` is set, i.e. `GEMINI_API_KEY`): a
+  link to `/rooms/:id/voice` named « Rapport d’incident vocal », out of the composer's turbo frame
+  (`data-turbo-frame="_top"`). On touch screens (no hover title) it shows a small « Rapport » label
+  under the icon, in the round buttons' footprint. It replaces the room nav's mic button of
+  v0.1.1-hermes.2.
+
+On touch screens (`pointer: coarse`) every composer button is 2.75rem (44 px).
 
 Audio attachments (`audio/*`, e.g. voice notes, whatever recorded them) render as
-`<audio controls preload="none">` above the usual file link (`AttachmentPreview::Audio`,
-`hermes::audio_preview`); the reference only shows the file link.
+`<audio controls preload="metadata">`, full width of the bubble (`AttachmentPreview::Audio`,
+`hermes::audio_preview`). A voice note (`note-vocale-*`) gets a compact « Message vocal · 0:07 »
+line and a download button instead of the file-name row; the `voice-player` controller fills in the
+duration once the browser knows it (Chrome's MediaRecorder WebM has none until played). Other audio
+files keep the reference's file link (name, download, share) under the player.
+
+All these styles live in one stylesheet, `crates/assets/overrides/hermes/hermes.css`, linked by the
+Hermes templates themselves (the composer partial, the voice page). `build.rs` leaves `hermes/` out
+of `stylesheet_link_tag :all`, so every page without Hermes features keeps the reference's exact
+`<link>` tags and the parity tests hold.
 
 ## Where the code is
 
@@ -170,7 +215,7 @@ Audio attachments (`audio/*`, e.g. voice notes, whatever recorded them) render a
 | `crates/campfire/src/app.rs` | `AppState::gemini_live` |
 | `crates/views/src/hermes/`, `crates/views/templates/hermes/` | The page, the composer's voice buttons (`_composer_buttons.html`) and the inline audio player |
 | `crates/views/templates/rooms/show/_composer.html` | The one upstream-template insertion: `hermes/_composer_buttons` after the attachment button |
-| `crates/assets/overrides/controllers/voice_controller.js`, `voice/pcm-worklet.js`, `waveform.svg` | Frontend |
+| `crates/assets/overrides/controllers/voice_controller.js`, `voice/pcm-worklet.js`, `controllers/voice_note_controller.js`, `controllers/voice_player_controller.js`, `hermes/hermes.css`, `headset.svg`, `phone-hangup.svg`, `microphone.svg` | Frontend |
 | `crates/assets/build/importmap.rs` | `pin_all_from` also picks up files the overrides *add* (otherwise `controllers/voice_controller` would never be pinned or registered) |
 
 ## Tests
@@ -183,9 +228,10 @@ Audio attachments (`audio/*`, e.g. voice notes, whatever recorded them) render a
   minter, forgery protection, membership, 429, 502; report membership / validation / no-bot room;
   the bot-mention webhook proof above; report escaping and caps; route order.
 - `crates/views/tests/hermes_views.rs`: the page renders; the composer's buttons are absent with both
-  flags off (the goldens' input) and present, in place, with each on; audio attachments get a player.
+  flags off (the goldens' input) and present, in place, with each on; voice notes get a player and a
+  compact line, other audio files keep their file link.
 - `crates/assets/tests/reference.rs`: the import map equals the reference's plus the added
-  `controllers/voice_controller` pin.
+  controllers' pins; `hermes/hermes.css` is served but not in `stylesheet_link_tag :all`.
 
 The request-level tests need the parity seed (`parity/bin/seed build`) and skip without it.
 

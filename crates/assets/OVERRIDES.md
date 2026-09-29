@@ -16,4 +16,7 @@ path. Files the reference doesn't have are added; a new one under a `pin_all_fro
 | `voice/pcm-worklet.js` | New (Hermes fork): the AudioWorklet that controller loads from its digested URL; not pinned |
 | `microphone.svg` | New (Hermes fork): the composer's record-a-voice-note button |
 | `controllers/voice_note_controller.js` | New (Hermes fork): records a voice note (`MediaRecorder`) from the composer and hands the file to the composer's attachment path (`drop-target:drop`, then Send) |
-| `waveform.svg` | New (Hermes fork): the composer's link to the live voice report (Gemini) |
+| `headset.svg` | New (Hermes fork): the composer's link to the live voice report |
+| `phone-hangup.svg` | New (Hermes fork): the live voice page's hang-up button |
+| `controllers/voice_player_controller.js` | New (Hermes fork): shows a voice note's duration next to its inline player once the browser knows it |
+| `hermes/hermes.css` | New (Hermes fork): every style of the voice features (composer buttons and recording bar, inline audio player, live voice page). `build.rs` leaves `hermes/` out of `stylesheet_link_tag :all`, so pages without Hermes features keep the reference's exact `<link>` tags; the Hermes templates link it themselves |
