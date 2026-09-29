@@ -355,7 +355,7 @@ async fn http_load(a: &Args) -> Res<Value> {
         "ok": ok,
         "statuses": st.iter().map(|(k, v)| (k.to_string(), json!(v))).collect::<serde_json::Map<_, _>>(),
         "errors": errors.load(Ordering::Relaxed),
-        "avg_bytes": if h.len() > 0 { bytes_total.load(Ordering::Relaxed) / h.len() } else { 0 },
+        "avg_bytes": if !h.is_empty() { bytes_total.load(Ordering::Relaxed) / h.len() } else { 0 },
         "latency": summary(&h),
     }))
 }
@@ -378,15 +378,14 @@ fn markers(text: &str) -> Vec<u64> {
     while let Some(i) = rest.find("bmk") {
         rest = &rest[i + 3..];
         let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-        if !digits.is_empty() && rest[digits.len()..].starts_with('z') {
-            if let Ok(n) = digits.parse() {
-                out.push(n);
-            }
+        if !digits.is_empty() && rest[digits.len()..].starts_with('z') && let Ok(n) = digits.parse() {
+            out.push(n);
         }
     }
     out
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn cable_client(
     addr: String,
     source: Option<std::net::IpAddr>,
@@ -604,11 +603,13 @@ async fn post_marked(sender: &mut Option<SendRequest<Full<Bytes>>>, addr: &str, 
 async fn wait_drain(delivery: &Delivery, seqs: &[u64], clients: usize, timeout: Duration) {
     let until = Instant::now() + timeout;
     while Instant::now() < until {
-        let got = delivery.got.lock().unwrap();
-        if seqs.iter().all(|s| got.get(s).map(|g| g.0 >= clients).unwrap_or(false)) {
+        let drained = {
+            let got = delivery.got.lock().unwrap();
+            seqs.iter().all(|s| got.get(s).map(|g| g.0 >= clients).unwrap_or(false))
+        };
+        if drained {
             return;
         }
-        drop(got);
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
