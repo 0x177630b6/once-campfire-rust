@@ -246,6 +246,7 @@ fn http_date() -> HeaderValue {
 }
 
 #[cfg(target_os = "linux")]
+#[allow(unsafe_code, reason = "the raw clock_gettime system call, past libfaketime")]
 fn wall_clock() -> jiff::Timestamp {
     let mut now = libc::timespec { tv_sec: 0, tv_nsec: 0 };
     // SAFETY: clock_gettime(2) writes one `timespec` through a valid pointer.

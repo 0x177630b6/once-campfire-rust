@@ -7,6 +7,15 @@ edition = "2024"
 license = "MIT"
 publish = false
 
+# Unsafe code only in the items that allow it with a reason (the libvips FFI, and the libc calls std
+# has no wrapper for), with a SAFETY comment on every unsafe block. The vendored html5ever doesn't
+# opt in.
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+undocumented_unsafe_blocks = "warn"
+
 [workspace.dependencies]
 rails_compat      = { path = "crates/rails_compat" }
 campfire_kit      = { path = "crates/kit" }

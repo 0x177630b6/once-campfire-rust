@@ -20,6 +20,7 @@ static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 /// [`disable_transparent_huge_pages`]). jemalloc declares it `const char *`, so it's a thin pointer,
 /// declared as tikv-jemalloc-sys does.
 #[cfg(target_os = "linux")]
+#[allow(unsafe_code, reason = "jemalloc reads its options from an exported symbol")]
 #[unsafe(export_name = "_rjem_malloc_conf")]
 pub static JEMALLOC_CONF: Option<&'static std::ffi::c_char> =
     // SAFETY: points at the first byte of a static, NUL-terminated string.
@@ -34,6 +35,7 @@ fn main() -> anyhow::Result<()> {
 /// thread's 2 MB stack and each of jemalloc's regions get backed by whole 2 MB pages as soon as
 /// they're touched: an idle server took 160 MB on 32 cores instead of 15 MB. Nothing here is big
 /// enough to gain from huge pages, so the process (and ffmpeg, which inherits it) opts out.
+#[allow(unsafe_code, reason = "prctl has no safe wrapper in std")]
 fn disable_transparent_huge_pages() {
     #[cfg(target_os = "linux")]
     {
@@ -47,6 +49,7 @@ fn disable_transparent_huge_pages() {
 }
 
 #[cfg(all(test, target_os = "linux"))]
+#[allow(unsafe_code, reason = "reads the settings back through prctl and mallctl")]
 mod tests {
     #[test]
     fn transparent_huge_pages_are_disabled() {

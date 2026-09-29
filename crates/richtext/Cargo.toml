@@ -2,6 +2,11 @@
 name = "campfire_richtext"
 version = "0.1.0"
 edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
 
 [dependencies]
 # The vendored 0.35: a backported parsing fix, and hooks for enforcing Gumbo's limits while parsing
