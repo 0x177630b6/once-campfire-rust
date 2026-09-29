@@ -398,9 +398,17 @@ Deliberate:
 - **The front server is stricter than Thruster.** The app's own listener on `TARGET_PORT` binds
   loopback only (Puma bound every interface) and has the front's timeouts and `MAX_REQUEST_BODY`
   (see [Running it](#running-it)). The response cache counts its keys toward `CACHE_SIZE`, skips
-  URIs longer than 2 KB, keys on the raw path (Thruster decoded it, so `/a%2Fb` and `/a/b` shared
-  an entry), and lets range requests through to the app instead of answering them with a whole
-  cached body.
+  URIs longer than 2 KB, keys on the raw path and query, and lets range requests through to the app
+  instead of answering them with a whole cached body. Thruster decoded the path, so `/a%2Fb` and
+  `/a/b` shared an entry. It also sorted and re-escaped the query and dropped any pair containing
+  `;`, so `?disposition=attachment;`, which the app reads, shared the entry of no query at all.
+  Between requests, an HTTP/1 keep-alive connection closes once the shorter of `HTTP_IDLE_TIMEOUT`
+  and `HTTP_READ_TIMEOUT` has passed since the previous response, unless the next request's headers
+  have arrived, because hyper's header timer runs while the connection waits. Thruster waited the
+  idle timeout for the next request's first bytes and then gave it the whole read timeout. With the
+  image's settings (60 and 300 seconds) idle connections close after 60 seconds either way; without
+  them the defaults are 60 and 30, so an idle HTTP/1 connection closes after 30 seconds. HTTP/2
+  connections get the idle timeout.
 - **Media is processed off the database writer.** Rails saves a blob's row and then uploads its
   file after commit; here the upload is copied into storage first, straight from the request's
   tempfile, and deleted again if the save fails. Variants, video posters and analysis run on
