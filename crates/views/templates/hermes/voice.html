@@ -1,19 +1,11 @@
-{#- Hermes fork: the live voice incident report (docs/hermes-gemini-live.md). -#}
+{#- Hermes fork: the live voice incident report (docs/hermes-gemini-live.md). A column: the intro,
+    the transcript (the only part that scrolls), and a control bar at the bottom with the round
+    mic / hang-up button. Styles: hermes/hermes.css. -#}
 {% extends "layouts/application.html" %}
 
 {%- block head %}
   <meta name="turbo-cache-control" content="no-cache">
-  <style>
-    .voice { display: flex; flex-direction: column; align-items: center; gap: var(--block-space); max-inline-size: 42rem; margin-inline: auto; padding: var(--block-space) var(--inline-space); }
-    .voice__toggle { font-size: 1.25rem; min-inline-size: 12rem; min-block-size: 3.5rem; padding-inline: 2rem; }
-    .voice[data-voice-state="live"] .voice__toggle { background: var(--color-negative); border-color: var(--color-negative); }
-    .voice__status { text-align: center; min-block-size: 1.5em; margin: 0; }
-    .voice__transcript { inline-size: 100%; max-block-size: 50vh; overflow-y: auto; }
-    .voice__transcript:empty { display: none; }
-    .voice__line { margin-block: 0.4em; }
-    .voice__line--model { opacity: 0.75; }
-    .voice__result { text-align: center; }
-  </style>
+  <link rel="stylesheet" href="{{ ctx.asset("hermes/hermes.css") }}">
 {%- endblock %}
 
 {%- block nav %}
@@ -22,21 +14,61 @@
     <span class="for-screen-reader">Retour au salon</span>
   </a>
 
-  <span class="btn btn--reversed btn--faux room--current">
-    <h1 class="room__contents txt-medium overflow-ellipsis">Compte rendu vocal · {{ voice.room_name }}</h1>
+  <span class="btn btn--reversed btn--faux room--current voice__title">
+    <h1 class="room__contents txt-medium overflow-ellipsis">Rapport vocal</h1>
   </span>
 {%- endblock %}
 
 {%- block content %}
-<section class="voice" data-controller="voice" data-voice-token-url-value="{{ voice.token_url }}" data-voice-report-url-value="{{ voice.report_url }}" data-voice-worklet-url-value="{{ voice.worklet_url }}" data-voice-room-url-value="{{ voice.room_url }}" data-voice-room-name-value="{{ voice.room_name }}">
-  <p class="txt-align-center margin-none">Décrivez l’incident à voix haute : l’assistant vous pose les questions qui manquent, vous relit le compte rendu, puis le publie dans « {{ voice.room_name }} » à votre nom une fois que vous l’avez confirmé.</p>
+<section class="voice" data-controller="voice" data-voice-state="idle" data-voice-activity="listening" data-voice-token-url-value="{{ voice.token_url }}" data-voice-report-url-value="{{ voice.report_url }}" data-voice-worklet-url-value="{{ voice.worklet_url }}" data-voice-room-url-value="{{ voice.room_url }}" data-voice-room-name-value="{{ voice.room_name }}">
+  <p class="voice__intro txt-small">Racontez l’incident&nbsp;: l’assistant pose les questions manquantes puis publie le compte rendu dans «&nbsp;{{ voice.room_name }}&nbsp;» après votre accord.</p>
 
-  <button type="button" class="btn btn--reversed voice__toggle" data-voice-target="toggle" data-action="voice#toggle" aria-pressed="false">Démarrer</button>
+  <div class="voice__transcript" data-voice-target="transcript" aria-live="off" aria-label="Transcription"></div>
 
-  <p class="voice__status" data-voice-target="status" role="status" aria-live="polite">Chargement…</p>
+  <div class="voice__notice" data-voice-target="notice" role="alert" hidden>
+    <span class="voice__notice-icon">{{ h::image_tag(ctx, "alert.svg", h::attrs().aria("hidden", true).size(16).class("colorize--white")) }}</span>
+    <div data-voice-target="noticeBody"></div>
+  </div>
 
-  <div class="voice__transcript" data-voice-target="transcript" aria-live="polite" aria-label="Transcription"></div>
+  <div class="voice__confirm" data-voice-target="confirm" hidden>
+    <p>Effacer la transcription et recommencer&nbsp;?</p>
+    <button type="button" class="btn btn--negative" data-action="voice#confirmRestart">Effacer et recommencer</button>
+    <button type="button" class="btn" data-action="voice#cancelRestart">Garder</button>
+  </div>
 
-  <div class="voice__result" data-voice-target="result" role="status" hidden></div>
+  <div class="voice__result" data-voice-target="result" hidden>
+    <span class="voice__result-icon">{{ h::image_tag(ctx, "check.svg", h::attrs().aria("hidden", true).size(28).class("colorize--white")) }}</span>
+    <p class="txt-medium" data-voice-target="resultText">Compte rendu publié.</p>
+    <div class="voice__result-actions">
+      <a class="btn btn--reversed" href="{{ voice.room_url }}" data-voice-target="messageLink">Voir le message</a>
+      <a class="btn" href="{{ voice.room_url }}">Retour au salon</a>
+    </div>
+  </div>
+
+  <div class="voice__bar">
+    <div class="voice__control" data-voice-target="control">
+      <button type="button" class="btn btn--reversed voice__toggle" data-voice-target="toggle" data-action="voice#toggle">
+        <img class="voice__icon-mic" aria-hidden="true" src="{{ ctx.asset("microphone.svg") }}" width="30" height="30" />
+        <img class="voice__icon-hangup" aria-hidden="true" src="{{ ctx.asset("phone-hangup.svg") }}" width="30" height="30" />
+        <span class="for-screen-reader" data-voice-target="label">Démarrer</span>
+      </button>
+    </div>
+
+    <div class="voice__meta">
+      <div class="voice__status-line">
+        <p class="voice__status" data-voice-target="status">Chargement…</p>
+        <span class="voice__timer txt-small" data-voice-target="timer" hidden>0:00</span>
+      </div>
+      <p class="voice__hint" data-voice-target="hint"></p>
+    </div>
+
+    <div class="voice__actions">
+      <button type="button" class="btn" data-voice-target="cancel" data-action="voice#cancel" hidden>Annuler</button>
+      <button type="button" class="btn btn--reversed" data-voice-target="resume" data-action="voice#retry" hidden>Reprendre</button>
+      <button type="button" class="btn" data-voice-target="restart" data-action="voice#restart" hidden>Recommencer</button>
+    </div>
+  </div>
+
+  <p class="for-screen-reader" data-voice-target="announcer" role="status"></p>
 </section>
 {%- endblock %}

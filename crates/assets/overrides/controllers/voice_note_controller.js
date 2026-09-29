@@ -2,8 +2,10 @@ import { Controller } from "@hotwired/stimulus"
 
 // Hermes fork: record a voice note from the composer and send it as an ordinary attachment.
 //
-// Tap the mic to start, tap again to stop and send; the bin discards. Recording stops by itself
-// (and sends) after `maxSeconds`. The recorded File goes through the composer's own attachment
+// Tap the mic to start, tap again (it has become a send arrow) to stop and send; the bin discards
+// and gives the focus back to the mic. While recording, a timer and a level meter run, and
+// `warnSeconds` before `maxSeconds` a warning says the note will send itself; at `maxSeconds`
+// recording stops and sends. The recorded File goes through the composer's own attachment
 // path: it's handed over with the `drop-target:drop` event the composer already listens for on
 // window (`drop-target:drop@window->composer#dropFiles`, what a file dropped on the room does),
 // then the composer's send button is clicked. So the pending-upload bubble, the upload progress,
@@ -11,22 +13,24 @@ import { Controller } from "@hotwired/stimulus"
 // send button, that also sends whatever is typed in the composer and any other pending files.
 
 const MAX_SECONDS = 300
+const WARN_SECONDS = 30
 const MIN_SECONDS = 1
 const ERROR_MS = 6000
 
 export const MESSAGES = {
   record: "Enregistrer un message vocal",
-  stop: "Arrêter et envoyer le message vocal",
+  stop: "Envoyer le message vocal",
   cancel: "Annuler l’enregistrement",
-  insecure: "Le micro n’est disponible qu’en HTTPS : ouvrez Campfire via une adresse https://.",
+  insecure: "Le micro n’est disponible qu’en HTTPS\u00a0: ouvrez Campfire via une adresse https://.",
   unsupported: "Ce navigateur ne permet pas d’enregistrer un message vocal.",
   micDenied: "Accès au micro refusé. Autorisez le micro pour ce site dans les réglages du navigateur, puis réessayez.",
   micMissing: "Aucun micro détecté sur cet appareil.",
   micError: "Impossible d’ouvrir le micro.",
   recordError: "L’enregistrement a échoué.",
-  tooShort: "Message vocal trop court : maintenez l’enregistrement au moins une seconde.",
+  tooShort: "Enregistrez au moins une seconde.",
   empty: "Aucun son n’a été enregistré.",
-  offline: "Hors ligne : le message vocal partira dès que vous appuierez sur Envoyer."
+  offline: "Hors ligne\u00a0: le message vocal partira dès que vous appuierez sur Envoyer.",
+  autoSend: (seconds) => `Envoi automatique dans ${seconds}\u00a0s`
 }
 
 // MediaRecorder types by preference: [what to ask the recorder for, the File's type, extension].
@@ -78,6 +82,15 @@ export function formatDuration(seconds) {
   return `${Math.floor(whole / 60)}:${pad(whole % 60)}`
 }
 
+// Root mean square of time-domain samples (0 silence … 1 full scale), boosted so that speech
+// fills most of the meter.
+export function levelFromSamples(samples) {
+  if (!samples || samples.length === 0) return 0
+  let sum = 0
+  for (let i = 0; i < samples.length; i++) sum += samples[i] * samples[i]
+  return Math.min(1, Math.sqrt(sum / samples.length) * 4)
+}
+
 export function errorMessageFor(error) {
   switch (error?.name) {
     case "NotAllowedError":
@@ -98,8 +111,8 @@ const canCapture = () => !!(navigator.mediaDevices?.getUserMedia && window.Media
 // ---------------------------------------------------------------------------------------------
 
 export default class extends Controller {
-  static targets = [ "toggle", "label", "timer", "cancel", "error" ]
-  static values = { maxSeconds: { type: Number, default: MAX_SECONDS } }
+  static targets = [ "toggle", "label", "timer", "cancel", "error", "level", "warning" ]
+  static values = { maxSeconds: { type: Number, default: MAX_SECONDS }, warnSeconds: { type: Number, default: WARN_SECONDS } }
 
   #state = "idle" // idle | starting | recording | stopping
   #stream = null
@@ -111,6 +124,11 @@ export default class extends Controller {
   #ticker = null
   #errorTimer = null
   #send = false
+  #refocus = false // give the focus back to the mic once idle again (after the bin)
+  // Level meter (never `this.context`: that's Stimulus' own).
+  #meterContext = null
+  #analyser = null
+  #meterFrame = null
 
   connect() {
     // Without HTTPS the browser hides getUserMedia: keep the button so a tap can say why.
@@ -140,6 +158,8 @@ export default class extends Controller {
     } else {
       this.#stop(false)
     }
+    this.#refocus = true
+    this.#render()
   }
 
   async #start() {
@@ -208,7 +228,43 @@ export default class extends Controller {
     this.#elapsed = 0
     this.#state = "recording"
     this.#ticker = setInterval(() => this.#tick(), 250)
+    this.#startMeter(stream)
     this.#render()
+  }
+
+  #startMeter(stream) {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext
+    if (!AudioContextClass || !this.hasLevelTarget) return
+    try {
+      this.#meterContext = new AudioContextClass()
+      this.#meterContext.resume?.().catch(() => {})
+      this.#analyser = this.#meterContext.createAnalyser()
+      this.#analyser.fftSize = 1024
+      this.#meterContext.createMediaStreamSource(stream).connect(this.#analyser)
+    } catch {
+      this.#stopMeter()
+      return
+    }
+
+    const samples = new Float32Array(this.#analyser.fftSize)
+    let level = 0
+    const draw = () => {
+      if (!this.#analyser) return
+      this.#analyser.getFloatTimeDomainData(samples)
+      level = Math.max(levelFromSamples(samples), level * 0.85) // quick rise, slow fall
+      this.levelTarget.style.setProperty("--hermes-level", level.toFixed(3))
+      this.#meterFrame = requestAnimationFrame(draw)
+    }
+    draw()
+  }
+
+  #stopMeter() {
+    if (this.#meterFrame) cancelAnimationFrame(this.#meterFrame)
+    this.#meterFrame = null
+    this.#analyser = null
+    this.#meterContext?.close?.().catch(() => {})
+    this.#meterContext = null
+    if (this.hasLevelTarget) this.levelTarget.style.removeProperty("--hermes-level")
   }
 
   #tick() {
@@ -287,6 +343,7 @@ export default class extends Controller {
   }
 
   #releaseMicrophone() {
+    this.#stopMeter()
     this.#stream?.getTracks().forEach((track) => track.stop())
     this.#stream = null
   }
@@ -308,18 +365,27 @@ export default class extends Controller {
 
     if (this.hasToggleTarget) {
       const label = recording ? MESSAGES.stop : MESSAGES.record
-      this.toggleTarget.setAttribute("aria-pressed", recording ? "true" : "false")
       this.toggleTarget.title = label
       this.toggleTarget.disabled = this.#state === "stopping"
       if (this.hasLabelTarget) this.labelTarget.textContent = label
+      if (this.#refocus && this.#state === "idle") {
+        this.#refocus = false
+        this.toggleTarget.focus()
+      }
     }
     if (this.hasCancelTarget) this.cancelTarget.hidden = !(recording || this.#state === "starting")
-    if (this.hasTimerTarget) this.timerTarget.hidden = !recording
     this.#renderTimer()
   }
 
   #renderTimer() {
-    if (this.hasTimerTarget) this.timerTarget.textContent = `● ${formatDuration(this.#elapsed)}`
+    if (this.hasTimerTarget) this.timerTarget.textContent = formatDuration(this.#elapsed)
+    if (this.hasWarningTarget) {
+      const left = this.maxSecondsValue - this.#elapsed
+      const warning = this.#state === "recording" && left <= this.warnSecondsValue
+        ? MESSAGES.autoSend(this.warnSecondsValue)
+        : ""
+      if (this.warningTarget.textContent !== warning) this.warningTarget.textContent = warning
+    }
   }
 
   #showError(message) {

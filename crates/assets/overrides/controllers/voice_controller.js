@@ -12,6 +12,10 @@ import { Controller } from "@hotwired/stimulus"
 //
 // The protocol lives in LiveSession (no DOM, no audio) so it can be exercised on its own; the
 // Stimulus controller wires it to the microphone, the speaker and the page.
+//
+// Never store anything in `this.context`, `this.element`, `this.application`, `this.scope`,
+// `this.data` or `this.targets` in the controller: they're Stimulus' own (an AudioContext once
+// stored in `this.context` broke every target lookup).
 
 const INPUT_RATE = 16000
 const OUTPUT_RATE = 24000
@@ -19,10 +23,16 @@ const INPUT_MIME = `audio/pcm;rate=${INPUT_RATE}`
 const FINISH_TIMEOUT_MS = 10000
 const PLAYBACK_LEAD_S = 0.05
 
+// The report's transcript says « Employé »; the page says « Vous ».
 const LABELS = { user: "Employé", model: "Assistant" }
+const SCREEN_LABELS = { user: "Vous", model: "Assistant" }
+
+// Sent as text right after setup so the assistant speaks first (greets, asks what happened). Text
+// input isn't transcribed, so it shows neither on the page nor in the report.
+export const KICKOFF_TEXT = "[La session commence : salue brièvement l’employé et demande-lui ce qui s’est passé.]"
 
 // Every start-up step has a deadline, so a stalled step ends with a message naming it instead of
-// an endless "Connexion en cours…".
+// an endless "Connexion…".
 const STEP_TIMEOUT_MS = { mic: 60000, audio: 10000, token: 15000, connect: 20000 }
 
 export class StepTimeout extends Error {
@@ -38,32 +48,52 @@ export function withTimeout(promise, ms, step) {
   return Promise.race([promise, deadline]).finally(() => clearTimeout(timer))
 }
 
+// For the « Détails techniques » of an error, not the sentence.
 const STEP_LABELS = {
   mic: "autorisation du micro",
-  audio: "démarrage de l'audio du navigateur",
+  audio: "démarrage de l’audio du navigateur",
   token: "ouverture de session sur le serveur Campfire",
   connect: "connexion au service vocal Google (generativelanguage.googleapis.com)"
 }
 
+const NB = " " // before : ? ! ; and inside « »
+
 export const MESSAGES = {
-  idle: "Appuyez sur « Démarrer » puis décrivez l'incident à voix haute.",
-  insecure: "Le micro n'est disponible qu'en HTTPS : ouvrez cette page via une adresse https://.",
-  unsupported: "Ce navigateur ne permet pas la capture audio en direct (AudioWorklet). Essayez un navigateur récent.",
-  micDenied: "Accès au micro refusé. Autorisez le micro pour ce site dans les réglages du navigateur, puis réessayez.",
+  ready: "Appuyez sur le micro pour commencer",
+  insecure: `Le micro n’est disponible qu’en HTTPS${NB}: ouvrez cette page via une adresse https://.`,
+  unsupported: "Ce navigateur ne permet pas la conversation vocale en direct. Essayez un navigateur récent.",
+  micDenied: "L’accès au micro est refusé.",
+  micDeniedHelp: `Chrome${NB}: cadenas de la barre d’adresse → Micro → Autoriser.\niPhone${NB}: Réglages → Safari → Micro. Puis réessayez.`,
   micMissing: "Aucun micro détecté sur cet appareil.",
-  micError: "Impossible d'ouvrir le micro.",
-  starting: "Connexion en cours…",
-  live: "En direct — parlez, l'assistant vous écoute.",
+  micError: "Impossible d’ouvrir le micro.",
+  micLost: "Le micro a été coupé (appel entrant, autre application ou écran verrouillé).",
+  stepMic: "Autorisation du micro…",
+  stepConnect: "Connexion à l’assistant…",
+  reconnecting: "Reconnexion…",
+  listening: "À vous",
+  speaking: "L’assistant parle…",
+  liveHint: `Dites «${NB}c’est bon${NB}» à l’assistant pour publier.`,
+  resumeFailed: "Connexion rétablie, l’assistant a repris le fil.",
   rateLimited: "Trop de sessions demandées en peu de temps. Patientez une minute puis réessayez.",
-  tokenError: "Impossible d'ouvrir une session vocale (erreur serveur). Réessayez dans un instant.",
-  connectError: "Impossible de joindre le service vocal. Vérifiez la connexion puis réessayez.",
-  reconnecting: "Reconnexion en cours…",
-  resumeFailed: "Connexion rétablie (nouvelle session, l'assistant a reçu le fil de la conversation) — continuez.",
+  tokenError: "Impossible d’ouvrir une session vocale. Réessayez dans un instant.",
+  connectError: "Impossible de joindre l’assistant vocal. Vérifiez la connexion puis réessayez.",
+  timeout: "L’assistant vocal ne répond pas. Réessayez.",
   closed: "La connexion a été interrompue.",
-  submitting: "Envoi du compte rendu…",
-  submitted: "Compte rendu publié.",
-  submitError: "L'envoi du compte rendu a échoué.",
-  stopped: "Session terminée."
+  closedStatus: "Connexion interrompue",
+  retry: "Appuyez sur le micro pour réessayer",
+  unavailable: "Indisponible",
+  paused: "Conversation en pause",
+  submitting: "Publication du compte rendu…",
+  submitError: "La publication du compte rendu a échoué. L’assistant va vous proposer de réessayer.",
+  finishing: "Compte rendu publié. L’assistant termine…",
+  published: "Compte rendu publié",
+  publishedIn: (room) => `Compte rendu publié dans «${NB}${room}${NB}».`
+}
+
+// Button labels (the round button's accessible name).
+const TOGGLE_LABELS = {
+  idle: "Démarrer", starting: "Connexion…", live: "Raccrocher", finishing: "Raccrocher",
+  stopped: "Reprendre", closed: "Reprendre", error: "Réessayer", unavailable: "Indisponible", done: "Terminé"
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -169,9 +199,9 @@ export class Transcript {
 // the server only issued a resumption handle right after setup, so the conversation since then
 // was lost. Replaying the transcript makes reconnects safe either way.
 export function recapText(transcript) {
-  return "[Reprise après une coupure de connexion. Voici la conversation jusqu'ici ; " +
+  return "[Reprise après une coupure de connexion. Voici la conversation jusqu’ici ; " +
     "ne la répète pas et ne pose pas de nouveau les questions déjà traitées : " +
-    "continue là où elle s'est arrêtée.]\n" + transcript.toString()
+    "continue là où elle s’est arrêtée.]\n" + transcript.toString()
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -425,10 +455,13 @@ function closeQuietly(socket) {
 // ---------------------------------------------------------------------------------------------
 // Audio
 
-// Gapless playback of 24 kHz chunks on the shared AudioContext's timeline.
+// Gapless playback of 24 kHz chunks on the shared AudioContext's timeline. `onActivity(true)`
+// when audio starts playing, `onActivity(false)` once everything queued has played (or was
+// flushed): the page's "L'assistant parle…".
 class Player {
-  constructor(context) {
-    this.context = context
+  constructor(audioContext, onActivity = () => {}) {
+    this.audioContext = audioContext
+    this.onActivity = onActivity
     this.cursor = 0
     this.sources = new Set()
   }
@@ -437,27 +470,35 @@ class Player {
     const samples = float32FromPcm16(bytesFromBase64(base64))
     if (samples.length === 0) return
 
-    const buffer = this.context.createBuffer(1, samples.length, OUTPUT_RATE)
+    const buffer = this.audioContext.createBuffer(1, samples.length, OUTPUT_RATE)
     buffer.copyToChannel(samples, 0)
 
-    const source = this.context.createBufferSource()
+    const source = this.audioContext.createBufferSource()
     source.buffer = buffer
-    source.connect(this.context.destination)
-    source.onended = () => this.sources.delete(source)
+    source.connect(this.audioContext.destination)
+    source.onended = () => {
+      this.sources.delete(source)
+      if (this.sources.size === 0) this.onActivity(false)
+    }
 
-    const startAt = Math.max(this.cursor, this.context.currentTime + PLAYBACK_LEAD_S)
+    const startAt = Math.max(this.cursor, this.audioContext.currentTime + PLAYBACK_LEAD_S)
     source.start(startAt)
     this.cursor = startAt + buffer.duration
+    const wasIdle = this.sources.size === 0
     this.sources.add(source)
+    if (wasIdle) this.onActivity(true)
   }
 
   flush() {
+    const hadAudio = this.sources.size > 0
     for (const source of this.sources) {
+      source.onended = null
       try { source.stop() } catch {}
       source.disconnect()
     }
     this.sources.clear()
     this.cursor = 0
+    if (hadAudio) this.onActivity(false)
   }
 
   get idle() {
@@ -465,33 +506,85 @@ class Player {
   }
 }
 
+// RMS of a chunk of Int16 PCM, scaled so that speech fills most of the ring (0 … 1).
+export function levelFromPcm16(buffer) {
+  const samples = new Int16Array(buffer)
+  if (samples.length === 0) return 0
+  let sum = 0
+  for (let i = 0; i < samples.length; i++) sum += samples[i] * samples[i]
+  return Math.min(1, Math.sqrt(sum / samples.length) / 0x8000 * 5)
+}
+
+const pad = (n) => String(n).padStart(2, "0")
+
+// French typography for display: typographic apostrophes, a non-breaking space before ? ! : ; »
+// and after «.
+export function frenchSpacing(text) {
+  return text.replace(/'/g, "’").replace(/\s+([?!:;»])/g, `${NB}$1`).replace(/«\s+/g, `«${NB}`)
+}
+
+// 65 → "01:05"
+export function formatClock(seconds) {
+  const whole = Math.max(0, Math.floor(seconds))
+  return `${pad(Math.floor(whole / 60))}:${pad(whole % 60)}`
+}
+
 // ---------------------------------------------------------------------------------------------
 // Stimulus controller
+//
+// States (data-voice-state): idle → starting → live ⇄ (finishing → done)
+//   live → stopped (« Raccrocher »), closed (connection lost), error; each can resume (retry())
+//   with the transcript kept, or « Recommencer » (in-page confirmation) wipes it.
+//   unavailable: no HTTPS, no AudioWorklet.
+// While live, data-voice-activity is "speaking" while the assistant's audio plays, else
+// "listening".
 
 export default class extends Controller {
-  static targets = [ "toggle", "status", "transcript", "result" ]
+  static targets = [ "toggle", "label", "control", "status", "timer", "hint", "transcript", "notice", "noticeBody",
+    "confirm", "cancel", "resume", "restart", "result", "resultText", "messageLink", "announcer" ]
   static values = { tokenUrl: String, reportUrl: String, workletUrl: String, roomUrl: String, roomName: String }
 
   connect() {
     this.state = "idle"
+    this.activity = "listening"
     this.transcript = new Transcript()
     this.submitted = false
+    this.liveSeconds = 0
+    this.liveSince = null
+    this.level = 0
     this.onVisibilityChange = () => this.#reacquireWakeLock()
     document.addEventListener("visibilitychange", this.onVisibilityChange)
 
+    // The transcript sticks to its newest line unless scrolled up, also when the notice or the
+    // action buttons appear and shrink it.
+    this.stickToBottom = true
+    this.onTranscriptScroll = () => {
+      const t = this.transcriptTarget
+      this.stickToBottom = t.scrollHeight - t.scrollTop - t.clientHeight < 48
+    }
+    this.transcriptTarget.addEventListener("scroll", this.onTranscriptScroll, { passive: true })
+    if (window.ResizeObserver) {
+      this.transcriptObserver = new ResizeObserver(() => this.#stickTranscript())
+      this.transcriptObserver.observe(this.transcriptTarget)
+    }
+
     if (!window.isSecureContext) {
-      this.#fail(MESSAGES.insecure, { retry: false })
+      this.#fail({ message: MESSAGES.insecure, retry: false })
     } else if (!navigator.mediaDevices?.getUserMedia || !window.AudioWorkletNode) {
-      this.#fail(MESSAGES.unsupported, { retry: false })
+      this.#fail({ message: MESSAGES.unsupported, retry: false })
     } else {
-      this.#setStatus(MESSAGES.idle)
       this.#render()
     }
   }
 
   disconnect() {
     document.removeEventListener("visibilitychange", this.onVisibilityChange)
+    this.transcriptTarget.removeEventListener("scroll", this.onTranscriptScroll)
+    this.transcriptObserver?.disconnect()
     this.#teardown()
+    this.session = null
+    clearInterval(this.clockTimer)
+    clearTimeout(this.transientTimer)
   }
 
   // Works whether or not the markup wires the button with data-action="voice#toggle".
@@ -505,78 +598,104 @@ export default class extends Controller {
     event?.preventDefault()
 
     switch (this.state) {
-      case "idle":
-      case "done":
-      case "error":   return this.start()
-      case "closed":  return this.retry()
+      case "idle":      return this.start()
       case "live":
-      case "finishing":
-      case "starting": return this.stop()
+      case "finishing": return this.stop()
+      case "stopped":
+      case "closed":
+      case "error":     return this.retry()
     }
   }
 
+  // A fresh conversation. Only reached with an empty transcript (idle, or after « Recommencer »).
   async start() {
     if (this.state === "starting" || this.state === "live") return
     if (!this.#supported) return
 
-    this.state = "starting"
-    this.submitted = false
-    this.transcript = new Transcript()
-    this.transcriptTarget.replaceChildren()
-    this.resultTarget.hidden = true
-    this.resultTarget.replaceChildren()
-    this.#setStatus(MESSAGES.starting)
-    this.#render()
+    this.#reset()
+    this.#enterStarting(MESSAGES.stepMic)
 
     try {
       await this.#startAudio()
+      this.#setStep(MESSAGES.stepConnect)
       this.session = this.#buildSession()
       await this.session.start()
       if (this.state !== "starting") return this.session?.close()
 
-      this.state = "live"
-      this.#setStatus(MESSAGES.live)
-      this.#render()
-      this.#acquireWakeLock()
+      this.session.sendText(KICKOFF_TEXT)
+      this.#enterLive()
     } catch (error) {
-      if (this.state === "starting") {
-        this.#teardown()
-        this.#fail(this.#messageFor(error))
-      }
+      if (this.state === "starting") this.#startFailed(error)
     }
   }
 
-  // Reconnects after an unexpected close, resuming the conversation when possible.
+  // Resumes the conversation (after « Raccrocher », a lost connection or an error), transcript
+  // kept: a fresh token, the session resumed when possible, and the transcript replayed to the
+  // assistant either way (LiveSession's onReconnected).
   async retry() {
     if (!this.session) return this.start()
+    if (this.state === "starting" || this.state === "live") return
 
-    this.state = "starting"
-    this.#setStatus(MESSAGES.reconnecting)
-    this.#render()
+    this.#hideNotice()
+    this.#hideConfirm()
+    this.#enterStarting(this.audioContext ? MESSAGES.reconnecting : MESSAGES.stepMic)
 
     try {
       if (!this.audioContext || this.audioContext.state === "closed") await this.#startAudio()
       await withTimeout(this.audioContext.resume().catch(() => {}), 3000, "audio").catch(() => {})
+      this.#setStep(MESSAGES.stepConnect)
       const { resumed } = await this.session.restart()
       if (this.state !== "starting") return
 
-      this.state = "live"
-      this.#setStatus(resumed ? MESSAGES.live : MESSAGES.resumeFailed)
-      this.#render()
-      this.#acquireWakeLock()
+      this.#enterLive()
+      if (!resumed) this.#setTransient(MESSAGES.resumeFailed, 4000)
     } catch (error) {
-      if (this.state === "starting") {
-        this.#teardown()
-        this.#fail(this.#messageFor(error))
-      }
+      if (this.state === "starting") this.#startFailed(error)
     }
   }
 
+  // « Raccrocher »: ends the call, keeps the transcript (and the session, to resume).
   stop() {
+    if (this.state === "finishing") return this.#finish()
     this.#teardown()
-    this.state = this.submitted ? "done" : "idle"
-    if (!this.submitted) this.#setStatus(MESSAGES.stopped)
+    this.#hideNotice()
+    this.state = this.submitted ? "done" : (this.transcript.empty ? "idle" : "stopped")
     this.#render()
+    this.#announce(this.state === "stopped" ? MESSAGES.paused : "")
+  }
+
+  // The small « Annuler » while starting.
+  cancel(event) {
+    event?.preventDefault()
+    if (this.state !== "starting") return
+    this.#teardown()
+    this.state = this.transcript.empty ? "idle" : "stopped"
+    this.#render()
+    this.#focus(this.toggleTarget)
+  }
+
+  // « Recommencer »: asks first when there's something to lose.
+  restart(event) {
+    event?.preventDefault()
+    if (this.transcript.empty) return this.confirmRestart()
+
+    this.confirmTarget.hidden = false
+    this.#focus(this.confirmTarget.querySelector("button"))
+  }
+
+  confirmRestart(event) {
+    event?.preventDefault()
+    this.#hideConfirm()
+    this.#teardown()
+    this.session = null
+    this.state = "idle"
+    this.start()
+  }
+
+  cancelRestart(event) {
+    event?.preventDefault()
+    this.#hideConfirm()
+    this.#focus(this.hasRestartTarget ? this.restartTarget : this.toggleTarget)
   }
 
   // Session wiring
@@ -586,17 +705,22 @@ export default class extends Controller {
       fetchToken: () => this.#fetchToken(),
       handlers: {
         onAudio: data => this.player?.enqueue(data),
-        onInterrupted: () => this.player?.flush(),
+        onInterrupted: () => {
+          this.player?.flush()
+          this.#setActivity("listening")
+        },
         onTranscript: (role, text) => this.#appendTranscript(role, text),
         onTurnComplete: () => {
           this.transcript.endTurn()
+          this.#completeTurn()
+          if (this.player?.idle !== false) this.#setActivity("listening")
           if (this.state === "finishing") this.#finishSoon()
         },
         onToolCall: call => this.#handleToolCall(call),
-        onReconnecting: () => { if (this.state === "live") this.#setStatus(MESSAGES.reconnecting) },
+        onReconnecting: () => { if (this.state === "live") this.#setTransient(MESSAGES.reconnecting) },
         onReconnected: ({ resumed }) => {
-          if (!this.submitted && !this.transcript.empty) this.session?.sendText(recapText(this.transcript))
-          if (this.state === "live") this.#setStatus(resumed ? MESSAGES.live : MESSAGES.resumeFailed)
+          if (!this.submitted) this.session?.sendText(this.transcript.empty ? KICKOFF_TEXT : recapText(this.transcript))
+          if (this.state === "live") this.#setTransient(resumed ? null : MESSAGES.resumeFailed, 4000)
         },
         onClosed: ({ code, reason }) => this.#connectionLost(code, reason)
       }
@@ -607,20 +731,23 @@ export default class extends Controller {
     if (name !== "submit_incident") return { error: `Outil inconnu : ${name}` }
     if (this.submitted) return { result: "already_submitted" }
 
-    this.#setStatus(MESSAGES.submitting)
+    this.#setTransient(MESSAGES.submitting)
 
     try {
       const report = await this.#postReport(args)
       this.submitted = true
       this.state = "finishing"
+      this.#hideNotice()
       this.#showResult(report)
-      this.#setStatus(MESSAGES.submitted)
+      this.#setTransient(null)
       this.#render()
       this.finishTimer = setTimeout(() => this.#finishSoon(), FINISH_TIMEOUT_MS)
       return { result: "ok" }
     } catch (error) {
-      this.#setStatus(`${MESSAGES.submitError} ${error.message}`.trim())
-      return { result: "error", error: "Le compte rendu n'a pas pu être publié. Préviens l'employé et propose de réessayer." }
+      console.warn("voice: report failed", error)
+      this.#setTransient(null)
+      this.#showNotice({ message: MESSAGES.submitError, details: error.message })
+      return { result: "error", error: "Le compte rendu n’a pas pu être publié. Préviens l’employé et propose de réessayer." }
     }
   }
 
@@ -641,8 +768,11 @@ export default class extends Controller {
   #finish() {
     if (this.state !== "finishing") return
     this.#teardown()
+    this.session = null
     this.state = "done"
     this.#render()
+    this.#announce(this.hasResultTextTarget ? this.resultTextTarget.textContent : MESSAGES.published)
+    if (this.hasMessageLinkTarget) this.#focus(this.messageLinkTarget)
   }
 
   #connectionLost(code, reason) {
@@ -650,19 +780,23 @@ export default class extends Controller {
     if (this.state !== "live") return
 
     console.warn("voice: connection closed", code, reason)
-    this.player?.flush()
-    this.#releaseWakeLock()
+    this.#teardown()
     this.state = "closed"
-    this.#setStatus(`${MESSAGES.closed} Appuyez sur « Reprendre » pour continuer la conversation.`)
+    this.#showNotice({ message: `${MESSAGES.closed} Appuyez sur le micro pour reprendre la conversation.`, details: `WebSocket fermé (code ${code}${reason ? `, ${reason}` : ""})` })
     this.#render()
   }
 
   #micLost() {
     if (this.state === "finishing") return this.#finish()
-    if (this.state !== "live" && this.state !== "closed") return
+    if (this.state !== "live") return
 
     this.#teardown()
-    this.#fail("Le micro a été coupé (appel entrant, autre application ou écran verrouillé). Appuyez sur « Réessayer ».")
+    this.#fail({ message: MESSAGES.micLost })
+  }
+
+  #startFailed(error) {
+    this.#teardown()
+    this.#fail(this.#describe(error))
   }
 
   // HTTP
@@ -686,7 +820,7 @@ export default class extends Controller {
     const response = await fetch(this.reportUrlValue, {
       method: "POST", credentials: "same-origin", headers: this.#headers, body
     })
-    if (!response.ok) throw new Error(`(HTTP ${response.status})`)
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
     return response.json().catch(() => ({}))
   }
 
@@ -723,21 +857,25 @@ export default class extends Controller {
       processorOptions: { targetRate: INPUT_RATE, chunkMs: 100 }
     })
     this.worklet.port.onmessage = ({ data }) => {
-      if (this.state === "live" || this.state === "finishing") this.session?.sendAudio(base64FromBytes(data))
+      if (this.state === "live" || this.state === "finishing") {
+        this.#showLevel(levelFromPcm16(data))
+        this.session?.sendAudio(base64FromBytes(data))
+      }
     }
     this.source.connect(this.worklet)
     this.worklet.connect(this.audioContext.destination) // outputs silence; keeps the node pulled everywhere
-    this.player = new Player(this.audioContext)
+    this.player = new Player(this.audioContext, playing => this.#setActivity(playing ? "speaking" : "listening"))
 
     this.stream.getAudioTracks().forEach(track => {
       track.onended = () => this.#micLost()
     })
   }
 
+  // Stops the audio and the connection. The session object (resumption handle) is kept, so
+  // retry() can pick the conversation up again.
   #teardown() {
     clearTimeout(this.finishTimer)
     this.session?.close()
-    this.session = null
     this.player?.flush()
     this.player = null
 
@@ -755,6 +893,25 @@ export default class extends Controller {
     this.audioContext = null
 
     this.#releaseWakeLock()
+    this.#stopClock()
+    this.#showLevel(0)
+    this.#setActivity("listening")
+    this.#markPartial(null)
+  }
+
+  // A new conversation: empty transcript, clock at zero, no result.
+  #reset() {
+    this.session = null
+    this.submitted = false
+    this.transcript = new Transcript()
+    this.lastLine = null
+    this.lastLineElement = null
+    this.transcriptTarget.replaceChildren()
+    this.stickToBottom = true
+    this.liveSeconds = 0
+    this.resultTarget.hidden = true
+    this.#hideNotice()
+    this.#hideConfirm()
   }
 
   // Wake lock: the screen going to sleep cuts the microphone on phones.
@@ -779,85 +936,277 @@ export default class extends Controller {
     this.wakeLock = null
   }
 
+  // States
+
+  #enterStarting(step) {
+    this.state = "starting"
+    this.step = step
+    this.#hideNotice()
+    this.#render()
+    this.#announce(step)
+    if (this.hasCancelTarget && (document.activeElement === this.toggleTarget || document.activeElement === document.body)) {
+      this.#focus(this.cancelTarget)
+    }
+  }
+
+  #setStep(step) {
+    if (this.state !== "starting") return
+    this.step = step
+    this.#render()
+    this.#announce(step)
+  }
+
+  #enterLive() {
+    this.state = "live"
+    this.#startClock()
+    this.#render()
+    this.#announce(`En direct. ${MESSAGES.liveHint}`)
+    this.#acquireWakeLock()
+    if (!this.toggleTarget.contains(document.activeElement)) this.#focus(this.toggleTarget)
+  }
+
+  #fail({ message, help, details, retry = true }) {
+    this.state = retry ? "error" : "unavailable"
+    this.#showNotice({ message, help, details })
+    this.#render()
+  }
+
+  #setActivity(activity) {
+    if (this.activity === activity) return
+    this.activity = activity
+    this.element.dataset.voiceActivity = activity
+    if (this.state === "live") this.#renderStatus()
+  }
+
+  // A status that wins over « À vous » / « L'assistant parle… » for a while (or until cleared).
+  #setTransient(text, ms) {
+    clearTimeout(this.transientTimer)
+    this.transient = text
+    if (text && ms) this.transientTimer = setTimeout(() => this.#setTransient(null), ms)
+    this.#renderStatus()
+  }
+
+  // Clock (time spent live, across resumptions)
+
+  #startClock() {
+    this.liveSince = performance.now()
+    clearInterval(this.clockTimer)
+    this.clockTimer = setInterval(() => this.#renderClock(), 500)
+    this.#renderClock()
+  }
+
+  #stopClock() {
+    if (this.liveSince !== null) this.liveSeconds += (performance.now() - this.liveSince) / 1000
+    this.liveSince = null
+    clearInterval(this.clockTimer)
+    this.#renderClock()
+  }
+
+  get #elapsed() {
+    return this.liveSeconds + (this.liveSince === null ? 0 : (performance.now() - this.liveSince) / 1000)
+  }
+
   // Page
 
   #appendTranscript(role, text) {
     const line = this.transcript.append(role, text)
     if (!line) return
 
+    const container = this.transcriptTarget
+
     if (line !== this.lastLine) {
       this.lastLine = line
-      this.lastLineElement = document.createElement("p")
-      this.lastLineElement.className = `voice__line voice__line--${role}`
-      const label = document.createElement("strong")
-      label.textContent = `${LABELS[role]} : `
+      const element = document.createElement("div")
+      element.className = `voice__line voice__line--${role}`
+      const label = document.createElement("span")
+      label.className = "voice__role"
+      label.textContent = SCREEN_LABELS[role]
+      const bubble = document.createElement("p")
+      bubble.className = "voice__bubble"
       this.lastLineText = document.createTextNode("")
-      this.lastLineElement.append(label, this.lastLineText)
-      this.transcriptTarget.append(this.lastLineElement)
+      bubble.append(this.lastLineText)
+      element.append(label, bubble)
+      container.append(element)
+      this.lastLineElement = element
+      this.announcedLine = null
     }
-    this.lastLineText.data = line.text
-    this.lastLineElement.scrollIntoView?.({ block: "end", behavior: "smooth" })
+    this.lastLineText.data = frenchSpacing(line.text)
+    this.#markPartial(this.lastLineElement)
+    this.#stickTranscript()
+  }
+
+  #stickTranscript() {
+    if (this.stickToBottom) this.transcriptTarget.scrollTop = this.transcriptTarget.scrollHeight
+  }
+
+  // The line being streamed; null when nothing is.
+  #markPartial(element) {
+    if (this.partialElement && this.partialElement !== element) this.partialElement.classList.remove("voice__line--partial")
+    this.partialElement = element
+    element?.classList.add("voice__line--partial")
+  }
+
+  // The assistant's turn is over: its line is final, and read out once to screen readers.
+  #completeTurn() {
+    const line = this.lastLine
+    if (line?.role !== "model") return
+    this.#markPartial(null)
+    if (this.announcedLine !== line) {
+      this.announcedLine = line
+      this.#announce(`${SCREEN_LABELS.model}${NB}: ${frenchSpacing(line.text.trim())}`)
+    }
+  }
+
+  #showLevel(level) {
+    this.level = level === 0 || level > this.level ? level : this.level * 0.6 + level * 0.4
+    if (this.hasControlTarget) this.controlTarget.style.setProperty("--voice-level", this.level.toFixed(2))
   }
 
   #showResult({ message_url }) {
-    const paragraph = document.createElement("p")
-    paragraph.textContent = this.hasRoomNameValue && this.roomNameValue
-      ? `Compte rendu publié dans « ${this.roomNameValue} ». `
-      : "Compte rendu publié. "
+    if (this.hasResultTextTarget) {
+      this.resultTextTarget.textContent = this.roomNameValue ? MESSAGES.publishedIn(this.roomNameValue) : `${MESSAGES.published}.`
+    }
+    if (this.hasMessageLinkTarget) {
+      this.messageLinkTarget.href = message_url || this.roomUrlValue
+    }
+  }
 
-    if (message_url) paragraph.append(this.#link(message_url, "Voir le message"))
-    if (this.hasRoomUrlValue && this.roomUrlValue) {
-      paragraph.append(" · ", this.#link(this.roomUrlValue, "Retour au salon"))
+  #showNotice({ message, help, details }) {
+    if (details) console.warn("voice:", message, details)
+    if (!this.hasNoticeTarget) return this.#renderStatus(message)
+
+    const parts = []
+    const sentence = document.createElement("p")
+    sentence.textContent = message
+    parts.push(sentence)
+
+    if (help) {
+      const how = document.createElement("p")
+      how.className = "txt-small voice__help"
+      how.textContent = help
+      parts.push(how)
     }
 
-    this.resultTarget.replaceChildren(paragraph)
-    this.resultTarget.hidden = false
+    if (details) {
+      const disclosure = document.createElement("details")
+      const summary = document.createElement("summary")
+      summary.textContent = "Détails techniques"
+      const code = document.createElement("code")
+      code.textContent = details
+      disclosure.append(summary, code)
+      parts.push(disclosure)
+    }
+
+    const body = this.hasNoticeBodyTarget ? this.noticeBodyTarget : this.noticeTarget
+    body.replaceChildren(...parts)
+    this.noticeTarget.hidden = false
   }
 
-  #link(href, text) {
-    const link = document.createElement("a")
-    link.href = href
-    link.textContent = text
-    return link
+  #hideNotice() {
+    if (!this.hasNoticeTarget) return
+    this.noticeTarget.hidden = true
+    if (this.hasNoticeBodyTarget) this.noticeBodyTarget.replaceChildren()
   }
 
-  #setStatus(text) {
-    if (this.hasStatusTarget) this.statusTarget.textContent = text
+  #hideConfirm() {
+    if (this.hasConfirmTarget) this.confirmTarget.hidden = true
   }
 
-  #fail(message, { retry = true } = {}) {
-    this.state = retry ? "error" : "unavailable"
-    this.#setStatus(message)
-    this.#render()
+  #announce(text) {
+    if (!this.hasAnnouncerTarget || !text) return
+    // Cleared first so the same sentence twice is still read.
+    this.announcerTarget.textContent = ""
+    requestAnimationFrame(() => { this.announcerTarget.textContent = text })
+  }
+
+  #focus(element) {
+    try { element?.focus({ preventScroll: true }) } catch {}
   }
 
   #render() {
-    if (!this.hasToggleTarget) return
-    const button = this.toggleTarget
-    const labels = {
-      idle: "Démarrer", starting: "Annuler", live: "Terminer", finishing: "Terminer",
-      closed: "Reprendre", error: "Réessayer", done: "Nouveau compte rendu", unavailable: "Indisponible"
-    }
-    button.textContent = labels[this.state] || "Démarrer"
-    button.disabled = this.state === "unavailable"
-    button.setAttribute("aria-pressed", String(this.state === "live" || this.state === "finishing"))
-    this.element.dataset.voiceState = this.state
-  }
+    const state = this.state
+    const live = state === "live" || state === "finishing"
+    this.element.dataset.voiceState = state
+    this.element.dataset.voiceActivity = this.activity
 
-  #messageFor(error) {
-    if (error?.micError) {
-      switch (error.name) {
-        case "NotAllowedError":
-        case "SecurityError":   return MESSAGES.micDenied
-        case "NotFoundError":
-        case "OverconstrainedError": return MESSAGES.micMissing
-        default:                return `${MESSAGES.micError} (${error.name || "erreur"})`
+    if (this.hasToggleTarget) {
+      const button = this.toggleTarget
+      button.classList.toggle("btn--negative", live)
+      button.classList.toggle("btn--reversed", !live)
+      button.disabled = state === "starting" || state === "unavailable" || state === "done"
+      button.hidden = state === "done"
+      button.title = TOGGLE_LABELS[state] || ""
+      if (this.hasLabelTarget) this.labelTarget.textContent = TOGGLE_LABELS[state] || ""
+    }
+    if (this.hasControlTarget) {
+      if (state === "starting") {
+        this.controlTarget.setAttribute("aria-busy", "true")
+      } else {
+        this.controlTarget.removeAttribute("aria-busy")
       }
     }
-    if (error instanceof StepTimeout) return `Bloqué à l'étape « ${STEP_LABELS[error.step] || error.step} ». Réessayez ; si cela se reproduit, signalez cette étape.`
-    if (error instanceof TokenError) return error.status === 429 ? MESSAGES.rateLimited : `${MESSAGES.tokenError} (HTTP ${error.status})`
-    if (error instanceof ConnectError) return `${MESSAGES.connectError} (code ${error.code}${error.reason ? `, ${error.reason}` : ""})`
-    return `${MESSAGES.connectError} (${error?.message || error})`
+
+    const resumable = state === "stopped" || state === "closed" || (state === "error" && !this.transcript.empty)
+    if (this.hasCancelTarget) this.cancelTarget.hidden = state !== "starting"
+    if (this.hasResumeTarget) this.resumeTarget.hidden = !resumable
+    if (this.hasRestartTarget) this.restartTarget.hidden = !(resumable || state === "error") || this.transcript.empty
+    if (this.hasResultTarget) this.resultTarget.hidden = state !== "done"
+    if (this.hasHintTarget) this.hintTarget.textContent = live && state === "live" ? MESSAGES.liveHint : ""
+
+    this.#renderStatus()
+    this.#renderClock()
+  }
+
+  #renderStatus(override) {
+    if (!this.hasStatusTarget) return
+    const texts = {
+      idle: MESSAGES.ready,
+      starting: this.step,
+      live: this.transient || (this.activity === "speaking" ? MESSAGES.speaking : MESSAGES.listening),
+      finishing: MESSAGES.finishing,
+      stopped: MESSAGES.paused,
+      closed: MESSAGES.closedStatus,
+      error: MESSAGES.retry,
+      unavailable: MESSAGES.unavailable,
+      done: MESSAGES.published
+    }
+    const text = override || texts[this.state] || ""
+    if (this.statusTarget.textContent !== text) this.statusTarget.textContent = text
+  }
+
+  #renderClock() {
+    if (!this.hasTimerTarget) return
+    const elapsed = this.#elapsed
+    this.timerTarget.hidden = elapsed < 0.5 && this.state !== "live"
+    const text = formatClock(elapsed)
+    if (this.timerTarget.textContent !== text) this.timerTarget.textContent = text
+  }
+
+  // The sentence stays plain; codes and hostnames go in « Détails techniques ».
+  #describe(error) {
+    if (error?.micError) {
+      const details = [ error.name, error.message ].filter(Boolean).join(" : ")
+      switch (error.name) {
+        case "NotAllowedError":
+        case "PermissionDeniedError":
+        case "SecurityError":        return { message: MESSAGES.micDenied, help: MESSAGES.micDeniedHelp, details }
+        case "NotFoundError":
+        case "DevicesNotFoundError":
+        case "OverconstrainedError": return { message: MESSAGES.micMissing, details }
+        default:                     return { message: MESSAGES.micError, details }
+      }
+    }
+    if (error instanceof StepTimeout) {
+      return { message: error.step === "mic" ? MESSAGES.micError : MESSAGES.timeout, details: `Délai dépassé à l’étape « ${STEP_LABELS[error.step] || error.step} »` }
+    }
+    if (error instanceof TokenError) {
+      const details = error.status ? `POST ${this.tokenUrlValue} → HTTP ${error.status}` : `POST ${this.tokenUrlValue} : réseau injoignable`
+      return { message: error.status === 429 ? MESSAGES.rateLimited : MESSAGES.tokenError, details }
+    }
+    if (error instanceof ConnectError) {
+      return { message: MESSAGES.connectError, details: `generativelanguage.googleapis.com : WebSocket fermé (code ${error.code}${error.reason ? `, ${error.reason}` : ""})` }
+    }
+    return { message: MESSAGES.connectError, details: String(error?.message || error) }
   }
 
   get #supported() {

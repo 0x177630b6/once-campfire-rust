@@ -54,7 +54,7 @@ fn composer(html: &str) -> &str {
 fn the_voice_buttons_are_off_by_default() {
     let (show, html) = show_room(|_| {});
     assert!(!show.voice_note && show.voice_path.is_none(), "the goldens' input has neither");
-    for absent in ["voice-note", "hermes-", "microphone", "waveform", "/voice"] {
+    for absent in ["voice-note", "hermes", "microphone", "headset", "/voice"] {
         assert!(!html.contains(absent), "{absent}");
     }
 }
@@ -63,20 +63,25 @@ fn the_voice_buttons_are_off_by_default() {
 fn the_composer_records_voice_notes_next_to_the_attachment_button() {
     let (_, html) = show_room(|show| show.voice_note = true);
     let form = composer(&html);
-    let note = form.find(r#"<div class="hermes-voice-note" data-controller="voice-note" data-voice-note-max-seconds-value="300" hidden>"#).expect(form);
+    let note = form.find(r#"<div class="hermes-voice-note" data-controller="voice-note" data-voice-note-max-seconds-value="300" data-voice-note-warn-seconds-value="30" hidden>"#).expect(form);
     assert!(form.find("Attach a file").unwrap() < note, "after the attachment button");
     assert!(note < form.find(r#"name="send""#).unwrap(), "before the send button");
     for fragment in [
-        r#"data-voice-note-target="toggle" data-action="voice-note#toggle" aria-pressed="false" title="Enregistrer un message vocal""#,
-        r#"src="/assets/microphone.svg""#,
+        r#"data-voice-note-target="toggle" data-action="voice-note#toggle" title="Enregistrer un message vocal">"#,
+        r#"<img class="colorize--black hermes-voice-note__icon-record" aria-hidden="true" src="/assets/microphone.svg""#,
+        r#"<img class="hermes-voice-note__icon-send" aria-hidden="true" src="/assets/arrow-up.svg""#,
         r#"data-voice-note-target="cancel" data-action="voice-note#cancel" title="Annuler l’enregistrement" hidden"#,
-        r#"data-voice-note-target="timer" role="timer" hidden>● 0:00</span>"#,
+        r#"role="timer" aria-label="Durée de l’enregistrement"><span class="hermes-voice-note__dot" aria-hidden="true"></span><span data-voice-note-target="timer">0:00</span>"#,
+        r#"data-voice-note-target="level" aria-hidden="true""#,
+        r#"data-voice-note-target="warning" aria-live="polite""#,
         r#"data-voice-note-target="error" role="alert" hidden></p>"#,
-        "@media (pointer: coarse) { .hermes-composer-btn { --btn-size: 2.75rem; } }",
+        r#"<link rel="stylesheet" href="/assets/hermes/hermes.css">"#,
     ] {
         assert!(form.contains(fragment), "{fragment}");
     }
-    assert!(!html.contains("waveform"), "no live button without Gemini");
+    assert!(!form.contains("aria-pressed"), "the label changes instead");
+    assert!(!form.contains("<style>"), "the styles are in hermes/hermes.css");
+    assert!(!html.contains("headset"), "no live button without Gemini");
     assert!(!html[..html.find("</nav>").unwrap()].contains("microphone"), "nothing in the nav");
 }
 
@@ -88,48 +93,68 @@ fn the_composer_links_to_the_live_report_only_when_gemini_is_on() {
     });
     let form = composer(&html);
     let link = format!(
-        r#"<a class="btn btn--borderless txt-small flex-item-no-shrink hermes-composer-btn" href="/rooms/{}/voice" data-turbo-frame="_top" title="Compte rendu vocal en direct (Gemini)">"#,
+        r#"<a class="btn btn--borderless txt-small flex-item-no-shrink hermes-live-link" href="/rooms/{}/voice" data-turbo-frame="_top" title="Rapport d’incident vocal">"#,
         show.room.id
     );
     let at = form.find(&link).expect(form);
     assert!(form.find("hermes-voice-note__toggle").unwrap() < at, "after the record button");
-    assert!(form[at..].contains(r#"src="/assets/waveform.svg""#));
+    assert!(form[at..].contains(r#"src="/assets/headset.svg""#));
+    assert!(form[at..].contains(r#"<span class="hermes-live-link__text" aria-hidden="true">Rapport</span>"#), "visible on touch screens");
+    assert!(form[at..].contains(r#"<span class="for-screen-reader">Rapport d’incident vocal</span>"#));
+    assert!(!form.contains("Gemini"));
     assert!(!html[..html.find("</nav>").unwrap()].contains("/voice"), "the nav's mic button is gone");
-    assert_eq!(form.matches("<style>").count(), 1);
+    assert_eq!(form.matches("hermes/hermes.css").count(), 1, "the stylesheet once");
 
     // Gemini on, voice notes off: the live link alone.
     let (_, html) = show_room(|show| show.voice_path = Some("/rooms/1/voice".into()));
     assert!(composer(&html).contains(r#"href="/rooms/1/voice" data-turbo-frame="_top""#));
     assert!(!html.contains(r#"data-controller="voice-note""#));
+    assert!(composer(&html).contains("hermes/hermes.css"));
 }
 
-#[test]
-fn audio_attachments_play_inline_with_the_file_link() {
-    let attachment: AttachmentView = serde_json::from_value(serde_json::json!({
-        "filename": "note-vocale-20260929-070503 <1>.webm",
+fn audio_attachment(filename: &str) -> AttachmentView {
+    serde_json::from_value(serde_json::json!({
+        "filename": filename,
         "blob_path": "/rails/active_storage/blobs/redirect/abc--def/note.webm",
         "download_path": "/rails/active_storage/blobs/redirect/abc--def/note.webm?disposition=attachment",
         "preview": {"type": "audio"},
         "width": null,
         "height": null
     }))
-    .unwrap();
+    .unwrap()
+}
+
+#[test]
+fn voice_notes_play_inline_with_a_compact_line() {
+    let attachment = audio_attachment("note-vocale-20260929-070503.webm");
     assert_eq!(attachment.preview, AttachmentPreview::Audio);
     let html = render(|ctx| attachment_presentation(ctx, &attachment));
     assert!(
-        html.starts_with(concat!(
-            r#"<div class="flex flex-column gap-half max-inline-size">"#,
-            r#"<audio src="/rails/active_storage/blobs/redirect/abc--def/note.webm" controls="controls" preload="none" "#
+        html.contains(concat!(
+            r#"<div class="hermes-audio" data-controller="voice-player">"#,
+            r#"<audio src="/rails/active_storage/blobs/redirect/abc--def/note.webm" controls="controls" preload="metadata" aria-label="Message vocal" data-voice-player-target="audio"></audio>"#,
+            r#"<div class="hermes-audio__meta txt-small">"#
         )),
         "{html}"
     );
-    assert!(html.contains(r#"aria-label="Écouter note-vocale-20260929-070503 &lt;1&gt;.webm"></audio>"#), "{html}");
-    assert!(html.contains(r#"<span>note-vocale-20260929-070503 &lt;1&gt;.webm</span>"#), "the file link follows");
+    assert!(html.contains(r#"<span>Message vocal<span data-voice-player-target="duration"></span></span>"#), "{html}");
     assert!(html.contains(r#"href="/rails/active_storage/blobs/redirect/abc--def/note.webm?disposition=attachment""#), "download");
-    assert!(html.ends_with("</div></div>"));
+    assert!(html.contains("Télécharger le message vocal"));
+    assert!(!html.contains("note-vocale-20260929"), "no file name row: {html}");
+    assert!(!html.contains(" style=\"inline-size"), "sized by hermes/hermes.css");
 
     let file = AttachmentView { preview: AttachmentPreview::File, ..attachment };
     assert!(!render(|ctx| attachment_presentation(ctx, &file)).contains("<audio"), "other files are unchanged");
+}
+
+#[test]
+fn other_audio_files_keep_their_file_link() {
+    let attachment = audio_attachment("interview <1>.mp3");
+    let html = render(|ctx| attachment_presentation(ctx, &attachment));
+    assert!(html.contains(r#"preload="metadata" aria-label="Écouter interview &lt;1&gt;.mp3""#), "{html}");
+    assert!(html.contains(r#"<span>interview &lt;1&gt;.mp3</span>"#), "the reference's file link: {html}");
+    assert!(!html.contains("Message vocal"));
+    assert!(html.ends_with("</div></div>"));
 }
 
 #[test]
@@ -143,7 +168,10 @@ fn the_voice_page_carries_the_controller_values_escaped() {
         worklet_url: "/assets/voice/pcm-worklet-abc.js".into(),
     };
     let html = render(|ctx| VoiceShow { ctx, voice: &voice }.render().unwrap());
-    assert!(html.contains("<title>Compte rendu vocal · Atelier &quot;B&quot; &lt;1&gt;</title>"), "{html}");
+    assert!(html.contains("<title>Rapport vocal · Atelier &quot;B&quot; &lt;1&gt;</title>"), "{html}");
+    assert!(html.contains(r#"<h1 class="room__contents txt-medium overflow-ellipsis">Rapport vocal</h1>"#), "short title");
+    assert!(html.contains("dans «&nbsp;Atelier &quot;B&quot; &lt;1&gt;&nbsp;» après votre accord"), "the room in the intro");
+    assert!(html.contains(r#"<link rel="stylesheet" href="/assets/hermes/hermes.css">"#));
     for (name, value) in [
         ("token-url", "/rooms/7/voice/token"),
         ("report-url", "/rooms/7/voice/report"),
@@ -155,6 +183,14 @@ fn the_voice_page_carries_the_controller_values_escaped() {
     }
     assert!(html.contains(r#"data-controller="voice""#));
     assert!(html.contains(r#"data-voice-target="toggle" data-action="voice#toggle""#));
-    assert!(html.contains(r#"data-voice-target="result" role="status" hidden"#));
+    for target in ["label", "control", "status", "timer", "hint", "notice", "noticeBody", "confirm", "cancel", "resume", "restart", "resultText", "messageLink", "announcer"] {
+        assert!(html.contains(&format!(r#"data-voice-target="{target}""#)), "{target}");
+    }
+    assert!(html.contains(r#"data-voice-target="transcript" aria-live="off""#), "turns are announced once, not streamed");
+    assert!(html.contains(r#"data-voice-target="announcer" role="status""#));
+    assert!(html.contains(r#"data-voice-target="result" hidden"#));
+    assert!(html.contains(r#"data-voice-target="messageLink">Voir le message</a>"#));
+    assert!(!html.contains("aria-pressed"));
+    assert!(!html.contains("<style>"));
     assert!(html.contains(r#"<a class="btn" href="/rooms/7">"#), "back to the room");
 }

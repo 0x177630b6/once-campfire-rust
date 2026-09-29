@@ -163,7 +163,7 @@ fn stylesheet_link_tag_all_matches_the_reference() {
 #[test]
 fn javascript_importmap_tags_match_the_reference() {
     // Modules the overrides add (Hermes fork: `controllers/voice_controller.js`,
-    // `controllers/voice_note_controller.js`) are pinned too:
+    // `controllers/voice_note_controller.js`, `controllers/voice_player_controller.js`) are pinned too:
     // their import and modulepreload lines are the only extra ones.
     let added: Vec<String> = added()
         .iter()
@@ -179,6 +179,22 @@ fn javascript_importmap_tags_match_the_reference() {
         extra.iter().any(|line| line.contains(r#""controllers/voice_note_controller": "/assets/controllers/voice_note_controller-"#)),
         "{extra:?}"
     );
+    assert!(
+        extra.iter().any(|line| line.contains(r#""controllers/voice_player_controller": "/assets/controllers/voice_player_controller-"#)),
+        "{extra:?}"
+    );
+}
+
+#[test]
+fn the_hermes_stylesheet_is_served_but_not_linked_everywhere() {
+    // Hermes fork: only the Hermes templates link it, so `stylesheet_link_tag :all` (every other
+    // page) stays the reference's.
+    assert!(added().iter().any(|logical| logical == "hermes/hermes.css"));
+    assert!(!campfire_assets::all_stylesheet_paths().iter().any(|logical| logical.starts_with("hermes/")));
+    let path = campfire_assets::stylesheet_path("hermes/hermes.css");
+    assert!(path.starts_with("/assets/hermes/hermes-") && path.ends_with(".css"), "{path}");
+    let served = get(&path);
+    assert!(String::from_utf8_lossy(&served.body).contains(".hermes-voice-note"));
 }
 
 #[test]

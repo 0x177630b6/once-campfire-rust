@@ -1,36 +1,37 @@
 {#- Hermes fork: the composer's voice buttons (rooms/show/_composer, after the attachment button).
     - voice note (`show.voice_note`): record, then send through the composer's attachment path
       (crates/assets/overrides/controllers/voice_note_controller.js); shown by the controller
-      only where the browser can record;
+      only where the browser can record. While recording, the input row turns into a recording
+      bar (bin, timer and level, send): see hermes/hermes.css;
     - live report (`show.voice_path`, when GEMINI_API_KEY is set): the Gemini Live page, out of
-      the composer's turbo frame. -#}
+      the composer's turbo frame.
+    Their styles, and the audio player's, are the one Hermes stylesheet, linked here. -#}
 {%- if show.voice_note || show.voice_path.is_some() %}
-                <style>
-                  @media (pointer: coarse) { .hermes-composer-btn { --btn-size: 2.75rem; } }
-                  .hermes-voice-note:not([hidden]) { display: flex; align-items: center; gap: 0.25em; position: relative; flex-shrink: 0; }
-                  .hermes-voice-note__timer { font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--color-negative); font-weight: 600; }
-                  .hermes-voice-note[data-recording] .hermes-voice-note__toggle { --btn-background: var(--color-negative); --btn-border-color: var(--color-negative); }
-                  .hermes-voice-note[data-recording] .hermes-voice-note__toggle img { filter: brightness(0) invert(1); }
-                  .hermes-voice-note__error { position: absolute; inset-block-end: calc(100% + 0.5rem); inset-inline-end: 0; z-index: 10; inline-size: max-content; max-inline-size: min(80vw, 22rem); padding: 0.5em 0.75em; border-radius: 0.75em; background: var(--color-text); color: var(--color-text-reversed); font-size: 0.8rem; font-weight: normal; }
-                </style>
+                <link rel="stylesheet" href="{{ ctx.asset("hermes/hermes.css") }}">
 {%- endif %}
 {%- if show.voice_note %}
-                <div class="hermes-voice-note" data-controller="voice-note" data-voice-note-max-seconds-value="300" hidden>
-                  <span class="hermes-voice-note__timer txt-small" data-voice-note-target="timer" role="timer" hidden>● 0:00</span>
-                  <button class="btn btn--borderless txt-small hermes-composer-btn" type="button" data-voice-note-target="cancel" data-action="voice-note#cancel" title="Annuler l’enregistrement" hidden>
+                <div class="hermes-voice-note" data-controller="voice-note" data-voice-note-max-seconds-value="300" data-voice-note-warn-seconds-value="30" hidden>
+                  <button class="btn btn--borderless txt-small hermes-voice-note__cancel" type="button" data-voice-note-target="cancel" data-action="voice-note#cancel" title="Annuler l’enregistrement" hidden>
                     <img class="colorize--black" aria-hidden="true" src="{{ ctx.asset("trash.svg") }}" width="20" height="20" />
                     <span class="for-screen-reader">Annuler l’enregistrement</span>
                   </button>
-                  <button class="btn btn--borderless txt-small hermes-composer-btn hermes-voice-note__toggle" type="button" data-voice-note-target="toggle" data-action="voice-note#toggle" aria-pressed="false" title="Enregistrer un message vocal">
-                    <img class="colorize--black" aria-hidden="true" src="{{ ctx.asset("microphone.svg") }}" width="22" height="22" />
+                  <span class="hermes-voice-note__meter txt-small">
+                    <span class="hermes-voice-note__timer" role="timer" aria-label="Durée de l’enregistrement"><span class="hermes-voice-note__dot" aria-hidden="true"></span><span data-voice-note-target="timer">0:00</span></span>
+                    <span class="hermes-voice-note__level" data-voice-note-target="level" aria-hidden="true"></span>
+                    <span class="hermes-voice-note__warning" data-voice-note-target="warning" aria-live="polite"></span>
+                  </span>
+                  <button class="btn btn--borderless txt-small hermes-voice-note__toggle" type="button" data-voice-note-target="toggle" data-action="voice-note#toggle" title="Enregistrer un message vocal">
+                    <img class="colorize--black hermes-voice-note__icon-record" aria-hidden="true" src="{{ ctx.asset("microphone.svg") }}" width="22" height="22" />
+                    <img class="hermes-voice-note__icon-send" aria-hidden="true" src="{{ ctx.asset("arrow-up.svg") }}" width="20" height="20" />
                     <span class="for-screen-reader" data-voice-note-target="label">Enregistrer un message vocal</span>
                   </button>
                   <p class="hermes-voice-note__error margin-none" data-voice-note-target="error" role="alert" hidden></p>
                 </div>
 {%- endif %}
 {%- if let Some(voice_path) = show.voice_path %}
-                <a class="btn btn--borderless txt-small flex-item-no-shrink hermes-composer-btn" href="{{ voice_path }}" data-turbo-frame="_top" title="Compte rendu vocal en direct (Gemini)">
-                  <img class="colorize--black" aria-hidden="true" src="{{ ctx.asset("waveform.svg") }}" width="22" height="22" />
-                  <span class="for-screen-reader">Compte rendu vocal en direct (Gemini)</span>
+                <a class="btn btn--borderless txt-small flex-item-no-shrink hermes-live-link" href="{{ voice_path }}" data-turbo-frame="_top" title="Rapport d’incident vocal">
+                  <img class="colorize--black" aria-hidden="true" src="{{ ctx.asset("headset.svg") }}" width="22" height="22" />
+                  <span class="hermes-live-link__text" aria-hidden="true">Rapport</span>
+                  <span class="for-screen-reader">Rapport d’incident vocal</span>
                 </a>
 {%- endif %}
