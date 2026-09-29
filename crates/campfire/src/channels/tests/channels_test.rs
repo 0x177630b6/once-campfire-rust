@@ -50,11 +50,18 @@ async fn room_channel_streams_for_member_rooms_only() {
     client.reject(&room_identifier("RoomChannel", -1)).await;
     client.reject(&identifier(json!({ "channel": "RoomChannel" }))).await;
     // Params are cast like Active Record casts an id.
-    client.confirm(&identifier(json!({ "channel": "RoomChannel", "room_id": designers.id.to_string() }))).await;
+    let by_string = identifier(json!({ "channel": "RoomChannel", "room_id": designers.id.to_string() }));
+    client.confirm(&by_string).await;
 
+    // Both subscriptions stream the room; a connection polls its subscriptions in no set order.
     let stream = format!("room:{}", room_gid(&designers).to_param());
     app.server.broadcast(&stream, &json!({ "hello": 1 }));
-    assert_eq!(client.next_text().await, delivery(&member, r#"{"hello":1}"#));
+    let mut received = vec![client.next_text().await, client.next_text().await];
+    received.sort();
+    let mut expected = vec![delivery(&member, r#"{"hello":1}"#), delivery(&by_string, r#"{"hello":1}"#)];
+    expected.sort();
+    assert_eq!(received, expected);
+    client.assert_silent().await;
 }
 
 // PresenceChannel (reference/test/channels/presence_channel_test.rb)

@@ -673,14 +673,17 @@ fn is_fresh(request: &Request, etag: Option<&str>, last_modified: Option<&str>) 
 /// `Live::Buffer`, which doesn't respond to `to_ary`, so it's never digested: whatever such a
 /// controller renders goes out with `no-cache` and no ETag.
 fn rack_etag(response: &mut Response, digestible: bool) {
-    if let Body::Bytes(bytes) = &response.body
-        && !response.cached_fragments.is_empty()
-    {
-        response.page_parts = PageParts::new(bytes, &response.cached_fragments).map(std::sync::Arc::new);
-    }
     let mut digested = false;
     let skip = !digestible || response.headers.contains_key(header::ETAG) || response.headers.contains_key(header::LAST_MODIFIED);
-    if matches!(response.status.as_u16(), 200 | 201) && !skip
+    let digests = matches!(response.status.as_u16(), 200 | 201) && !skip;
+    if let Body::Bytes(bytes) = &response.body {
+        // A page with cached fragments splits at them. Any other page that's digested anyway is one
+        // text part, so the SHA-256 it already needs also keys its stored gzip piece: a page that
+        // renders the same (the sidebar, say) compresses once instead of on every request.
+        let parts = if response.cached_fragments.is_empty() { None } else { PageParts::new(bytes, &response.cached_fragments) };
+        response.page_parts = parts.or_else(|| if digests { PageParts::whole(bytes) } else { None }).map(std::sync::Arc::new);
+    }
+    if digests
         && let Body::Bytes(bytes) = &response.body
             && !bytes.is_empty() {
                 // A page of cached fragments hashes its parts' digests rather than the whole body.

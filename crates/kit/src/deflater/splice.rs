@@ -26,6 +26,8 @@ use sha2::{Digest, Sha256};
 
 /// Smaller fragments aren't worth a part of their own; they stay in the text around them.
 const MIN_FRAGMENT: usize = 1024;
+/// Smaller bodies without fragments are compressed afresh: storing them saves next to nothing.
+const MIN_WHOLE_PAGE: usize = 1024;
 /// At most this much text between two fragments travels with the second; more is a text part.
 const MAX_GLUE: usize = 256;
 /// Deflate's window.
@@ -110,6 +112,12 @@ impl PageParts {
             parts.push(text_part(body, position..body.len()));
         }
         Some(Self { len: body.len(), parts })
+    }
+
+    /// A body without cached fragments as one text part, so its compressed form is kept and reused
+    /// while the page stays the same. `None` for bodies too small to be worth storing.
+    pub fn whole(body: &[u8]) -> Option<Self> {
+        (body.len() >= MIN_WHOLE_PAGE).then(|| Self { len: body.len(), parts: vec![text_part(body, 0..body.len())] })
     }
 
     /// Whether these parts were made from a body of this length (a HEAD response has none).
@@ -408,6 +416,18 @@ mod tests {
 
     fn gzip(body: &str, fragments: &[Arc<String>]) -> Vec<u8> {
         PageParts::new(body.as_bytes(), fragments).expect("fragments in the body").gzip(body.as_bytes(), 0)
+    }
+
+    #[test]
+    fn a_page_without_fragments_is_one_stored_piece() {
+        let body = format!("<html><body>{}</body></html>", "<li>sidebar room</li>".repeat(200));
+        let parts = PageParts::whole(body.as_bytes()).unwrap();
+        let gz = parts.gzip(body.as_bytes(), 0);
+        assert_eq!(gunzip(&gz), body.as_bytes());
+        let sha: Sha = Sha256::digest(body.as_bytes()).into();
+        assert!(lock(&TEXT_PIECES).get(&(sha, Before::Nothing)).is_some(), "stored under the body's SHA-256");
+        assert_eq!(PageParts::whole(body.as_bytes()).unwrap().gzip(body.as_bytes(), 0), gz);
+        assert!(PageParts::whole(b"<p>small</p>").is_none());
     }
 
     #[test]
