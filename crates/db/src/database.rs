@@ -517,6 +517,14 @@ mod tests {
         }
     }
 
+    /// Before 3.51.3, a checkpoint that starts just as another connection's commit restarts the
+    /// WAL can leave that commit out of the database (https://sqlite.org/wal.html#walresetbug).
+    /// The checkpointer and the writer are two such connections, on separate threads.
+    #[test]
+    fn the_bundled_sqlite_has_the_wal_reset_fix() {
+        assert!(rusqlite::version_number() >= 3_051_003, "SQLite {}", rusqlite::version());
+    }
+
     /// Writes that never pause still get the WAL restarted, at WAL_LIMIT_PAGES.
     #[test]
     fn the_wal_stays_bounded_under_sustained_writes() {
