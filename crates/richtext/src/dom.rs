@@ -532,11 +532,14 @@ fn parse_with_html5ever(html: &str, context: &Context) -> Result<ParsedTree, Par
     let tokenizer_opts = TokenizerOpts {
         initial_state: Some(tree_builder.tokenizer_state_for_context_elem(false)),
         max_attributes: Some(MAX_ATTRIBUTES),
+        // Gumbo drops a byte order mark only at the start. html5ever drops one at the start of
+        // every feed, and input is fed again after each </script>.
+        discard_bom: false,
         ..TokenizerOpts::default()
     };
     let tokenizer = Tokenizer::new(DepthLimit::new(tree_builder), tokenizer_opts);
     let input = BufferQueue::default();
-    input.push_back(StrTendril::from(html));
+    input.push_back(StrTendril::from(html.strip_prefix('\u{feff}').unwrap_or(html)));
     while let TokenizerResult::Script(_) = tokenizer.feed(&input) {}
     tokenizer.end();
 
@@ -775,6 +778,11 @@ mod tests {
         assert_eq!(roundtrip("<SVG viewBox='0 0 1 1'><CLIPPATH/></SVG>"), "<svg viewBox=\"0 0 1 1\"><clipPath></clipPath></svg>");
     }
 
+    #[test]
+    fn drops_only_a_leading_byte_order_mark() {
+        assert_eq!(roundtrip("\u{feff}\u{feff}x"), "\u{feff}x");
+        assert_eq!(roundtrip("<script></script>\u{feff}x"), "<script></script>\u{feff}x");
+    }
 
     fn parse(html: &str) -> Result<(), ParseError> {
         Dom::new().parse_fragment(html).map(|_| ())
