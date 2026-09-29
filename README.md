@@ -70,82 +70,88 @@ the web app manifest, allowlisted as a deliberate difference (`parity/allowlist.
 
 ## Performance
 
-These numbers come from benchmarking the [`v0.1.1`](https://github.com/basecamp/once-campfire-rust/releases/tag/v0.1.1)
+These numbers come from benchmarking the [`v0.1.2`](https://github.com/basecamp/once-campfire-rust/releases/tag/v0.1.2)
 image against the Rails app: production images of both, the same seed data, the same 4 pinned
 hardware threads, host networking, and 3 interleaved runs per app. The medians are below; the full
 tables with spreads are in
-[`bench/results/v0.1.1-20260928/report.md`](bench/results/v0.1.1-20260928/report.md). The host ran
-other light work on other cores during the run; the spread between runs stays within a few percent
-for the Rust app.
+[`bench/results/v0.1.2-20260929/report.md`](bench/results/v0.1.2-20260929/report.md). The host ran
+other work on other cores during the run; the Rust app's spread between runs stays within a few
+percent, while some of Rails' swung more (noted below).
 
 ### Throughput (16 concurrent clients)
 
 | Route | Rails | Rust | Rust advantage |
 |---|---|---|---|
-| Room page | 215 req/s | 20,479 req/s | **95×** |
-| Messages page (`?before=`) | 406 req/s | 23,365 req/s | **58×** |
-| Sidebar | 528 req/s | 12,642 req/s | **24×** |
-| Search | 385 req/s | 23,399 req/s | **61×** |
-| Post a message | 274 req/s | 5,452 req/s | **20×** |
-| `/up` | 4,069 req/s | 136,228 req/s | **33×** |
+| Room page | 212 req/s | 20,213 req/s | **95×** |
+| Messages page (`?before=`) | 411 req/s | 23,092 req/s | **56×** |
+| Sidebar | 529 req/s | 22,634 req/s | **43×** |
+| Search | 390 req/s | 23,276 req/s | **60×** |
+| Post a message | 264 req/s | 5,494 req/s | **21×** |
+| `/up` | 4,062 req/s | 131,390 req/s | **32×** |
 
 ### Latency
 
 | Measurement | Rails | Rust | Rust advantage |
 |---|---|---|---|
-| Room page p50, one client | 10.3 ms | 0.19 ms | **54×** |
-| Room page p99, 64 clients | 515 ms | 5.1 ms | **101×** |
-| Post a message p99, one client | 13.4 ms | 1.67 ms | **8×** |
-| Post a message p99, 64 clients | 349 ms | 16.7 ms | **21×** |
-| Upload a 505 KB JPEG until its thumbnail is served | 132 ms | 29.4 ms | **4.5×** |
+| Room page p50, one client | 10.4 ms | 0.19 ms | **54×** |
+| Room page p99, 64 clients | 461 ms | 5.2 ms | **88×** |
+| Post a message p99, one client | 13.8 ms | 1.70 ms | **8×** |
+| Post a message p99, 64 clients | 385 ms | 17.5 ms | **22×** |
+| Upload a 505 KB JPEG until its thumbnail is served | 122 ms | 29.1 ms | **4.2×** |
 
 ### Real time (Action Cable, up to 10,000 clients in one room)
 
 | Measurement | Rails | Rust | Rust advantage |
 |---|---|---|---|
-| Deliveries per second, 100 clients | 7,892 | 312,272 | **40×** |
-| Deliveries per second, 1,000 clients | 10,771 | 503,302 | **47×** |
-| Deliveries per second, 5,000 clients | 11,930 | 595,886 | **50×** |
-| Deliveries per second, 10,000 clients | 9,585 | 638,688 | **67×** |
-| Post to all 1,000 clients received, p50 | 107 ms | 6.5 ms | **16×** |
-| Post to all 10,000 clients received, p50 | 1,171 ms | 40 ms | **29×** |
-| Post to all 10,000 clients received, p99 | 1,519 ms | 61 ms | **25×** |
-| Connect and subscribe 10,000 clients | 29.1 s | 2.4 s | **12×** |
+| Deliveries per second, 100 clients | 7,858 | 305,061 | **39×** |
+| Deliveries per second, 1,000 clients | 12,328 | 513,332 | **42×** |
+| Deliveries per second, 5,000 clients | 10,256 | 594,554 | **58×** |
+| Deliveries per second, 10,000 clients | 9,485 | 656,183 | **69×** |
+| Post to all 1,000 clients received, p50 | 101 ms | 6.4 ms | **16×** |
+| Post to all 10,000 clients received, p50 | 3,635 ms* | 40 ms | **91×*** |
+| Post to all 10,000 clients received, p99 | 5,489 ms* | 57 ms | **96×*** |
+| Connect and subscribe 10,000 clients | 29.2 s | 1.6 s | **18×** |
 
-Every client subscribed in every run, for both apps.
+Every client subscribed in every run, for both apps. \* Rails' 10,000-client delivery latency
+swung between runs (p50 from 2.5 to 5.0 s); in the previous benchmark it was 1.2 s at p50 and 1.5 s
+at p99, which would make these ratios about 29× and 27×.
 
 ### Startup and memory
 
 | Measurement | Rails | Rust | Rust advantage |
 |---|---|---|---|
-| Cold start (`docker run` until `/up` answers) | 2,567 ms | 149 ms | **17×** |
-| Idle memory (container) | 309 MB | 15 MB | **21×** |
-| App process, 1,000 idle cable clients (Pss) | 645 MB | 169 MB | **3.8×** |
-| App process, 10,000 idle cable clients (Pss) | 1,507 MB | 313 MB | **4.8×** |
-| App process, 10,000 cable clients under load (Pss) | 2,191 MB | 310 MB | **7.1×** |
-| Whole container, 10,000 cable clients under load (Pss) | 3,519 MB | 310 MB | **11×** |
+| Cold start (`docker run` until `/up` answers) | 2,607 ms | 143 ms | **18×** |
+| Idle memory (container) | 355 MB | 15 MB | **24×** |
+| App process, 1,000 idle cable clients (Pss) | 656 MB | 186 MB | **3.5×** |
+| App process, 10,000 idle cable clients (Pss) | 1,469 MB | 327 MB | **4.5×** |
+| App process, 10,000 cable clients under load (Pss) | 2,199 MB | 324 MB | **6.8×** |
+| Whole container, 10,000 cable clients under load (Pss) | 3,340 MB | 324 MB | **10×** |
 | Image size, unpacked | 933 MB | 169 MB | **5.5×** |
 | Image size, compressed download | 359 MB | 67 MB | **5.4×** |
 
 Rails' whole container adds Redis and Thruster to its app processes; the Rust app is one process.
 
-### Since the previous benchmark
+### Since the previous benchmarks
 
-The run before this one benchmarked `main` at `898653e` the same way
+The run before these benchmarked `main` at `898653e` the same way
 ([`bench/results/scale-20260927`](bench/results/scale-20260927/report.md)). Since then came
 [cached page parts](#gzip-and-etags-from-cached-page-parts), [the new WebSocket
-layer](#100000-clients-and-a-raspberry-pi-5), and opting out of transparent huge pages
-([`bench/results/thp-20260928`](bench/results/thp-20260928/report.md)):
+layer](#100000-clients-and-a-raspberry-pi-5), opting out of transparent huge pages
+([`bench/results/thp-20260928`](bench/results/thp-20260928/report.md)), and keeping every page's
+compressed form ([`bench/results/whole-page-parts-20260929`](bench/results/whole-page-parts-20260929/summary.md)):
 
-| Rust app | `898653e` | `v0.1.1` | Change |
+| Rust app | `898653e` | `v0.1.1` | `v0.1.2` |
 |---|---|---|---|
-| Room page, 16 clients | 6,002 req/s | 20,479 req/s | **3.4×** |
-| Search, 16 clients | 8,970 req/s | 23,399 req/s | **2.6×** |
-| Deliveries per second, 10,000 clients | 379,608 | 638,688 | **1.7×** |
-| Post to all 10,000 clients received, p50 | 42 ms | 40 ms | 1.05× |
-| Idle memory (container) | 47 MB | 15 MB | **3.1× less** |
-| App process, 10,000 idle cable clients (Pss) | 582 MB | 313 MB | **1.9× less** |
-| App process, 10,000 cable clients under load (Pss) | 876 MB | 310 MB | **2.8× less** |
+| Room page, 16 clients | 6,002 req/s | 20,479 req/s | 20,213 req/s |
+| Sidebar, 16 clients | 11,550 req/s | 12,642 req/s | **22,634 req/s** |
+| Search, 16 clients | 8,970 req/s | 23,399 req/s | 23,276 req/s |
+| Deliveries per second, 10,000 clients | 379,608 | 638,688 | 656,183 |
+| Post to all 10,000 clients received, p50 | 42 ms | 40 ms | 40 ms |
+| Idle memory (container) | 47 MB | 15 MB | 15 MB |
+| App process, 10,000 idle cable clients (Pss) | 582 MB | 313 MB | 327 MB |
+| App process, 10,000 cable clients under load (Pss) | 876 MB | 310 MB | 324 MB |
+
+The `v0.1.1` numbers are from [`bench/results/v0.1.1-20260928`](bench/results/v0.1.1-20260928/report.md).
 
 ### 100,000 clients, and a Raspberry Pi 5
 
