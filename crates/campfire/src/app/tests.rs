@@ -5,7 +5,7 @@
 //! `vectors/campfire_sessions.json` holds session cookies *issued by Rails* for the seed's
 //! sessions (`reference-tools/campfire/session_cookies.rb`).
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
@@ -14,13 +14,9 @@ use tower::ServiceExt;
 
 use super::*;
 use crate::concerns::{Before, before_actions, current_user};
+use crate::test_support::seed_dir;
 
 const ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
-
-fn seed_dir() -> Option<PathBuf> {
-    let dir = Path::new(ROOT).join("parity/.seed/default");
-    dir.join("db/production.sqlite3").exists().then_some(dir)
-}
 
 fn parity_env(name: &str) -> Option<String> {
     let env = std::fs::read_to_string(Path::new(ROOT).join("parity/.env.reference")).ok()?;
@@ -61,10 +57,7 @@ struct Test {
 }
 
 async fn boot_seeded() -> Option<Test> {
-    let Some(seed) = seed_dir() else {
-        eprintln!("skipping: parity/.seed/default isn't built (parity/bin/seed build default)");
-        return None;
-    };
+    let seed = seed_dir("default")?;
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("db")).unwrap();
     std::fs::copy(seed.join("db/production.sqlite3"), dir.path().join("db/production.sqlite3")).unwrap();

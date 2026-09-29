@@ -37,8 +37,9 @@ faster or better.
 - Rust comes from mise if it isn't on the PATH: `mise exec rust@1.98.1 -- cargo ...` (the version
   in `Dockerfile`). The `reference/` submodule must be checked out for `crates/assets` to build.
 - `cargo test --workspace --exclude html5ever` runs everything. The app's integration tests need the
-  seed data (`parity/bin/seed build`, which needs Docker); without it they skip silently, so say so
-  when reporting results.
+  seed data (`parity/bin/seed build`, which needs Docker); without it they pass without running,
+  with only a note on stderr, so say so when reporting results. `CAMPFIRE_REQUIRE_SEED=1` makes a
+  missing seed fail them instead.
 - `cargo clippy --workspace --exclude html5ever --all-targets` should stay clean. (`html5ever` is a
   vendored copy with one backported fix and two small additions for Gumbo's parse limits, all
   recorded in its `Cargo.toml`, and identical to upstream otherwise.)

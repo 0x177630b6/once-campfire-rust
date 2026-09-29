@@ -3,7 +3,7 @@
 //! (`vectors/campfire_sessions.json`), with a tiny cookie jar and CSRF token handling.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use axum::body::Body;
 use axum::http::{HeaderMap, Method, Request, StatusCode, header};
@@ -11,6 +11,7 @@ use tower::ServiceExt;
 
 use crate::app::{Booted, boot};
 use crate::config::Config;
+use crate::test_support::seed_dir;
 
 const ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
 
@@ -29,11 +30,6 @@ pub const QUIET_CORNER: i64 = 699448326;
 pub const DIRECT_DAVID_JASON: i64 = 186869642;
 /// Kevin and Bender's direct room: David isn't in it.
 pub const DIRECT_KEVIN_BENDER: i64 = 340026324;
-
-fn seed_dir() -> Option<PathBuf> {
-    let dir = Path::new(ROOT).join("parity/.seed/default");
-    dir.join("db/production.sqlite3").exists().then_some(dir)
-}
 
 fn parity_env(name: &str) -> Option<String> {
     let env = std::fs::read_to_string(Path::new(ROOT).join("parity/.env.reference")).ok()?;
@@ -63,10 +59,7 @@ pub struct TestApp {
 impl TestApp {
     /// `None` (and a note) when the seed hasn't been built.
     pub async fn boot() -> Option<TestApp> {
-        let Some(seed) = seed_dir() else {
-            eprintln!("skipping: parity/.seed/default isn't built (parity/bin/seed build default)");
-            return None;
-        };
+        let seed = seed_dir("default")?;
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("db")).unwrap();
         std::fs::copy(seed.join("db/production.sqlite3"), dir.path().join("db/production.sqlite3")).unwrap();

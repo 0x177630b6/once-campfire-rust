@@ -13,6 +13,7 @@ use tower::ServiceExt;
 
 use crate::app::{Booted, boot};
 use crate::config::Config;
+use crate::test_support::seed_dir;
 
 const ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
 const HOST: &str = "campfire.test";
@@ -26,11 +27,7 @@ struct Test {
 }
 
 async fn boot_seed(name: &str) -> Option<Test> {
-    let seed = Path::new(ROOT).join("parity/.seed").join(name);
-    if !seed.join("db/production.sqlite3").exists() {
-        eprintln!("skipping: parity/.seed/{name} isn't built (parity/bin/seed build {name})");
-        return None;
-    }
+    let seed = seed_dir(name)?;
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("db")).unwrap();
     std::fs::copy(seed.join("db/production.sqlite3"), dir.path().join("db/production.sqlite3")).unwrap();
