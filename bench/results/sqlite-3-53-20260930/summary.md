@@ -13,7 +13,8 @@ average to 12–14 during parts of the run, which widens some ranges; it hit bot
 | search | 22,812 | 22,812 | 1.00× |
 | post_message | 5,468 | 5,435 | 0.99× |
 
-Every median is within 3% (0.97–1.01× across all ten cells, c=1 and c=16), which is within this
-host's noise: the upgrade is performance-neutral. Query plans for all 254 statements the test
+Every median is within 3.5% (0.966–1.007× across all ten cells, c=1 and c=16; the largest drop is
+the sidebar at c=1, 5,870 → 5,672 req/s), which is within this host's noise at the time: the
+upgrade is performance-neutral. Query plans for all 254 statements the test
 suite prepares were identical except one internal membership DELETE (no Bloom filter any more).
 Full tables: [`report.md`](report.md).
