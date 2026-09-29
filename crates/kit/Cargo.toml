@@ -52,5 +52,7 @@ campfire_kit = { path = ".", features = ["test-support"] }
 tower = { workspace = true, features = ["util"] }
 tempfile.workspace = true
 hyper = { workspace = true, features = ["client", "http1", "http2"] }
+# tests/front.rs: a WebSocket backend behind the front server
+axum = { workspace = true, features = ["ws"] }
 tokio-tungstenite.workspace = true
 x509-parser.workspace = true

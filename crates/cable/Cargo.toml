@@ -19,4 +19,6 @@ sha1.workspace = true
 flate2.workspace = true
 
 [dev-dependencies]
+# axum::serve in the cable tests
+axum = { workspace = true, features = ["http1"] }
 tokio-tungstenite.workspace = true

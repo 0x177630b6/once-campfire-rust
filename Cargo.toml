@@ -19,7 +19,10 @@ campfire_assets   = { path = "crates/assets" }
 campfire_views    = { path = "crates/views" }
 
 tokio        = { version = "1", features = ["full"] }
-axum         = { version = "0.8", features = ["ws", "multipart"] }
+# Router plus ConnectInfo (`tokio`) only: kit parses params and multipart itself, the front server
+# serves over hyper, and the cable does its own WebSocket upgrade and framing. Tests add `http1`
+# (for axum::serve) and `ws` in their dev-dependencies.
+axum         = { version = "0.8", default-features = false, features = ["tokio"] }
 tower        = "0.5"
 tower-http   = { version = "0.6", features = ["limit", "timeout", "fs"] }
 hyper        = "1"
