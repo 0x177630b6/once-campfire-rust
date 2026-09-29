@@ -14,4 +14,6 @@ path. Files the reference doesn't have are added; a new one under a `pin_all_fro
 | `install-edge.svg` | New: a copy of `external/install-edge.svg` where `pwa/_install_instructions` looks for it. Rails can't find it, so Edge gets a 500 on profile and room pages |
 | `controllers/voice_controller.js` | New (Hermes fork): the live voice incident report's Stimulus controller (docs/hermes-gemini-live.md) |
 | `voice/pcm-worklet.js` | New (Hermes fork): the AudioWorklet that controller loads from its digested URL; not pinned |
-| `microphone.svg` | New (Hermes fork): the room nav's link to the voice report |
+| `microphone.svg` | New (Hermes fork): the composer's record-a-voice-note button |
+| `controllers/voice_note_controller.js` | New (Hermes fork): records a voice note (`MediaRecorder`) from the composer and hands the file to the composer's attachment path (`drop-target:drop`, then Send) |
+| `waveform.svg` | New (Hermes fork): the composer's link to the live voice report (Gemini) |
