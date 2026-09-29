@@ -144,6 +144,18 @@ fn deeply_nested_elements_are_refused_quickly() {
 }
 
 #[test]
+fn the_rest_of_a_body_is_not_read_once_it_is_too_deep() {
+    // Gumbo stops there. Tokenizing the rest of a 16 MB body (kit's request body limit) only to
+    // throw it away took 200 ms a parse, and a message is parsed several times.
+    let body = format!("{}{}", "<div>".repeat(401), "<a><b>".repeat(16 * 1024 * 1024 / 6));
+    let started = Instant::now();
+    assert!(message_presentation(&body, &ctx()).is_err() && to_plain_text(&body, &ctx()).is_err());
+    // Copying the body to parse it is all that's left
+    let bound = if cfg!(debug_assertions) { Duration::from_secs(1) } else { Duration::from_millis(100) };
+    assert!(started.elapsed() < bound, "refusing 16 MB took {:?}", started.elapsed());
+}
+
+#[test]
 fn a_tag_with_too_many_attributes_is_refused_quickly() {
     // Each attribute is checked against the tag's others for a duplicate, up to Gumbo's limit
     let attributes: Vec<String> = (1..=64_000).map(|i| format!("a{i}=1")).collect();

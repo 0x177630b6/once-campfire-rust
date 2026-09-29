@@ -537,9 +537,9 @@ fn parse_with_html5ever(html: &str, context: &Context) -> Result<ParsedTree, Par
         discard_bom: false,
         ..TokenizerOpts::default()
     };
-    let tokenizer = Tokenizer::new(DepthLimit::new(tree_builder), tokenizer_opts);
     let input = BufferQueue::default();
     input.push_back(StrTendril::from(html.strip_prefix('\u{feff}').unwrap_or(html)));
+    let tokenizer = Tokenizer::new(DepthLimit::new(tree_builder, &input), tokenizer_opts);
     while let TokenizerResult::Script(_) = tokenizer.feed(&input) {}
     tokenizer.end();
 
@@ -564,27 +564,36 @@ fn tree_builder_opts() -> TreeBuilderOpts {
 /// Gumbo's tree depth limit. Before it reads each token, Gumbo stops, as if the input had ended
 /// there, once the stack of open elements holds more than `max_tree_depth` elements, and Nokogiri
 /// adds one to the limit for a fragment's `html` element (nokogiri's ext/nokogiri/gumbo.c).
-struct DepthLimit {
+struct DepthLimit<'input> {
     tree_builder: TreeBuilder<NodeId, Sink>,
+    input: &'input BufferQueue,
     exceeded: Cell<bool>,
 }
 
-impl DepthLimit {
+impl<'input> DepthLimit<'input> {
     const MAX_OPEN_ELEMENTS: usize = MAX_TREE_DEPTH + 1;
 
-    fn new(tree_builder: TreeBuilder<NodeId, Sink>) -> Self {
-        DepthLimit { tree_builder, exceeded: Cell::new(false) }
+    fn new(tree_builder: TreeBuilder<NodeId, Sink>, input: &'input BufferQueue) -> Self {
+        DepthLimit { tree_builder, input, exceeded: Cell::new(false) }
+    }
+
+    /// Stops the tokenizer by taking away the rest of the input. The few tokens it can still make
+    /// from what it has already read are ignored.
+    fn stop(&self) {
+        self.exceeded.set(true);
+        self.input.replace_with(BufferQueue::default());
     }
 }
 
-impl TokenSink for DepthLimit {
+impl TokenSink for DepthLimit<'_> {
     type Handle = NodeId;
 
     fn process_token(&self, token: Token, line_number: u64) -> TokenSinkResult<NodeId> {
-        if self.tree_builder.open_elements_len() > Self::MAX_OPEN_ELEMENTS {
-            self.exceeded.set(true);
-        }
         if self.exceeded.get() {
+            return TokenSinkResult::Continue;
+        }
+        if self.tree_builder.open_elements_len() > Self::MAX_OPEN_ELEMENTS {
+            self.stop();
             return TokenSinkResult::Continue;
         }
         self.tree_builder.process_token(token, line_number)
