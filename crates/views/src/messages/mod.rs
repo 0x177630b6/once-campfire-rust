@@ -135,6 +135,8 @@ pub enum AttachmentPreview {
     Video { poster_url: String },
     /// Otherwise previewable or variable: `polymorphic_url(attachment.representation(:thumb), only_path: true)`.
     Image { thumb_url: String },
+    /// Hermes fork: `attachment.audio?` (voice notes): an inline player, `hermes::audio_preview`.
+    Audio,
     /// Neither previewable nor variable: a download link.
     File,
 }

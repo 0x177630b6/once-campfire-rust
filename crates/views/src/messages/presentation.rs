@@ -44,6 +44,7 @@ pub fn attachment_presentation(ctx: &ViewContext, attachment: &AttachmentView) -
         AttachmentPreview::Video { poster_url } => video_preview(attachment, poster_url),
         AttachmentPreview::Image { thumb_url } => lightboxed_image_preview(attachment, thumb_url),
         AttachmentPreview::File => file_link(ctx, attachment),
+        AttachmentPreview::Audio => crate::hermes::audio_preview(ctx, attachment),
     }
 }
 
@@ -101,7 +102,7 @@ fn preview_dimensions(attachment: &AttachmentView) -> Option<(RubyNumber, RubyNu
 }
 
 /// `render_link`: file icon, name, download link and share button, with no whitespace between.
-fn file_link(ctx: &ViewContext, attachment: &AttachmentView) -> String {
+pub(crate) fn file_link(ctx: &ViewContext, attachment: &AttachmentView) -> String {
     let filename = escape(&attachment.filename);
     let download = escape(&attachment.download_path);
     format!(

@@ -308,6 +308,9 @@ impl<'a> Presenter<'a> {
             } else {
                 AttachmentPreview::Image { thumb_url: self.thumb_path(&blob)? }
             }
+        } else if blob.is_audio() {
+            // Hermes fork: voice notes play inline.
+            AttachmentPreview::Audio
         } else {
             AttachmentPreview::File
         };

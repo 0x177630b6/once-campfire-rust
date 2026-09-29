@@ -1,9 +1,11 @@
-//! Hermes fork: the live voice report's page, and the composer's voice buttons.
+//! Hermes fork: the live voice report's page, the composer's voice buttons and inline audio.
 
 mod messages_support;
 
 use askama::Template;
 use campfire_views::hermes::{VoiceShow, VoiceView};
+use campfire_views::messages::presentation::attachment_presentation;
+use campfire_views::messages::{AttachmentPreview, AttachmentView};
 use campfire_views::rooms::{self, ShowView};
 use campfire_views::{AccountSummary, Platform, ViewContext};
 use messages_support::golden;
@@ -99,6 +101,35 @@ fn the_composer_links_to_the_live_report_only_when_gemini_is_on() {
     let (_, html) = show_room(|show| show.voice_path = Some("/rooms/1/voice".into()));
     assert!(composer(&html).contains(r#"href="/rooms/1/voice" data-turbo-frame="_top""#));
     assert!(!html.contains(r#"data-controller="voice-note""#));
+}
+
+#[test]
+fn audio_attachments_play_inline_with_the_file_link() {
+    let attachment: AttachmentView = serde_json::from_value(serde_json::json!({
+        "filename": "note-vocale-20260929-070503 <1>.webm",
+        "blob_path": "/rails/active_storage/blobs/redirect/abc--def/note.webm",
+        "download_path": "/rails/active_storage/blobs/redirect/abc--def/note.webm?disposition=attachment",
+        "preview": {"type": "audio"},
+        "width": null,
+        "height": null
+    }))
+    .unwrap();
+    assert_eq!(attachment.preview, AttachmentPreview::Audio);
+    let html = render(|ctx| attachment_presentation(ctx, &attachment));
+    assert!(
+        html.starts_with(concat!(
+            r#"<div class="flex flex-column gap-half max-inline-size">"#,
+            r#"<audio src="/rails/active_storage/blobs/redirect/abc--def/note.webm" controls="controls" preload="none" "#
+        )),
+        "{html}"
+    );
+    assert!(html.contains(r#"aria-label="Écouter note-vocale-20260929-070503 &lt;1&gt;.webm"></audio>"#), "{html}");
+    assert!(html.contains(r#"<span>note-vocale-20260929-070503 &lt;1&gt;.webm</span>"#), "the file link follows");
+    assert!(html.contains(r#"href="/rails/active_storage/blobs/redirect/abc--def/note.webm?disposition=attachment""#), "download");
+    assert!(html.ends_with("</div></div>"));
+
+    let file = AttachmentView { preview: AttachmentPreview::File, ..attachment };
+    assert!(!render(|ctx| attachment_presentation(ctx, &file)).contains("<audio"), "other files are unchanged");
 }
 
 #[test]
