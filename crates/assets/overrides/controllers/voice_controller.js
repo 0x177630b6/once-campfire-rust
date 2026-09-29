@@ -555,8 +555,8 @@ export default class extends Controller {
     this.#render()
 
     try {
-      if (!this.context || this.context.state === "closed") await this.#startAudio()
-      await withTimeout(this.context.resume().catch(() => {}), 3000, "audio").catch(() => {})
+      if (!this.audioContext || this.audioContext.state === "closed") await this.#startAudio()
+      await withTimeout(this.audioContext.resume().catch(() => {}), 3000, "audio").catch(() => {})
       const { resumed } = await this.session.restart()
       if (this.state !== "starting") return
 
@@ -700,8 +700,8 @@ export default class extends Controller {
   // Audio
 
   async #startAudio() {
-    this.context = new AudioContext()
-    this.context.resume().catch(() => {})
+    this.audioContext = new AudioContext()
+    this.audioContext.resume().catch(() => {})
 
     try {
       this.stream = await withTimeout(navigator.mediaDevices.getUserMedia({
@@ -714,11 +714,11 @@ export default class extends Controller {
 
     // Some browsers (iOS Safari) leave resume() pending after the permission prompt: don't block
     // on it, and resume again once the mic is open.
-    await withTimeout(this.context.resume().catch(() => {}), 3000, "audio").catch(() => {})
-    await withTimeout(this.context.audioWorklet.addModule(this.workletUrlValue), STEP_TIMEOUT_MS.audio, "audio")
+    await withTimeout(this.audioContext.resume().catch(() => {}), 3000, "audio").catch(() => {})
+    await withTimeout(this.audioContext.audioWorklet.addModule(this.workletUrlValue), STEP_TIMEOUT_MS.audio, "audio")
 
-    this.source = this.context.createMediaStreamSource(this.stream)
-    this.worklet = new AudioWorkletNode(this.context, "pcm-capture", {
+    this.source = this.audioContext.createMediaStreamSource(this.stream)
+    this.worklet = new AudioWorkletNode(this.audioContext, "pcm-capture", {
       numberOfOutputs: 1,
       processorOptions: { targetRate: INPUT_RATE, chunkMs: 100 }
     })
@@ -726,8 +726,8 @@ export default class extends Controller {
       if (this.state === "live" || this.state === "finishing") this.session?.sendAudio(base64FromBytes(data))
     }
     this.source.connect(this.worklet)
-    this.worklet.connect(this.context.destination) // outputs silence; keeps the node pulled everywhere
-    this.player = new Player(this.context)
+    this.worklet.connect(this.audioContext.destination) // outputs silence; keeps the node pulled everywhere
+    this.player = new Player(this.audioContext)
 
     this.stream.getAudioTracks().forEach(track => {
       track.onended = () => this.#micLost()
@@ -751,8 +751,8 @@ export default class extends Controller {
     this.source = null
     this.stream?.getTracks().forEach(track => { track.onended = null; track.stop() })
     this.stream = null
-    if (this.context && this.context.state !== "closed") this.context.close().catch(() => {})
-    this.context = null
+    if (this.audioContext && this.audioContext.state !== "closed") this.audioContext.close().catch(() => {})
+    this.audioContext = null
 
     this.#releaseWakeLock()
   }
@@ -770,7 +770,7 @@ export default class extends Controller {
   #reacquireWakeLock() {
     if (document.visibilityState === "visible" && (this.state === "live" || this.state === "finishing")) {
       this.#acquireWakeLock()
-      this.context?.resume().catch(() => {})
+      this.audioContext?.resume().catch(() => {})
     }
   }
 
