@@ -129,6 +129,8 @@ pub fn routes() -> &'static [Route] {
     &ROUTES
 }
 
+// One row per route, like `bin/rails routes`, however long the row.
+#[rustfmt::skip]
 static ROUTES: LazyLock<Vec<Route>> = LazyLock::new(|| {
     vec![
         get("/", "welcome#show", welcome::show),

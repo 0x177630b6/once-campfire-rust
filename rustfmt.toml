@@ -1,0 +1,4 @@
+# The workspace's wide style. The vendored html5ever has its own rustfmt.toml, which turns
+# formatting off for upstream's code.
+max_width = 140
+use_small_heuristics = "Max"
