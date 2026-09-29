@@ -49,7 +49,9 @@ fn operations(variation: &Variation) -> Result<Vec<(Option<i32>, Option<i32>)>> 
             ("resize_to_limit", Value::Array(args)) if args.len() == 2 => {
                 let dimension = |v: Option<&Value>| match v {
                     None | Some(Value::Nil) => Ok(None),
-                    Some(Value::Int(n)) => Ok(Some(*n as i32)),
+                    Some(Value::Int(n)) => {
+                        i32::try_from(*n).map(Some).map_err(|_| Error::InvalidVariation(format!("resize_to_limit argument {n}")))
+                    }
                     Some(other) => Err(Error::InvalidVariation(format!("resize_to_limit argument {other:?}"))),
                 };
                 let (width, height) = (dimension(args.first())?, dimension(args.get(1))?);
@@ -180,6 +182,14 @@ mod tests {
         let Err(Error::Vips(message)) = thumbnail(corrupt.path(), 4, "webp") else { panic!("a corrupt JPEG made a variant") };
         assert!(message.contains("JPEG datastream contains no image"), "{message}");
         assert!(!message.contains("no property named"), "{message}");
+    }
+
+    #[test]
+    fn resize_arguments_must_fit_libvips() {
+        let too_wide = Variation::resize_to_limit(i64::from(i32::MAX) + 1, 100, None);
+        assert!(matches!(operations(&too_wide), Err(Error::InvalidVariation(_))));
+        let widest = Variation::resize_to_limit(i64::from(i32::MAX), 100, None);
+        assert_eq!(operations(&widest).unwrap(), [(Some(i32::MAX), Some(100))]);
     }
 
     #[test]
