@@ -34,6 +34,10 @@ fn main() {
         ("<table> and <br> x 120k", format!("<table>{}", "<br>".repeat(120_000))),
         ("<html> x 200, each with 400 new attributes", html_tags(200)),
         ("<div> x 401 then <a><b> to 16 MB", format!("{}{}", "<div>".repeat(401), "<a><b>".repeat(16 * 1024 * 1024 / 6))),
+        ("<div> x 401 then 16 MB of text", format!("{}{}", "<div>".repeat(401), "x".repeat(16 * 1024 * 1024))),
+        ("<div> x 401 then a 16 MB comment", format!("{}<!--{}", "<div>".repeat(401), "x".repeat(16 * 1024 * 1024))),
+        ("<div> x 401 then a 16 MB tag name", format!("{}<{}", "<div>".repeat(401), "x".repeat(16 * 1024 * 1024))),
+        ("<div> x 401 then a 16 MB attribute value", format!("{}<p title=\"{}\">", "<div>".repeat(401), "x".repeat(16 * 1024 * 1024))),
     ];
     for (name, body) in bodies {
         // Best of a few runs for the quick ones
