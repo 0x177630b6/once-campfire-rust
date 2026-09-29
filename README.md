@@ -75,9 +75,10 @@ image against the Rails app: production images of both, the same seed data, the 
 hardware threads, host networking, and 3 interleaved runs per app. The medians are below; the full
 tables with spreads are in
 [`bench/results/v0.1.2-20260929/report.md`](bench/results/v0.1.2-20260929/report.md). The host ran
-other work on other cores during the run. The Rust app's throughput and memory stay within a few
-percent between runs; a few of its latency and connect-time cells vary more (the report has every
-range), and some of Rails' numbers swung widely (noted below).
+other work on other cores during the run. The Rust app's throughput stays within a few percent
+between runs and its process memory within about 10%. The container's memory (`memory.current`,
+which counts the page cache) and a few latency and connect-time cells vary more; the report has
+every range. Some of Rails' numbers swung widely (noted below).
 
 ### Throughput (16 concurrent clients)
 
