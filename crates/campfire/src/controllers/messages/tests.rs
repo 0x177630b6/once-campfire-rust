@@ -267,3 +267,32 @@ async fn the_bot_api() {
     let denied = bot.get(&format!("/rooms/{ALL_TALK}/messages?bot_key={BENDER_KEY}")).await;
     assert_eq!(denied.status, StatusCode::FORBIDDEN);
 }
+
+/// Hermes fork: `POST /hermes/:bot_key/directs` (controllers/bot_directs.rs).
+#[tokio::test]
+async fn a_bot_messages_a_user_directly_by_email() {
+    let Some(app) = TestApp::boot().await else { return };
+    let mut bot = app.anonymous();
+    let url = |email: &str| format!("/hermes/{BENDER_KEY}/directs?email_address={email}");
+
+    let sent = bot.send(Req::new(Method::POST, &url("Jason@37signals.com")).body("Mentioned on card #13")).await;
+    assert_eq!(sent.status, StatusCode::CREATED, "{}", sent.text());
+    let room_id = sent.json()["room_id"].as_i64().unwrap();
+    let direct = app.db().read(|conn| campfire_db::Room::find_direct_for(conn, &[BENDER, JASON])).await.unwrap().unwrap();
+    assert_eq!(direct.id, room_id);
+    let message = messages_in(&app, room_id).await.pop().unwrap();
+    assert_eq!((message.creator_id, message.id), (BENDER, sent.json()["message_id"].as_i64().unwrap()));
+
+    // The same room the second time.
+    let again = bot.send(Req::new(Method::POST, &url("jason@37signals.com")).body("Again")).await;
+    assert_eq!(again.json()["room_id"].as_i64(), Some(room_id));
+
+    assert_eq!(bot.send(Req::new(Method::POST, &url("nobody@example.com")).body("Hi")).await.status, StatusCode::NOT_FOUND);
+    assert_eq!(bot.send(Req::new(Method::POST, &url("jason@37signals.com")).body(" ")).await.status, StatusCode::UNPROCESSABLE_ENTITY);
+    let bad_key = bot.send(Req::new(Method::POST, "/hermes/1-nope/directs?email_address=jason@37signals.com").body("Hi")).await;
+    assert_eq!(bad_key.status, StatusCode::FOUND);
+    // People can't use it.
+    let mut david = app.david();
+    let denied = david.send(Req::new(Method::POST, "/hermes/x/directs?email_address=jason@37signals.com").body("Hi")).await;
+    assert_ne!(denied.status, StatusCode::CREATED);
+}

@@ -32,6 +32,7 @@ use crate::active_storage;
 // view models. Controller agents add their `pub mod` lines here.
 pub mod accounts;
 pub mod autocompletable;
+pub mod bot_directs;
 pub mod first_runs;
 pub mod messages;
 pub mod presenters;
@@ -320,6 +321,7 @@ static HERMES_ROUTES: LazyLock<Vec<Route>> = LazyLock::new(|| {
         post("/rooms/:room_id/voice/token(.:format)", "hermes/voice#token", voice::token),
         post("/rooms/:room_id/voice/report(.:format)", "hermes/voice#report", voice::report),
         post("/rooms/:room_id/voice/ask(.:format)", "hermes/voice#ask", voice::ask),
+        post("/hermes/:bot_key/directs(.:format)", "hermes/bot_directs#create", bot_directs::create).defaults(BOT_DEFAULTS),
     ]
 });
 
