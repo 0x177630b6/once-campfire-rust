@@ -162,10 +162,18 @@ fn stylesheet_link_tag_all_matches_the_reference() {
 
 #[test]
 fn javascript_importmap_tags_match_the_reference() {
-    assert_eq!(
-        as_reference(campfire_assets::javascript_importmap_tags()),
-        fixture("javascript_importmap_tags.html")
-    );
+    // Modules the overrides add (Hermes fork: `controllers/voice_controller.js`) are pinned too:
+    // their import and modulepreload lines are the only extra ones.
+    let added: Vec<String> = added()
+        .iter()
+        .filter(|logical| logical.ends_with(".js"))
+        .map(|logical| format!("/assets/{}", campfire_assets::digested_path(logical).unwrap()))
+        .collect();
+    let tags = as_reference(campfire_assets::javascript_importmap_tags());
+    let (extra, ours): (Vec<&str>, Vec<&str>) =
+        tags.split('\n').partition(|line| added.iter().any(|path| line.contains(&format!("\"{path}\""))));
+    assert_eq!(ours.join("\n"), fixture("javascript_importmap_tags.html"));
+    assert!(extra.iter().any(|line| line.contains(r#""controllers/voice_controller": "/assets/controllers/voice_controller-"#)), "{extra:?}");
 }
 
 #[test]

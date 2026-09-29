@@ -27,7 +27,12 @@ enum Entry {
 
 /// Importmap::Map#expanded_packages_and_directories: pins in insertion order, then every
 /// directory expanded; a later entry for an existing name keeps its position (a Ruby Hash).
-pub fn expand(importmap_rb: &Path, rails_root: &Path) -> Vec<Pin> {
+///
+/// `overrides` is the crate's `overrides/` load path, which stands in for the app's own files: a
+/// `pin_all_from` directory also takes the files under its logical path there (e.g.
+/// `overrides/controllers/*.js` for `app/javascript/controllers`), so the port can add modules
+/// (Hermes fork: `controllers/voice_controller.js`) and not only replace them.
+pub fn expand(importmap_rb: &Path, rails_root: &Path, overrides: &Path) -> Vec<Pin> {
     let source = fs::read_to_string(importmap_rb).unwrap();
     let mut packages: Vec<Pin> = Vec::new();
     let mut directories: Vec<(String, Option<String>, Option<String>, bool)> = Vec::new();
@@ -59,18 +64,28 @@ pub fn expand(importmap_rb: &Path, rails_root: &Path) -> Vec<Pin> {
 
     for (dir, under, to, preload) in directories {
         let root = rails_root.join(&dir);
-        if !root.exists() {
-            continue;
+        let added_root = to
+            .as_deref()
+            .or(under.as_deref())
+            .filter(|logical| !logical.is_empty())
+            .map(|logical| overrides.join(logical));
+        let mut filenames = Vec::new();
+        for root in std::iter::once(root).chain(added_root) {
+            if !root.exists() {
+                continue;
+            }
+            let mut files = Vec::new();
+            javascript_files_in_tree(&root, &mut files);
+            filenames.extend(files.iter().map(|file| {
+                file.strip_prefix(&root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+            }));
         }
-        let mut files = Vec::new();
-        javascript_files_in_tree(&root, &mut files);
-        files.sort();
-        for file in files {
-            let filename = file
-                .strip_prefix(&root)
-                .unwrap()
-                .to_string_lossy()
-                .into_owned();
+        filenames.sort();
+        filenames.dedup();
+        for filename in filenames {
             let name = module_name_from(&filename, under.as_deref());
             let path = [to.as_deref().or(under.as_deref()), Some(filename.as_str())]
                 .into_iter()
