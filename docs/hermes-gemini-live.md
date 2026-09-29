@@ -135,6 +135,30 @@ proves it end to end: the report in *All Talk* (a closed room) makes Bender's we
 message. Consequence: **the bot must be a member of the room**, or nothing can be delivered (hence
 the 422 rather than a silent message).
 
+## Composer buttons and voice notes
+
+The room composer gets up to two buttons after the attachment (paperclip) button, both from
+`hermes/_composer_buttons.html`:
+
+- **Voice note** (microphone, always on: `ShowView::voice_note`, set by `rooms#show`). Tap to record,
+  tap again to stop and send; the bin discards; a red "● 0:07" timer runs meanwhile; recording stops
+  and sends by itself at 5 minutes. `voice_note_controller.js` records with `MediaRecorder`
+  (`audio/webm;codecs=opus`, else `audio/mp4` for Safari, else `audio/ogg;codecs=opus`, else the
+  browser's default) and names the file `note-vocale-YYYYMMDD-HHMMSS.webm|m4a|ogg` with a plain
+  `audio/*` type. The file goes through the composer's own attachment path: the controller fires
+  `drop-target:drop` on `window` (what a file dropped on the room fires, which `composer#dropFiles`
+  handles) and clicks the composer's Send button, so the upload, its pending bubble, the
+  `client_message_id` and the Turbo Stream answer are those of a picked file. Like Send, that also
+  sends any text typed in the composer. The button stays hidden where the browser can't record; on
+  plain HTTP it shows and explains that HTTPS is needed.
+- **Live report** (waveform, only when `ShowView::voice_path` is set, i.e. `GEMINI_API_KEY`): a
+  link to `/rooms/:id/voice`, out of the composer's turbo frame (`data-turbo-frame="_top"`). It
+  replaces the room nav's mic button of v0.1.1-hermes.2.
+
+Audio attachments (`audio/*`, e.g. voice notes, whatever recorded them) render as
+`<audio controls preload="none">` above the usual file link (`AttachmentPreview::Audio`,
+`hermes::audio_preview`); the reference only shows the file link.
+
 ## Where the code is
 
 | Path | What |
@@ -144,9 +168,9 @@ the 422 rather than a silent message).
 | `crates/campfire/src/controllers/voice.rs` | The three actions, `IncidentReport` (caps, escaping, markup) |
 | `crates/campfire/src/controllers/mod.rs` | `HERMES_ROUTES`, tried after the Rails table |
 | `crates/campfire/src/app.rs` | `AppState::gemini_live` |
-| `crates/views/src/hermes/`, `crates/views/templates/hermes/` | The page and the nav's mic button partial |
-| `crates/views/templates/rooms/show.html` | The one upstream-template insertion: the mic button after `_nav` when `ShowView::voice_path` is set |
-| `crates/assets/overrides/controllers/voice_controller.js`, `voice/pcm-worklet.js`, `microphone.svg` | Frontend |
+| `crates/views/src/hermes/`, `crates/views/templates/hermes/` | The page, the composer's voice buttons (`_composer_buttons.html`) and the inline audio player |
+| `crates/views/templates/rooms/show/_composer.html` | The one upstream-template insertion: `hermes/_composer_buttons` after the attachment button |
+| `crates/assets/overrides/controllers/voice_controller.js`, `voice/pcm-worklet.js`, `waveform.svg` | Frontend |
 | `crates/assets/build/importmap.rs` | `pin_all_from` also picks up files the overrides *add* (otherwise `controllers/voice_controller` would never be pinned or registered) |
 
 ## Tests
@@ -154,11 +178,12 @@ the 422 rather than a silent message).
 - `integrations::gemini_live::tests`: request body shape, quoting of names, extra instructions, rate
   limit, and the HTTP minter against a fake server (path, `x-goog-api-key`, body; 403 and garbage
   replies are errors).
-- `controllers::voice::tests`: feature off → 404 and no mic button; the page's data values and
-  worklet URL (served as JavaScript); token route builds the locked setup through an injected
+- `controllers::voice::tests`: feature off → 404 and no live button (the voice-note one stays);
+  the page's data values and worklet URL (served as JavaScript); token route builds the locked setup through an injected
   minter, forgery protection, membership, 429, 502; report membership / validation / no-bot room;
   the bot-mention webhook proof above; report escaping and caps; route order.
-- `crates/views/tests/hermes_views.rs`: the page and the mic button render.
+- `crates/views/tests/hermes_views.rs`: the page renders; the composer's buttons are absent with both
+  flags off (the goldens' input) and present, in place, with each on; audio attachments get a player.
 - `crates/assets/tests/reference.rs`: the import map equals the reference's plus the added
   `controllers/voice_controller` pin.
 
