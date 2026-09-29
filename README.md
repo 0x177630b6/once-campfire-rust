@@ -192,6 +192,7 @@ In the order they landed:
 | Index messages by `(room_id, created_at)`; check "more than a page" without counting the room | In a room with 236k messages: room page 95 → 6,051 req/s (64×), messages page 87 → 17,972 req/s (208×). Before, a room page sorted the room's whole history, so rooms slowed as they grew; now a long room serves as fast as a new one |
 | Cache every part of a page, not just its messages, and take the ETag from the parts ([below](#gzip-and-etags-from-cached-page-parts)); send cookies only when they change | Room page 2.9×, search 2.8×, messages page 1.3× |
 | Cable: own WebSocket framing with shared, once-compressed frames; connections on their own runtime ([above](#100000-clients-and-a-raspberry-pi-5)) | 100,000 clients in 1.6 GB instead of 5.9 GB while fanning out; a post during a 100,000-client fan-out 637 → 43 ms; frames 10 KB → 2.3 KB on the wire |
+| Keep the compressed form of every page, not only pages with cached messages ([`bench/results/whole-page-parts-20260929`](bench/results/whole-page-parts-20260929/summary.md)) | Sidebar 10,683 → 19,400 req/s (1.8×); it spent 41% of its CPU compressing the same page again |
 | No transparent huge pages for the process or jemalloc ([`bench/results/thp-20260928`](bench/results/thp-20260928/report.md)) | Idle memory 37 → 11 MB on two cores and 160 → 15 MB on 32, where the kernel's THP setting is `always`; throughput unchanged |
 
 Against Rails, the room page went from 4.4× in the preliminary benchmark to 95× in the latest one.
@@ -353,9 +354,9 @@ Deliberate:
   return-to URL); `session_token` is re-signed when the session's hourly activity refresh runs, which
   keeps its 20-year expiry rolling; `last_room` is set when it changes. An authenticated request whose
   session doesn't need that refresh also no longer passes through the database writer.
-- **ETags aren't a digest of the body** on pages made of cached messages (room, messages and search
-  pages): they're a SHA-256 over the page's parts. Identical pages still get identical ETags, and
-  any change gets a new one.
+- **ETags aren't a digest of the body** on pages of 1 KB or more: they're a SHA-256 over the page's
+  parts (its cached messages and the text around them, or the whole body as one part). Identical
+  pages still get identical ETags, and any change gets a new one.
 - **One more index.** On boot the app adds `index_messages_on_room_id_and_created_at` to the Rails
   schema if it's missing (a one-time 49 ms for 236k messages). Rails' schema pages a room's messages
   through `index_messages_on_room_id` alone, which sorts the room's whole history for every page.

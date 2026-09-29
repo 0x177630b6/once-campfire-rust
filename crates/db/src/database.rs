@@ -249,7 +249,7 @@ impl Database {
                     }
                     match WAL_PAGES.replace(0) {
                         0 => {}
-                        pages if pages >= WAL_LIMIT_PAGES => restart_wal(&conn),
+                        pages if pages >= WAL_LIMIT_PAGES => restart_wal(&conn, &checkpoints),
                         pages => checkpoints.wal_grew_to(pages),
                     }
                 }
@@ -350,6 +350,9 @@ fn note_wal_size(_: &rusqlite::hooks::Wal, pages: std::os::raw::c_int) -> rusqli
 /// connection each time it's woken. It stops with the writer (the sender's owner).
 struct Checkpoints {
     wake: std::sync::mpsc::SyncSender<()>,
+    /// Held while the checkpointer runs, so the writer's RESTART waits for it rather than being
+    /// refused (SQLite runs one checkpoint at a time) and letting the WAL grow past its limit.
+    running: Arc<Mutex<()>>,
     /// The WAL's size in pages when the checkpointer was last woken.
     woken_at: i32,
 }
@@ -358,15 +361,18 @@ impl Checkpoints {
     fn spawn(path: &Path) -> Result<Self> {
         let conn = open_connection(path, false)?;
         let (wake, woken) = std::sync::mpsc::sync_channel::<()>(1);
+        let running = Arc::new(Mutex::new(()));
+        let checkpointer_running = running.clone();
         std::thread::Builder::new()
             .name("campfire-db-checkpointer".into())
             .spawn(move || {
                 while woken.recv().is_ok() {
+                    let _running = checkpointer_running.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                     checkpoint(&conn, "PASSIVE");
                 }
             })
             .map_err(|e| Error::Other(e.to_string()))?;
-        Ok(Self { wake, woken_at: 0 })
+        Ok(Self { wake, running, woken_at: 0 })
     }
 
     /// Wakes the checkpointer for every [`AUTOCHECKPOINT_PAGES`] the WAL grows.
@@ -382,14 +388,21 @@ impl Checkpoints {
 }
 
 /// A RESTART checkpoint on the writer connection, between writes: it copies what the
-/// checkpointer hasn't, and waits for readers so that the next write restarts the WAL.
-fn restart_wal(conn: &Connection) {
+/// checkpointer hasn't, and waits for readers so that the next write restarts the WAL. It waits
+/// for a running PASSIVE checkpoint first, which would otherwise make SQLite refuse it.
+fn restart_wal(conn: &Connection, checkpoints: &Checkpoints) {
+    let _running = checkpoints.running.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     checkpoint(conn, "RESTART");
 }
 
+/// `PRAGMA wal_checkpoint`, which reports a checkpoint it couldn't finish (another checkpoint
+/// running, or readers still on old frames past the busy timeout) in its `busy` column, not as an
+/// error.
 fn checkpoint(conn: &Connection, mode: &str) {
-    if let Err(error) = conn.query_row(&format!("PRAGMA wal_checkpoint({mode})"), [], |_| Ok(())) {
-        tracing::warn!(%error, mode, "WAL checkpoint failed");
+    match conn.query_row(&format!("PRAGMA wal_checkpoint({mode})"), [], |row| row.get::<_, i64>(0)) {
+        Ok(0) => {}
+        Ok(_) => tracing::warn!(mode, "WAL checkpoint couldn't finish"),
+        Err(error) => tracing::warn!(%error, mode, "WAL checkpoint failed"),
     }
 }
 

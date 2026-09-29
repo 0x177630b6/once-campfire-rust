@@ -26,6 +26,8 @@ use sha2::{Digest, Sha256};
 
 /// Smaller fragments aren't worth a part of their own; they stay in the text around them.
 const MIN_FRAGMENT: usize = 1024;
+/// Smaller bodies without fragments are compressed afresh: storing them saves next to nothing.
+const MIN_WHOLE_PAGE: usize = 1024;
 /// At most this much text between two fragments travels with the second; more is a text part.
 const MAX_GLUE: usize = 256;
 /// Deflate's window.
@@ -37,6 +39,11 @@ const MAX_FRAGMENTS: usize = 8 * 1024;
 const PIECES_PER_FRAGMENT: usize = 4;
 /// A bound on the bytes of stored text pieces (a room page's layout is ~10 KB compressed).
 const MAX_TEXT_PIECE_BYTES: usize = 16 << 20;
+/// Larger pieces aren't stored: one would take a good part of a generation, and rotating
+/// generations to fit it would push out the pieces pages keep using.
+const MAX_STORED_TEXT_PIECE: usize = MAX_TEXT_PIECE_BYTES / 64;
+/// What each stored piece costs beyond its bytes: the map entry, its key and the `Bytes`.
+const TEXT_PIECE_OVERHEAD: usize = 128;
 
 type Sha = [u8; 32];
 
@@ -110,6 +117,12 @@ impl PageParts {
             parts.push(text_part(body, position..body.len()));
         }
         Some(Self { len: body.len(), parts })
+    }
+
+    /// A body without cached fragments as one text part, so its compressed form is kept and reused
+    /// while the page stays the same. `None` for bodies too small to be worth storing.
+    pub fn whole(body: &[u8]) -> Option<Self> {
+        (body.len() >= MIN_WHOLE_PAGE).then(|| Self { len: body.len(), parts: vec![text_part(body, 0..body.len())] })
     }
 
     /// Whether these parts were made from a body of this length (a HEAD response has none).
@@ -273,6 +286,8 @@ fn compress(dictionary: &[u8], text: &[u8]) -> Bytes {
             break;
         }
     }
+    // Stored pieces live on, so they keep only what they use (`Bytes` keeps a `Vec`'s capacity).
+    out.shrink_to_fit();
     out.into()
 }
 
@@ -336,7 +351,10 @@ impl TextPieces {
     }
 
     fn insert(&mut self, key: (Sha, Before), piece: TextPiece) {
-        self.young_bytes += piece.deflated.len();
+        if piece.deflated.len() > MAX_STORED_TEXT_PIECE {
+            return;
+        }
+        self.young_bytes += piece.deflated.len() + TEXT_PIECE_OVERHEAD;
         self.young.insert(key, piece);
         if self.young_bytes > MAX_TEXT_PIECE_BYTES / 2 {
             self.old = std::mem::take(&mut self.young);
@@ -408,6 +426,18 @@ mod tests {
 
     fn gzip(body: &str, fragments: &[Arc<String>]) -> Vec<u8> {
         PageParts::new(body.as_bytes(), fragments).expect("fragments in the body").gzip(body.as_bytes(), 0)
+    }
+
+    #[test]
+    fn a_page_without_fragments_is_one_stored_piece() {
+        let body = format!("<html><body>{}</body></html>", "<li>sidebar room</li>".repeat(200));
+        let parts = PageParts::whole(body.as_bytes()).unwrap();
+        let gz = parts.gzip(body.as_bytes(), 0);
+        assert_eq!(gunzip(&gz), body.as_bytes());
+        let sha: Sha = Sha256::digest(body.as_bytes()).into();
+        assert!(lock(&TEXT_PIECES).get(&(sha, Before::Nothing)).is_some(), "stored under the body's SHA-256");
+        assert_eq!(PageParts::whole(body.as_bytes()).unwrap().gzip(body.as_bytes(), 0), gz);
+        assert!(PageParts::whole(b"<p>small</p>").is_none());
     }
 
     #[test]
@@ -507,15 +537,32 @@ mod tests {
     #[test]
     fn text_pieces_stay_within_their_budget() {
         let mut texts = TextPieces::default();
-        let size = 1 << 20;
+        let size = MAX_STORED_TEXT_PIECE;
         let piece = || TextPiece { deflated: Bytes::from(vec![0; size]), _pin: None };
-        for n in 0..100u8 {
+        for n in 0..=255u8 {
             texts.insert(([n; 32], Before::Nothing), piece());
             let held = (texts.young.len() + texts.old.len()) * size;
             // Each generation may overshoot half the budget by the piece that filled it.
             assert!(held <= MAX_TEXT_PIECE_BYTES + 2 * size, "{held} bytes held");
         }
-        assert!(texts.get(&([99; 32], Before::Nothing)).is_some(), "the latest is kept");
+        assert!(texts.get(&([255; 32], Before::Nothing)).is_some(), "the latest is kept");
+    }
+
+    #[test]
+    fn oversized_pieces_are_served_but_not_stored() {
+        let mut texts = TextPieces::default();
+        texts.insert(([1; 32], Before::Nothing), TextPiece { deflated: Bytes::from(vec![0; 1024]), _pin: None });
+        texts.insert(([2; 32], Before::Nothing), TextPiece { deflated: Bytes::from(vec![0; MAX_STORED_TEXT_PIECE + 1]), _pin: None });
+        assert!(texts.get(&([2; 32], Before::Nothing)).is_none());
+        assert!(texts.get(&([1; 32], Before::Nothing)).is_some(), "an oversized piece pushes nothing out");
+    }
+
+    #[test]
+    fn stored_pieces_keep_only_what_they_use() {
+        let text = "<p>repeated</p>".repeat(100_000);
+        let piece = compress(b"", text.as_bytes());
+        let vec: Vec<u8> = piece.into();
+        assert!(vec.capacity() < 64 * 1024, "{} bytes of capacity for {}", vec.capacity(), vec.len());
     }
 }
 
