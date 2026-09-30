@@ -44,6 +44,8 @@ pub struct AppState {
     pub fragment_cache: Arc<FragmentCache>,
     /// Hermes fork: live voice incident reports; `None` unless `GEMINI_API_KEY` is set.
     pub gemini_live: Option<crate::integrations::gemini_live::GeminiLive>,
+    /// Hermes fork: the Duty Manager Workspace; `None` unless `FIZZY_URL` and `FIZZY_TOKEN` are set.
+    pub workspace: Option<Arc<campfire_workspace::Workspace>>,
 }
 
 impl AppState {
@@ -107,6 +109,8 @@ pub async fn boot(config: Config) -> anyhow::Result<Booted> {
         .gemini_live
         .clone()
         .map(|live| crate::integrations::gemini_live::GeminiLive::new(live, crate::integrations::net::Network::system()));
+    // Hermes fork: the Duty Manager Workspace (docs/hermes-workspace.md).
+    let workspace = controllers::workspace::build(&config);
     let app = Arc::new(AppState {
         config,
         secrets,
@@ -119,7 +123,11 @@ pub async fn boot(config: Config) -> anyhow::Result<Booted> {
         web_push,
         fragment_cache,
         gemini_live,
+        workspace, // Hermes fork
     });
+
+    // Hermes fork: the workspace's render hooks and Fizzy poll (none while it's off).
+    controllers::workspace::start(&app).await;
 
     let mut registry = jobs::Registry::with_core_jobs();
     // Room::PushMessageJob and Bot::WebhookJob

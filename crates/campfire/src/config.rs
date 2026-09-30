@@ -64,6 +64,9 @@ pub struct Config {
     /// Hermes fork: live voice incident reports; `None` (routes 404, no mic button) unless
     /// `GEMINI_API_KEY` is set.
     pub gemini_live: Option<GeminiLiveConfig>,
+    /// Hermes fork: the Duty Manager Workspace (docs/hermes-workspace.md); `None` unless `FIZZY_URL`
+    /// and `FIZZY_TOKEN` are set.
+    pub workspace: Option<campfire_workspace::WorkspaceConfig>,
 }
 
 /// Hermes fork: what the live voice report (`controllers::voice`) needs from the environment.
@@ -207,6 +210,8 @@ impl Config {
                 }),
                 None => None,
             },
+            // Hermes fork: FIZZY_* and WORKSPACE_* (campfire_workspace::config).
+            workspace: campfire_workspace::WorkspaceConfig::from_lookup(&get)?,
         })
     }
 }

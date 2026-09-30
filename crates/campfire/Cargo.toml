@@ -18,6 +18,8 @@ campfire_storage.workspace = true
 campfire_cable.workspace = true
 campfire_assets.workspace = true
 campfire_views.workspace = true
+# Hermes fork: the Duty Manager Workspace (docs/hermes-workspace.md)
+campfire_workspace.workspace = true
 anyhow.workspace = true
 tikv-jemallocator.workspace = true
 libc.workspace = true

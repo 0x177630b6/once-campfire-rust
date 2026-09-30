@@ -45,6 +45,8 @@ pub mod unfurl_links;
 pub mod users;
 pub mod voice;
 pub mod welcome;
+// Hermes fork: the Duty Manager Workspace's adapter (docs/hermes-workspace.md).
+pub mod workspace;
 
 /// Anything that can serve a route: every `async fn(&mut Ctx) -> Result` qualifies.
 pub trait Action: Send + Sync + 'static {
@@ -324,6 +326,10 @@ static HERMES_ROUTES: LazyLock<Vec<Route>> = LazyLock::new(|| {
         post("/rooms/:room_id/voice/report(.:format)", "hermes/voice#report", voice::report),
         post("/rooms/:room_id/voice/ask(.:format)", "hermes/voice#ask", voice::ask),
         post("/hermes/:bot_key/directs(.:format)", "hermes/bot_directs#create", bot_directs::create).defaults(BOT_DEFAULTS),
+        // Hermes fork: the Duty Manager Workspace (docs/hermes-workspace.md); 404 while it's off.
+        get("/workspace(.:format)", "hermes/workspace#show", workspace::show),
+        get("/workspace/cards(.:format)", "hermes/workspace#cards", workspace::cards),
+        post("/workspace/drafts/:message_id/reply(.:format)", "hermes/workspace#reply", workspace::reply),
     ]
 });
 
