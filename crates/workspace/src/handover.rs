@@ -9,7 +9,8 @@
 //!
 //! "This shift" is the shift whose end is nearest (07:00, 15:00, 23:00 in the settings' time zone
 //! by default, [`crate::shifts`]), from the end before it; it starts at the last handover posted
-//! instead when that's later. Only what every member of the handover room may see is listed
+//! instead when that's later, or when that handed over the shift before, early (posted at 14:50
+//! for the shift ending at 15:00, the next one starts at 14:50). Only what every member of the handover room may see is listed
 //! (phase 2.7): the rest is counted, not named, in a note above the box (not in the message). While
 //! the room's members aren't known (the people and rooms not read yet, or nobody known to be in
 //! it), only what a person in no room may see is listed, and no proposal.
@@ -125,9 +126,15 @@ pub struct Summary {
 pub fn summary(input: &Input<'_>) -> Summary {
     let (settings, snapshot, now) = (input.settings, input.snapshot, input.now);
     let zone = settings.handover.zone();
-    let (start, shift_end) = shifts::handed_over(now, &settings.handover.ends(), &zone).unwrap_or((now, now));
-    // Since the last handover posted, when it's within this shift.
-    let since = input.last_posted.filter(|posted| *posted > start && *posted <= now).unwrap_or(start);
+    let ends = settings.handover.ends();
+    let (start, shift_end) = shifts::handed_over(now, &ends, &zone).unwrap_or((now, now));
+    // Since the last handover posted, when it's within this shift, or when it handed over the shift
+    // before this one, early (at 14:50 for the shift ending at 15:00): what came after it wasn't in it.
+    let since = input
+        .last_posted
+        .filter(|posted| *posted <= now)
+        .filter(|posted| *posted > start || shifts::handed_over(*posted, &ends, &zone).is_some_and(|(_, end)| end == start))
+        .unwrap_or(start);
     let mut hidden = std::collections::BTreeSet::new();
     let mut listed = |card: &Card| {
         let ok = (input.listable)(&card.tags);

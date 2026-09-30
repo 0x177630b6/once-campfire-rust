@@ -662,3 +662,29 @@ async fn new_serious_incidents_come_first_in_a_long_message() {
     assert!(lines[3..11].iter().all(|line| line.starts_with("<strong>Still in New")), "{html}");
     assert!(lines[11].starts_with("… and 2 more"), "{html}");
 }
+
+#[tokio::test]
+async fn a_handover_posted_early_is_where_the_next_one_starts() {
+    let mut settings = restricted();
+    settings.handover.room_id = Some(3);
+    settings.handover.time_zone = "UTC".into();
+    let (fizzy, workspace, clock) = alerting(settings).await;
+    poll_at(&fizzy, &workspace, &clock, 0).await;
+    // The 07:00-15:00 shift handed over at 14:50; a card filed at 14:55.
+    *clock.lock().unwrap() = at(350);
+    workspace.handover_posted(&manager());
+    with_cards(&fizzy, &[card_at(50, "Smoke alarm, room 204", &["engineering", "sev-low"], "2026-09-30T14:55:00Z")]);
+    poll_at(&fizzy, &workspace, &clock, 835).await;
+    // 22:55: the 15:00-23:00 shift, from 14:50.
+    let page = workspace.handover_page(&manager()).unwrap();
+    assert!(page.text.contains("Since 14:50: 1 new"), "{}", page.text);
+    assert!(page.text.contains("New this shift (1)\n- #50 Smoke alarm, room 204"), "{}", page.text);
+
+    // A handover posted late for the shift before (07:20, for 23:00-07:00) isn't where the
+    // 15:00-23:00 shift starts.
+    *clock.lock().unwrap() = "2026-09-30T07:20:00Z".parse().unwrap();
+    workspace.handover_posted(&manager());
+    *clock.lock().unwrap() = at(835);
+    let page = workspace.handover_page(&manager()).unwrap();
+    assert!(page.text.contains("Since 15:00: 0 new"), "{}", page.text);
+}
