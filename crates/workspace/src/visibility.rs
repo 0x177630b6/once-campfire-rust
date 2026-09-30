@@ -23,7 +23,7 @@ use std::collections::{BTreeSet, HashMap};
 use serde::{Deserialize, Serialize};
 
 use crate::home::Viewer;
-use crate::settings::{Settings, normalize_tag};
+use crate::settings::{Settings, SettingsError, normalize_tag};
 
 /// `settings.visibility`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -158,6 +158,20 @@ impl Settings {
             }
         }
         rooms
+    }
+
+    /// A restricted department can't be linked to an open room (Campfire's `Rooms::Open`): every
+    /// user is a member of it, so its cards would be visible to everyone. `open_rooms`: `(id, name)`.
+    pub fn check_open_rooms(&self, open_rooms: &[(i64, String)]) -> Result<(), SettingsError> {
+        for department in self.departments.iter().filter(|department| department.restricted) {
+            if let Some((_, room)) = open_rooms.iter().find(|(id, _)| department.rooms.contains(id)) {
+                return Err(SettingsError(format!(
+                    "“{}” is restricted, so it can’t be linked to “{room}”: that room is open to everyone, so everyone would see its cards. Link a room with chosen members instead, or don’t restrict the department.",
+                    department.name
+                )));
+            }
+        }
+        Ok(())
     }
 
     /// Any department is restricted (for the settings page's warning).
@@ -317,6 +331,15 @@ mod tests {
         assert!(restricted.notice_rooms(&tags(&["incident"])).is_empty());
         let open = settings(Mode::Everyone, Untagged::Everyone);
         assert_eq!(open.notice_rooms(&tags(&["engineering", "security"])), [3, 4, 5]);
+    }
+
+    #[test]
+    fn a_restricted_department_can_t_be_linked_to_an_open_room() {
+        let settings = settings(Mode::ByDepartmentRoom, Untagged::Everyone);
+        let error = settings.check_open_rooms(&[(5, "Lobby".into())]).unwrap_err();
+        assert!(error.0.contains("“Security” is restricted") && error.0.contains("“Lobby”"), "{error}");
+        assert!(settings.check_open_rooms(&[(3, "Everyone".into())]).is_ok(), "Engineering isn't restricted");
+        assert!(settings.check_open_rooms(&[]).is_ok());
     }
 
     #[test]

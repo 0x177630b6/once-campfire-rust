@@ -5,6 +5,9 @@
   {%- if let Some(error) = load_error %}
   <p class="ws-notice" role="alert"><strong>The settings file couldn't be read</strong> ({{ error }}). Until the settings are saved again, only duty managers (the administrators) can confirm drafts or act on cards, and no department is set; saving replaces the file.</p>
   {%- endif %}
+  {%- if let Some(warning) = load_warning %}
+  <p class="ws-notice" role="note"><strong>Read differently from the settings file:</strong> {{ warning }}.</p>
+  {%- endif %}
 
   <form class="ws-form" data-ws-settings-form action="{{ action }}" method="post">
     <section class="ws-section" aria-labelledby="ws-settings-departments">
@@ -97,7 +100,7 @@
       {%- if restricts_nothing %}
       <p class="ws-notice" role="note">No department is marked restricted: everyone still sees every card that has a department.</p>
       {%- endif %}
-      <p class="ws-muted" data-ws-visibility-scope><strong>This only hides cards in Campfire</strong> (Home, the board, room panels, card chips and sheets, mentions, the Hermes tab, alerts, the handover). Anyone with a Fizzy login sees the whole board in Fizzy itself. A room’s members are whoever was added to it, so turn on Campfire’s “Only administrators can create rooms” (Account settings): otherwise anyone can create a room, and whoever an administrator links it to a department grants its members that department’s cards.</p>
+      <p class="ws-muted" data-ws-visibility-scope><strong>This only hides cards in Campfire</strong> (Home, the board, room panels, card chips and sheets, mentions, the Hermes tab, alerts, the handover). Anyone with a Fizzy login sees the whole board in Fizzy itself. A room’s members are whoever was added to it, so turn on Campfire’s “Only administrators can create rooms” (Account settings): otherwise anyone can create a room, and whoever an administrator links it to a department grants its members that department’s cards. A restricted department can’t be linked to an open room (one everyone is in): saving refuses it.</p>
     </section>
 
     <section class="ws-section" aria-labelledby="ws-settings-alerts">

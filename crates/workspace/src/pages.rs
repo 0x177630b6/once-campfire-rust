@@ -534,6 +534,8 @@ pub struct SettingsPage {
     pub administrators: String,
     pub policies: Vec<Choice>,
     pub load_error: Option<String>,
+    /// What was read differently from the file (the app sets it).
+    pub load_warning: Option<String>,
     /// What Hermes may do alone (phase 2): one row per kind of action.
     pub autonomy: Vec<AutonomyRow>,
     /// The settings' Hermes Fizzy user id (empty = learned from `HERMES_FIZZY_TOKEN`).
@@ -601,6 +603,7 @@ pub fn settings_page(
             .map(|policy| Choice::new(policy.as_str(), policy.label(), *policy == settings.confirm_policy))
             .collect(),
         load_error,
+        load_warning: None,
         autonomy: ActionKind::ALL
             .iter()
             .map(|kind| AutonomyRow {

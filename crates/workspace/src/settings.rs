@@ -8,7 +8,10 @@
 //! `fsync`), one save at a time. A missing file is the defaults (anyone may act). A file that
 //! exists but can't be read or doesn't validate **fails closed** ([`Settings::fail_closed`]: no
 //! departments, duty managers only, the administrators being the duty managers) and says so in the
-//! log and on the settings page; saving replaces it.
+//! log and on the settings page; saving replaces it. One exception: a handover time zone this system
+//! can't resolve is read as UTC, with a warning ([`SettingsStore::load_warning`]), since it only
+//! moves the shift ends. Saving also refuses a restricted department linked to an open room
+//! ([`Settings::check_open_rooms`], checked by the app, which knows the rooms).
 //!
 //! ```json
 //! {
@@ -485,6 +488,8 @@ pub struct SettingsStore {
     current: RwLock<Arc<Settings>>,
     /// Why the file couldn't be read at boot ([`Settings::fail_closed`] is in use).
     load_error: RwLock<Option<String>>,
+    /// What was read differently from the file at boot (a time zone this system can't resolve).
+    load_warning: RwLock<Option<String>>,
     /// One save at a time, so that the file and `current` end as the same save.
     saving: Mutex<()>,
 }
@@ -494,11 +499,17 @@ impl SettingsStore {
     /// [`load_error`](Self::load_error).
     pub fn open(path: impl Into<PathBuf>) -> Self {
         let path = path.into();
-        let (settings, error) = match read(&path) {
-            Ok(settings) => (settings, None),
-            Err(error) => (Settings::fail_closed(), Some(error.0)),
+        let (settings, error, warning) = match read(&path) {
+            Ok((settings, warning)) => (settings, None, warning),
+            Err(error) => (Settings::fail_closed(), Some(error.0), None),
         };
-        Self { path, current: RwLock::new(Arc::new(settings)), load_error: RwLock::new(error), saving: Mutex::new(()) }
+        Self {
+            path,
+            current: RwLock::new(Arc::new(settings)),
+            load_error: RwLock::new(error),
+            load_warning: RwLock::new(warning),
+            saving: Mutex::new(()),
+        }
     }
 
     pub fn path(&self) -> &Path {
@@ -513,6 +524,12 @@ impl SettingsStore {
         self.load_error.read().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
+    /// What was read differently from the file (the app logs it, the settings page shows it) until
+    /// the next save.
+    pub fn load_warning(&self) -> Option<String> {
+        self.load_warning.read().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
     /// Validates, writes atomically (temporary file, then rename), then uses them. Saves run one
     /// at a time: the last one written is the one in use.
     pub fn save(&self, settings: Settings) -> Result<Arc<Settings>, SaveError> {
@@ -522,19 +539,34 @@ impl SettingsStore {
         let settings = Arc::new(settings);
         *self.current.write().unwrap_or_else(|e| e.into_inner()) = settings.clone();
         *self.load_error.write().unwrap_or_else(|e| e.into_inner()) = None;
+        *self.load_warning.write().unwrap_or_else(|e| e.into_inner()) = None;
         Ok(settings)
     }
 }
 
-fn read(path: &Path) -> Result<Settings, SettingsError> {
+/// The file's settings, and a warning when one was read differently. A time zone this system can't
+/// resolve (a file written where it could, or a zone table that changed) is UTC, with a warning,
+/// rather than failing the whole file closed: it only moves the handover's shift ends. A save still
+/// refuses it.
+fn read(path: &Path) -> Result<(Settings, Option<String>), SettingsError> {
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Settings::default()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok((Settings::default(), None)),
         Err(error) => return Err(SettingsError(format!("couldn't read {}: {error}", path.display()))),
     };
-    let settings: Settings =
+    let mut settings: Settings =
         serde_json::from_slice(&bytes).map_err(|error| SettingsError(format!("{} isn't valid: {error}", path.display())))?;
-    settings.validated().map_err(|error| SettingsError(format!("{} isn't valid: {error}", path.display())))
+    let mut warning = None;
+    if crate::shifts::time_zone(&settings.handover.time_zone).is_none() {
+        warning = Some(format!(
+            "the handover's time zone “{}” in {} isn't one Campfire knows: UTC is used until an administrator saves the settings",
+            settings.handover.time_zone.chars().take(64).collect::<String>(),
+            path.display()
+        ));
+        settings.handover.time_zone = "UTC".into();
+    }
+    let settings = settings.validated().map_err(|error| SettingsError(format!("{} isn't valid: {error}", path.display())))?;
+    Ok((settings, warning))
 }
 
 #[cfg(test)]
@@ -819,7 +851,6 @@ mod tests {
         // Invalid phase 2b values don't validate: the file fails closed (only duty managers see cards).
         for broken in [
             r#"{"version": 3, "visibility": {"mode": "secret"}}"#,
-            r#"{"version": 3, "handover": {"time_zone": "Nowhere/Land"}}"#,
             r#"{"version": 3, "handover": {"shift_ends": ["7h"]}}"#,
             r#"{"version": 3, "notifications": {"severities": ["urgent"]}}"#,
         ] {
@@ -828,6 +859,19 @@ mod tests {
             assert!(store.load_error().is_some(), "{broken}");
             assert_eq!(store.get().visibility, Visibility::closed(), "{broken}");
         }
+        // Except a time zone this system can't resolve: UTC, with a warning, the rest as saved.
+        std::fs::write(&path, r#"{"version": 3, "visibility": {"mode": "by_department_room"}, "handover": {"time_zone": "Nowhere/Land"}}"#)
+            .unwrap();
+        let store = SettingsStore::open(&path);
+        assert_eq!(store.load_error(), None);
+        assert!(store.load_warning().unwrap().contains("“Nowhere/Land”"));
+        assert_eq!(store.get().handover.time_zone, "UTC");
+        assert_eq!(store.get().visibility.mode, crate::visibility::Mode::ByDepartmentRoom, "not failed closed");
+        let mut bad = (*store.get()).clone();
+        bad.handover.time_zone = "Nowhere/Land".into();
+        assert!(store.save(bad).is_err(), "a save still refuses it");
+        store.save((*store.get()).clone()).unwrap();
+        assert_eq!(store.load_warning(), None, "saved: nothing read differently any more");
         std::fs::remove_dir_all(dir).unwrap();
     }
 

@@ -115,6 +115,9 @@ pub async fn start(app: &App) {
             "the workspace settings couldn't be read; duty managers only and no departments until an administrator saves them"
         );
     }
+    if let Some(warning) = workspace.settings_store().load_warning() {
+        tracing::warn!(%warning, "the workspace settings were read with a fallback");
+    }
     tokio::spawn(poll_loop(Arc::downgrade(app), workspace));
 }
 
@@ -666,6 +669,7 @@ pub async fn settings(c: &mut Ctx) -> Result {
         workspace.settings_store().load_error(),
     );
     view.hermes_user_learned = workspace.fizzy_users().hermes;
+    view.load_warning = workspace.settings_store().load_warning();
     let content = view.render().map_err(Error::internal)?;
     page(c, StatusCode::OK, "Workspace settings", content).await
 }
@@ -695,6 +699,10 @@ pub async fn update_settings(c: &mut Ctx) -> Result {
     }
     if settings.handover.room_id.is_some_and(|id| !directory.rooms.iter().any(|(room, _)| *room == id)) {
         settings.handover.room_id = None;
+    }
+    // Phase 2.7: a restricted department's room must have chosen members.
+    if let Err(error) = settings.check_open_rooms(&directory.open_rooms) {
+        return json_error(c, StatusCode::UNPROCESSABLE_ENTITY, "invalid_settings", &error.0);
     }
     let visibility_before = workspace.settings().visibility.mode;
     match workspace.settings_store().save(settings) {
@@ -1104,22 +1112,24 @@ fn settings_json(mut params: Value) -> Value {
     params
 }
 
-/// The rooms (not directs) and the active people (not bots), by name: `(id, name, administrator)`.
+/// The rooms (not directs) and the active people (not bots), by name: `(id, name, administrator)`;
+/// the open rooms (every user a member) among the rooms.
 struct Directory {
     rooms: Vec<(i64, String)>,
     people: Vec<(i64, String, bool)>,
+    open_rooms: Vec<(i64, String)>,
 }
 
 fn directory(conn: &campfire_db::Connection) -> campfire_db::Result<Directory> {
-    let mut rooms: Vec<(i64, String)> = Room::all(conn)?
-        .into_iter()
-        .filter(|room| !room.direct())
-        .map(|room| (room.id, room.name.clone().filter(|name| !name.trim().is_empty()).unwrap_or_else(|| format!("Room {}", room.id))))
-        .collect();
+    let all: Vec<Room> = Room::all(conn)?.into_iter().filter(|room| !room.direct()).collect();
+    let named =
+        |room: &Room| (room.id, room.name.clone().filter(|name| !name.trim().is_empty()).unwrap_or_else(|| format!("Room {}", room.id)));
+    let mut rooms: Vec<(i64, String)> = all.iter().map(named).collect();
     rooms.sort_by_key(|(_, name)| name.to_lowercase());
+    let open_rooms = all.iter().filter(|room| room.open()).map(named).collect();
     let people =
         User::active_ordered_without_bots(conn)?.into_iter().map(|user| (user.id, user.name.clone(), user.is_administrator())).collect();
-    Ok(Directory { rooms, people })
+    Ok(Directory { rooms, people, open_rooms })
 }
 
 /// What a card is created from: a message of one of the user's rooms, or one of their rooms.
@@ -1459,6 +1469,12 @@ mod tests {
         );
         let invalid = david.write(json_post("/workspace/settings", &json!({"departments": [{"name": "", "tag": "x"}]}))).await;
         assert_eq!(invalid.status, StatusCode::UNPROCESSABLE_ENTITY);
+        // A restricted department linked to an open room: everyone is in it.
+        let open = json!({"departments": [{"name": "Security", "tag": "security", "rooms": [HQ], "restricted": true}]});
+        let refused = david.write(json_post("/workspace/settings", &open)).await;
+        assert_eq!(refused.status, StatusCode::UNPROCESSABLE_ENTITY, "{}", refused.text());
+        assert!(refused.text().contains("open to everyone"), "{}", refused.text());
+        assert_eq!(app.booted.app.workspace.as_ref().unwrap().settings().departments[0].tag, "engineering", "nothing saved");
 
         assert_eq!(david.get(&format!("/workspace/rooms/{ALL_TALK}/panel")).await.status, StatusCode::OK);
         assert!(david.get(&format!("/rooms/{ALL_TALK}")).await.text().contains("data-ws-panel-root"));
