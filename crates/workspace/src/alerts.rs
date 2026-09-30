@@ -360,7 +360,7 @@ pub fn plan(events: &[Event], plan: &Plan<'_>) -> Vec<Delivery> {
 pub fn proposal_tags(proposal: &Proposal, snapshot: &Snapshot) -> Vec<String> {
     match proposal.card {
         Some(number) => snapshot.card(number).map(|card| card.tags.clone()).unwrap_or_default(),
-        None => crate::visibility::proposed_tags(&proposal.request),
+        None => proposal.new_card_tags(),
     }
 }
 

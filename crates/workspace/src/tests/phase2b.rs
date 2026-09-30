@@ -524,3 +524,22 @@ async fn cards_changed_through_campfire_alert_at_the_next_poll() {
     assert_eq!(raised_cards(&sent), ["14"]);
     assert!(poll_at(&fizzy, &workspace, &clock, 11).await.is_empty(), "once");
 }
+
+#[tokio::test]
+async fn a_proposed_card_s_departments_are_those_its_request_resolves_to() {
+    // `tags` naming a department count as that department, as when the card is created.
+    let mut settings = restricted();
+    settings.notifications.draft_reminder_min = 10;
+    let (fizzy, workspace, clock) = alerting(settings).await;
+    poll_at(&fizzy, &workspace, &clock, 0).await;
+    let by_tags = json!({"action": "create", "title": "Badge cloned", "tags": ["#Security", "incident"]});
+    let id = pending_id(workspace.propose(&fizzy, &hermes_bot(), &by_tags, for_maya(), None).await.unwrap());
+    let proposal = workspace.proposals().get(&id).unwrap();
+    assert_eq!(proposal.departments.as_deref(), Some(["security".to_string()].as_slice()), "resolved and stored");
+    assert!(!workspace.proposal_visible(&karim(), &proposal, &[3]), "Security's, like the card it would create");
+    assert!(workspace.proposal_visible(&sam(), &proposal, &[3, 4]));
+    assert!(!workspace.proposal_visible_to_room(&proposal, 3));
+    assert_eq!(crate::alerts::proposal_tags(&proposal, &workspace.snapshot()), ["security"]);
+    // Maya (front-desk only) isn't reminded of it.
+    assert!(poll_at(&fizzy, &workspace, &clock, 10).await.is_empty());
+}

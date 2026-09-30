@@ -166,14 +166,19 @@ impl Settings {
     }
 }
 
-/// The tags of a proposed new card (`department`/`departments` of its request), for visibility.
+/// The tags of a proposed new card read from its request (`department`, `departments` and `tags`,
+/// which [`crate::actions::NewCard::parse`] maps to departments too), for a proposal stored without
+/// its resolved departments ([`crate::proposals::Proposal::new_card_tags`]). Only department tags
+/// matter to visibility, so the other tags do no harm.
 pub fn proposed_tags(request: &serde_json::Value) -> Vec<String> {
     let mut tags: Vec<String> = Vec::new();
     if let Some(tag) = request.get("department").and_then(serde_json::Value::as_str) {
         tags.push(normalize_tag(tag));
     }
-    if let Some(list) = request.get("departments").and_then(serde_json::Value::as_array) {
-        tags.extend(list.iter().filter_map(serde_json::Value::as_str).map(normalize_tag));
+    for key in ["departments", "tags"] {
+        if let Some(list) = request.get(key).and_then(serde_json::Value::as_array) {
+            tags.extend(list.iter().filter_map(serde_json::Value::as_str).map(normalize_tag));
+        }
     }
     tags.retain(|tag| !tag.is_empty());
     tags
@@ -316,7 +321,8 @@ mod tests {
 
     #[test]
     fn proposed_departments_are_read_from_the_request() {
-        let request = serde_json::json!({"action": "create", "department": "#Security", "departments": ["hr", ""]});
-        assert_eq!(proposed_tags(&request), ["security", "hr"]);
+        let request =
+            serde_json::json!({"action": "create", "department": "#Security", "departments": ["hr", ""], "tags": ["Engineering"]});
+        assert_eq!(proposed_tags(&request), ["security", "hr", "engineering"]);
     }
 }

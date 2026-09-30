@@ -263,6 +263,10 @@ impl Workspace {
             result_card: None,
             result_url: None,
             message: None,
+            departments: match &request {
+                Request::Create(new) => Some(new.departments.clone()),
+                Request::Change { .. } => None,
+            },
         };
         if dial == Dial::Never {
             let message = format!("Campfire's settings don't let Hermes do this (“{}”: Never).", kind.label());
@@ -766,7 +770,7 @@ impl Workspace {
         }
         match proposal.card {
             Some(number) => self.sees_card(&audience, number),
-            None => settings.card_visible(&crate::visibility::proposed_tags(&proposal.request), &audience),
+            None => settings.card_visible(&proposal.new_card_tags(), &audience),
         }
     }
 

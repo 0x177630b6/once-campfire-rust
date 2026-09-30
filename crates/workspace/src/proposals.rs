@@ -175,9 +175,20 @@ pub struct Proposal {
     /// What went wrong, or a warning.
     #[serde(default)]
     pub message: Option<String>,
+    /// A new card's departments (tags), as its request resolved them when proposed (`department`,
+    /// `departments`, and `tags` naming a department): who may see the proposal (phase 2.7).
+    /// `None` for a change to a card (its card's tags decide), and for a proposal stored before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub departments: Option<Vec<String>>,
 }
 
 impl Proposal {
+    /// The tags that decide who may see a proposed new card: the departments stored when it was
+    /// proposed, or (a proposal stored before they were) read again from its request.
+    pub fn new_card_tags(&self) -> Vec<String> {
+        self.departments.clone().unwrap_or_else(|| crate::visibility::proposed_tags(&self.request))
+    }
+
     pub fn expires_at(&self) -> Timestamp {
         self.created_at + PROPOSAL_TTL
     }
@@ -582,6 +593,7 @@ mod tests {
             result_card: None,
             result_url: None,
             message: None,
+            departments: None,
         };
         let html = draft_html(&proposal, None);
         assert!(html.starts_with("<p><strong>Hermes proposes:</strong> Create a card: Leak &lt;b&gt;</p>"), "{html}");
@@ -636,6 +648,7 @@ mod tests {
             result_card: None,
             result_url: None,
             message: None,
+            departments: None,
         };
         // The oldest are pending; decided ones fill the rest, and one more.
         let mut items: Vec<Proposal> = (0..3).map(|n| proposal(format!("pending{n}"), Status::Pending, n)).collect();
