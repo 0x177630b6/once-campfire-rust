@@ -47,6 +47,9 @@ faster or better.
   of its own, with `cargo fmt --manifest-path bench/loadgen/Cargo.toml`; CI checks both. The
   vendored html5ever has its own `rustfmt.toml` that turns formatting off, and generated tables are
   marked `#[rustfmt::skip]`.
+- CI also runs `cargo shear` for dependencies declared but not used. When it can't see a real use
+  (a build script's `#[path]` modules, a self dev-dependency), list the crate under
+  `[package.metadata.cargo-shear] ignored` in that manifest, with the reason.
 - Put shared dependency versions in the root `[workspace.dependencies]`, and reference them with
   `foo.workspace = true`.
 - When matching existing behavior, read the reference's source. When it depends on Rails or gem

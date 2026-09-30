@@ -66,3 +66,25 @@ jobs:
               cargo test --locked --no-fail-fast --workspace --exclude html5ever || status=1
               exit $status
             '
+
+  # Dependencies declared but not used (cargo-shear reads the source; no build). Crates it can't
+  # see through, like the assets build script's `#[path]` modules, are listed under
+  # [package.metadata.cargo-shear] in their manifests.
+  unused-dependencies:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install cargo-shear
+        uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        with:
+          tool: cargo-shear@1.14.0
+
+      - name: Check for unused dependencies
+        run: cargo shear
