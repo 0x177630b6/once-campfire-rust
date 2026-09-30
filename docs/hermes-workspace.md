@@ -1,10 +1,11 @@
-# Hermes fork: the Duty Manager Workspace (phases 0 and 1)
+# Hermes fork: the Duty Manager Workspace (phases 0, 1 and 2a)
 
 The "Duty Manager Workspace" design (the approved mockup, §5 "Feasibility and plan"). **Phase 0**
 made what already exists visible inside Campfire, read-only. **Phase 1** ("Work incidents without
 leaving the app") works the incident cards from Campfire: a room's cards panel, the board, the
-card sheet, and "Create a card from this message". Both are described here; phase 1 is
-[below](#phase-1-working-incidents).
+card sheet, and "Create a card from this message". **Phase 2** supervises Hermes; its slices 2.0
+(groundwork), 2.2 (the Hermes tab), 2.3 (proposals and the autonomy dial) and 2.4 (undo) are
+[below](#phase-2-supervising-hermes).
 
 ## Phase 0: seeing incidents
 
@@ -14,8 +15,9 @@ card sheet, and "Create a card from this message". Both are described here; phas
 - **Draft buttons**: a Hermes message that shows an incident draft and asks for a confirmation gets
   **File / Edit / Dismiss**. File and Dismiss post `confirm` / `cancel` in the room as the user;
   Edit puts "@Hermes change: " in the composer.
-- **Tab bar**: on phones a bottom bar **Home · Chats · Report · Boards** (Report = the live voice
-  report of the room on screen; Boards since phase 1); a slim rail on wide screens.
+- **Tab bar**: on phones a bottom bar **Home · Chats · Report · Boards · Hermes** (Report = the live
+  voice report of the room on screen; Boards since phase 1, Hermes since phase 2); a slim rail on
+  wide screens.
 - **Home** (`/workspace`): *To confirm* (Hermes drafts nobody answered), *Open incidents* (the
   Incident Log's cards that aren't closed, by column, most severe first), *Mentions* (Fizzy comments
   on incident-board cards that @mention you), *Handover* (incident cards changed in the last 12 h).
@@ -35,6 +37,7 @@ no routes (404), no hooks installed, so every page renders byte for byte what up
 | `FIZZY_POLL_S` | `30` | Seconds between polls (minimum 5) |
 | `WORKSPACE_INCIDENT_BOARD` | `Incident Log` | The incident board, by name (case-insensitive) or id |
 | `CAMPFIRE_PUBLIC_URL` | unset | Campfire as *browsers* reach it, e.g. `https://192.168.0.114:8443`, for the link from a card created from a message back to that message. Unset: the comment gives the message's path as text (see below) |
+| `HERMES_FIZZY_TOKEN` | unset | Phase 2: Hermes's **own** Fizzy token (`write`; compose passes `FIZZY_AGENT_TOKEN`). What Campfire runs for Hermes (its proposals, the undo of its comments) is written with it, so Fizzy shows Hermes as the author, and the Hermes log learns Hermes's Fizzy user from it (`GET /my/identity`). Unset: those writes use `FIZZY_TOKEN`, their comments start with "Hermes: ", Hermes's comments can't be deleted by undo, and Hermes's Fizzy user must be set in the settings for its direct actions to be logged. Never logged or shown |
 
 A malformed `FIZZY_URL`, `FIZZY_PUBLIC_URL`, `CAMPFIRE_PUBLIC_URL`, `FIZZY_ACCOUNT` or
 `FIZZY_POLL_S` fails the boot (the message never quotes the token). Only one of
@@ -44,9 +47,11 @@ are edited in the app and kept in `<CAMPFIRE_STORAGE_PATH>/hermes/workspace.json
 ([Settings](#settings)).
 
 Whose token: the token decides what the workspace can see (Fizzy scopes everything to the token's
-user: `Current.user.boards`) and, in phase 1, who Fizzy shows as the author of every change. Use a
-`write` token of the Hermes Fizzy user created by `deploy/fizzy-agent.sh` (it can see the incident
-board). **Everything the
+user: `Current.user.boards`) and who Fizzy shows as the author of every change people make here.
+Since phase 2 (decision D1) that's the Fizzy user **"Campfire"** created by `deploy/fizzy-agent.sh`
+(`WORKSPACE_FIZZY_TOKEN`, which compose prefers over Hermes's `FIZZY_AGENT_TOKEN`), so Fizzy tells
+people's changes from the AI's; until that user exists the workspace can still run on Hermes's token,
+and the Hermes log then tells them apart with the write log ([below](#hermes-log)). **Everything the
 token sees on the incident board is shown to every signed-in user** (chips, Home). Nothing from its
 other boards is: their cards and comments are dropped as the poll reads them (the activity feed is
 account-wide, and a chip can ask for any card number), so they never become chips or Home entries.
@@ -97,8 +102,9 @@ Fizzy JSON API ◀── poll task ──▶ Snapshot (memory) ──▶ Workspa
   "just reply yes" aren't drafts. Its title is
   a `Title:` line, else the first heading, else the first line with " — " (the skill's
   "<type> — <summary> — <location>"), else the first bold text. Severity from `sev-*` or
-  `Severity:`/`Gravité :`. Text matching, as planned for phase 0; a structured marker in the bot's
-  message would be more reliable (later). In the room the buttons are appended after the body; the
+  `Severity:`/`Gravité :`. Text matching, as planned for phase 0; since phase 2 the drafts of Hermes's
+  proposals carry a structured marker instead ([below](#proposals-and-the-autonomy-dial)), and
+  text matching stays for the others. In the room the buttons are appended after the body; the
   page marks a draft "answered" once the same bot posted after it. On Home a draft is *to confirm*
   while it's younger than 24 h, the bot hasn't posted in that room since, and nobody answered
   yes/no: a message that is exactly one decision word (confirm/yes/oui/ok/cancel/no…, optionally
@@ -220,17 +226,20 @@ written to Fizzy:
    it). No partial state is silent: a card that was created but whose tags or comment failed is
    still `201`, with `"warning": "Card #14 was created, but its tags couldn't be set (…). Open it
    to finish."`, which the form shows.
-6. **Logged**: every write, success or not, is a `WriteRecord` (Campfire user id, card, action
-   such as `tag +sev-high` or `move column:<id>`, whose token, outcome) that the adapter logs
-   ("workspace wrote to Fizzy"). Never the token.
+6. **Logged**: every write, success or not, is a `WriteRecord` (time, Campfire user id, card,
+   action such as `tag +sev-high` or `move column:<id>`, whose token, for what, outcome), appended to
+   the durable write log `actions.jsonl` (phase 2) and logged by the adapter ("workspace wrote to
+   Fizzy"). Never the token.
 
 ### Acting identity
 
 `writes::TokenSource` gives the token each person's writes use (`ActingIdentity { token,
-on_behalf, label }`). Today it's `SharedToken` (Hermes's `FIZZY_TOKEN`) for everyone, so every
-comment written for someone starts with their Campfire name ("Karim: …") and Fizzy shows Hermes
-as the author. Per-person Fizzy tokens later = another `TokenSource`
-(`Workspace::with_tokens`), with `on_behalf: false`; nothing else changes.
+on_behalf, label }`). Today it's `SharedToken` (the workspace's `FIZZY_TOKEN`, label `workspace`) for
+everyone, so every comment written for someone starts with their Campfire name ("Karim: …") and
+Fizzy shows the token's user (the "Campfire" user) as the author. Per-person Fizzy tokens later =
+another `TokenSource` (`Workspace::with_tokens`), with `on_behalf: false`; nothing else changes.
+What Campfire runs for Hermes (phase 2) uses `HERMES_FIZZY_TOKEN` (label `hermes`, `on_behalf:
+false`) when it's set, else the shared token with Hermes as the actor ("Hermes: …").
 
 ### Policy
 
@@ -251,14 +260,14 @@ earlier human message has no reporter (duty managers only). A structured marker 
 draft naming the reporter would fix this (later). The page disables what the viewer can't do;
 the draft buttons can't (they're in the shared message cache), so a refused File says why.
 
-**What the policy does not cover.** It gates only the workspace's own buttons and routes (File /
-Dismiss, the sheet's controls, the panel's and board's actions, card creation). It is not a
-permission on Hermes or on Fizzy: any member of a room can still type "@Hermes confirm" (or
-"cancel", "change: …") under a draft, or ask Hermes to create, move or comment on a card, and
-Hermes acts with its own Fizzy account; the incident-report skill doesn't read the policy
-(`GET /hermes/:bot_key/workspace/settings.json` exposes it, unused so far). Anyone with a Fizzy
-account on the incident board can change cards there too. The settings page says so next to the
-policy choice. Enforcing it for Hermes means teaching the skill to check it (a later phase).
+**What the policy does not cover.** It gates the workspace's own buttons and routes (File /
+Dismiss, including those of Hermes's proposals since phase 2, the sheet's controls, the panel's and
+board's actions, card creation). It is not a permission on Fizzy: anyone with a Fizzy account on
+the incident board can change cards there. Hermes's proposals go through it (a proposal is
+confirmed per this policy); Hermes's **direct** writes with its own Fizzy token don't (decision D7:
+Hermes keeps that token), see [phase 2](#phase-2-supervising-hermes). A text draft (an older skill,
+or the skill's fallback) is still answered by typing "@Hermes confirm", which the policy doesn't
+see either.
 
 ### Settings
 
@@ -274,10 +283,13 @@ settings_not_saved` (nothing changed), not `422`.
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "departments": [{"name": "Engineering", "tag": "engineering", "rooms": [3, 7]}],
   "duty_managers": [1, 5],
-  "confirm_policy": "anyone"
+  "confirm_policy": "anyone",
+  "autonomy": {"create": "ask_first", "comment": "alone", "tag": "alone", "move": "ask_first",
+               "close": "ask_first", "step": "ask_first"},
+  "hermes_fizzy_user_id": null
 }
 ```
 
@@ -286,12 +298,180 @@ settings_not_saved` (nothing changed), not `422`.
   from the name), linked rooms (optional; a room may be linked to several departments).
 - `duty_managers`: Campfire user ids; absent or `null` = the administrators.
 - `confirm_policy`: `anyone`, `author_or_duty_manager` or `duty_managers_only`.
+- `autonomy` (version 2): per kind of action Hermes proposes, `alone`, `ask_first` or `never`
+  ([phase 2](#proposals-and-the-autonomy-dial)); a kind left out keeps its default. Deleting and
+  reassigning cards aren't kinds: Campfire never does them for Hermes.
+- `hermes_fizzy_user_id` (version 2): Hermes's Fizzy user id, for the Hermes log; `null` = learned
+  from `HERMES_FIZZY_TOKEN`.
+- A version 1 file loads with the version 2 defaults (it isn't rewritten); the next save writes
+  version 2. A damaged file fails closed with every dial at `ask_first`.
 
-Edited at `/workspace/settings` (Campfire administrators only; linked from Home and the board):
-add / rename / remove departments, their rooms (checkboxes), duty managers (administrators, or a
-list), the policy. Saving drops room and user ids that aren't rooms or active people. There's no
+Edited at `/workspace/settings` (Campfire administrators only, decision D6; linked from Home, the
+board and the Hermes tab): add / rename / remove departments, their rooms (checkboxes), duty
+managers (administrators, or a list), the policy, what Hermes may do alone, Hermes's Fizzy user. Saving drops room and user ids that aren't rooms or active people. There's no
 Fizzy API to create, rename or delete tags: a tag exists once a card has it, and renaming a
 department's tag here leaves the old tag on existing cards.
+
+## Phase 2: supervising Hermes
+
+The phase 2 plan (slices 2.0 to 2.8, decisions D1 to D14) is in the Hermes repo. This fork has
+slices **2.0** (fork part), **2.2**, **2.3** and **2.4**; 2.1 (departments in the bridge's prefix) is
+bridge and skill only. Decisions applied: D1 (a separate "Campfire" Fizzy user for the workspace),
+D4 (everyone reads the Hermes tab), D5 (default dial), D6 (admins set the dial), D8 (duty managers
+and the person it was for undo), and **D7 = no: Hermes keeps its own Fizzy write token**. So the
+dial binds what Hermes *proposes* through Campfire, which its incident-report skill does by
+default; Hermes can still write to Fizzy directly with its `fizzy` CLI (the skill's fallback when
+Campfire can't be reached, and anything a confused or manipulated Hermes decides to do). The Hermes
+tab shows those direct actions too, marked **direct**, and the settings page says so next to the
+dial. Draft confirmation stays `anyone` (the policy's default).
+
+All new data is in files next to `workspace.json`, under `<CAMPFIRE_STORAGE_PATH>/hermes/`:
+
+| File | What | Kept |
+|---|---|---|
+| `actions.jsonl` | The durable write log: every write the workspace makes to Fizzy, one JSON line (`at`, Campfire `user_id`, `card`, `action`, `identity` = `workspace`/`hermes`, `via` = `workspace`/`proposal`/`undo`, `reference` = proposal or log entry, `outcome`). Never a token | Moves to `actions.jsonl.1` past 5 MiB (so ~10 MiB at most); the last 2 000 are read back at boot |
+| `hermes-log.jsonl` | The Hermes log, one entry per line, deduplicated by id | 90 days (compacted at boot and daily) |
+| `proposals.json` | Pending proposals and those decided in the last 7 days (written atomically, like the settings) | Pending ones expire after 24 h |
+
+A file that can't be written doesn't stop anything: the entry stays in memory and the server log
+says so once ("a workspace file couldn't be read or written").
+
+### 2.0 Groundwork
+
+- **Durable write log** (`campfire_workspace::journal`): `Workspace::record` appends each
+  `WriteRecord` to `actions.jsonl`, then gives it to the app's audit sink (the server log, as
+  before). The Hermes log reads it back to tell Campfire's writes from Hermes's own, and undo to
+  see whether anyone changed a card since.
+- **Chip staleness**: every card in the picture has the time it was last read
+  (`Snapshot::refreshed`). One nothing refreshed for 15 minutes (a card a chip asked for once, an
+  old closed card beyond the lists) is read again, the longest-unread first, within the same budget
+  of 10 card reads per poll as the cards chips ask for. A card Fizzy now answers 404 for (deleted,
+  or moved to another board) leaves the picture.
+- **JS harness**: the page script's logic that doesn't touch the page (chip versions, the numbers
+  and proposal ids to ask for, reply handling and the signed-out case, the drafts' status lines, a
+  proposal's state, card sheet change bodies, the settings body) moved to
+  `hermes/workspace_logic.js`, an ES module the tab bar loads before `hermes/workspace.js`, which
+  reads it from `globalThis.HermesWorkspace` (asset URLs are digested, so no relative import). It is
+  tested with Node's own runner, no npm package: `node --test crates/assets/tests/js/*.test.mjs`
+  (Node 22). DOM behaviour stays untested (phase 3).
+- The "Campfire" Fizzy user and the bridge's trimmed mention DMs (2.0's other parts) are in the
+  Hermes repo (`deploy/fizzy-agent.sh`, the bridge). Nothing here depends on the Campfire user
+  existing.
+
+### Hermes log
+
+The **Hermes** tab (`GET /workspace/hermes`, the fifth tab; everyone signed in, D4):
+
+- **Pending**: Hermes's proposals waiting for a confirmation (below), with File/Confirm, Edit (opens
+  the draft in its room) and Dismiss for those the confirm policy lets decide.
+- **What Hermes did**, newest first, 200 lines at most, with filters: cards created, tags, moves and
+  closes, comments, questions asked, failures. Each line says **direct** or **via Campfire**, when,
+  for whom and from which source (or "source unknown"), who confirmed, dismissed or undid it, and
+  has an **Undo** button when [undo](#undo) applies. Sources:
+  - **direct**: Hermes's own Fizzy actions, read at every poll from
+    `/activities.json?creator_ids[]=<Hermes's Fizzy user>&board_ids[]=<incident board>` (page 1;
+    3 pages at the first poll after a start, and the next page while a whole page is new, 3 at
+    most). Hermes's Fizzy user is the settings' `hermes_fizzy_user_id`, else `HERMES_FIZZY_TOKEN`'s
+    user (`GET /my/identity`, retried every 10 minutes while unknown). Unknown: the tab says its
+    direct actions can't be shown. **Fizzy's feed has no event for tags or steps, and gives only
+    the new column of a move**: Hermes's direct tag and step changes aren't in the log, and a direct
+    move can't be undone. For a card Hermes created, "for whom" is the report's "Reported by" line
+    (marked "from the report", unverified), and the source the report's wording (voice note, live
+    voice report).
+  - **via Campfire**: its proposals and their outcome (proposed, run, confirmed by, dismissed by,
+    dismissed (timed out), replaced, refused, failed), with the person the bridge said it was for
+    (checked against Campfire's database) and the source (chat, voice note, live voice report,
+    Fizzy comment).
+  - From the **viewer's own rooms** only, not stored: Hermes's text drafts, its questions (a last line
+    ending with "?") and its error messages, from the last 24 h.
+- **Not labelling people's actions as Hermes's**: a direct activity that matches a write in the
+  durable log (same card, same kind, within 2 minutes, `outcome` ok) through a token that is
+  Hermes's Fizzy user is Campfire's own: a proposal run with `HERMES_FIZZY_TOKEN` (already logged
+  "via Campfire"), or, when the workspace's token is Hermes's too (no "Campfire" user yet:
+  `FIZZY_TOKEN`'s user, from `GET /my/identity`, is Hermes's), a person's workspace action. Those
+  are left out; the tab says so in that setup.
+- Entries are kept 90 days (`hermes-log.jsonl`), so the log survives restarts.
+
+### Proposals and the autonomy dial
+
+Hermes asks Campfire instead of writing to Fizzy: the incident-report skill runs its `propose`
+helper, which POSTs to the Hermes bridge (`POST /propose/<BRIDGE_PROPOSE_SECRET>`); the bridge adds
+the conversation it is relaying (room, person, message, source: its `context`) and forwards the
+request with the bot key to `POST /hermes/:bot_key/workspace/proposals`. **Hermes never holds the bot
+key.** The bridge is the trust boundary for `context`: Campfire checks it against its database
+anyway (a room the bot is a member of, an active person, their message in that room; what doesn't
+hold is dropped, a name is kept for display only).
+
+- **Parsing**: exactly like a person's request (`Change::parse`, `NewCard::parse`): `create`
+  (title, description, severity, `department`/`departments`, plus `tags` for the report's type, at
+  most 5 simple tags, and `steps`, at most 20), `move` (`to`, or a column by name), `close`,
+  `severity`, `departments`, `step`, `comment`, each with `"card": n`. `delete`, `assign` or
+  anything else is `422 unknown_action`: Hermes can't ask for what a person couldn't, and never for
+  a settings change. A card that isn't on the incident board is `404`.
+- **The dial** (`settings.autonomy`, set by administrators on the settings page, D6), per kind:
+  create, comment, tag (severity and departments), move, close, step. Defaults (D5): comment and
+  tag **Alone**; create, move and close **Ask first**; step **Ask first** (D5 didn't list steps;
+  the cautious choice). Delete and reassign: **Never**, fixed.
+  - **Alone**: run at once, as Hermes (`HERMES_FIZZY_TOKEN` when set), through the same `Writer`
+    (fresh read, toggles handled, one write sequence per card, audited with `via: proposal`),
+    recording the card's state before for undo. `201 {"status": "done", "card", "url", …}`.
+  - **Ask first**: stored in `proposals.json` and posted in the context's room **as the bot**:
+    "Hermes proposes: …", the card's details, and a link to the proposal whose `title` is the
+    **structured marker** `hermes-proposal:<id>` (Action Text keeps `title` on links). `202
+    {"status": "pending", "id", "draft_message_id", …}`; without a room (a Fizzy comment, no
+    context), it waits in the Hermes tab only. The same proposal twice (same request, same source
+    message) is one (`"duplicate": true`); `"replaces": "<id>"` (after "change: …") marks the older
+    pending one "replaced".
+  - **Never**: `403 {"status": "refused", "error": "never"}`, logged; Hermes says so.
+- **Confirming**: a bot message carrying the marker of a real proposal of that bot gets **File**
+  (Confirm for a change) / Edit / Dismiss, which POST `{"decision"}` to
+  `/workspace/hermes/proposals/:id/decision`. The marker alone does nothing (the proposal must
+  exist and be that bot's). The confirm policy applies (`Act::ConfirmDraft` with the person it was
+  for as the reporter; the owner kept `anyone` for now). Confirming runs it as above, as Hermes, logged
+  "confirmed by Karim", and notes it in the room as the person ("Filed Hermes's proposal: <card
+  link>", a chip) when they're a member. A proposal is decided once: a second File says who did it
+  ("Confirmed by Karim"). If the dial of its kind has become Never since, confirming is refused. A
+  proposal that no longer parses (a department removed since) fails, logged. The buttons live in the
+  cached message HTML, so the page asks `GET /workspace/hermes/proposals.json?ids=…` for their state
+  and replaces decided ones by it; the text matcher of phase 0 stays for other drafts (older
+  messages, the skill's fallback), and a marker message is never a text draft.
+- **Expiry**: a pending proposal nobody answered in 24 h becomes "Dismissed (timed out)" (checked at
+  every poll and whenever proposals are read), logged.
+- **Confirmed live voice reports** count as confirmed: when the context's message is the reporter's
+  own live voice report ("Compte rendu d’incident dicté en direct (voix), confirmé par l’auteur",
+  posted in the last 2 h under their name), a `create` runs at once unless the dial says Never.
+  Once per report: a second card from the same message asks first.
+- Home's **To confirm** lists pending proposals too, with their buttons.
+- Hermes can ask a proposal's status: `GET /hermes/:bot_key/workspace/proposals/:id` (its own only).
+
+### Undo
+
+`POST /workspace/hermes/actions/:id/undo`, the **Undo** button of a log line, for 24 hours:
+
+| Action | Undo | Recorded |
+|---|---|---|
+| Hermes created a card (via Campfire, or directly) | Comment "Undone from Campfire: Hermes created this card by mistake. Closed, not deleted." (as the person), then close. Never deleted | — |
+| Severity or departments (via Campfire) | The managed tags back to their recorded "before" (only the differences toggled, checked) | before and after tags |
+| Move or close (via Campfire) | Back to the recorded place (`new`, `column:<id>`, `not_now`, `closed`) | before and after |
+| Step (via Campfire) | The step back | before |
+| Comment (via Campfire, or directly) | Deleted, with the token that wrote it: Fizzy lets only a comment's creator delete it, so a direct comment of Hermes needs `HERMES_FIZZY_TOKEN` | the comment's id |
+| Hermes closed / reopened a card (direct) | Reopen (Fizzy puts it back in its column) / close | — |
+| Hermes renamed a card (direct) | The old title (from the activity's `particulars`) | before and after |
+| Hermes moved a card (direct), changed owners, moved it between boards | **Refused**: Fizzy doesn't say where the card was; Campfire never reassigns | — |
+
+- **Who** (D8): duty managers, and the person it was for (a Campfire user Campfire checked), whatever
+  the confirm policy (`Act::Undo`). For a direct action nobody is known to be "for": duty managers.
+- **Nobody touched it since**, checked on a fresh read, before anything is written, under the
+  card's lock; otherwise **refused** with the reason (`422 changed_since`), never forced: the card's
+  state must still be what the action left (tags, place, step, title, closed or not); no write to
+  that card in the durable log after the action (other than the action's own); and no activity on
+  that card in Fizzy's feed (page 1 of the incident board's) after it, except Hermes's own
+  follow-ups within 5 minutes of a card it created. If Fizzy's feed can't be read, nothing is
+  undone. Also refused: already undone (`already_undone`, by whom), older than 24 h (`too_old`), no
+  way back (`cannot_undo`, the reason).
+- The undo is itself logged ("Undone: …", by whom) and each of its writes is in the write log
+  (`via: undo`); it is written with the person's workspace identity (their name first in the
+  comment), except a comment's deletion.
 
 ## Routes and contract
 
@@ -314,7 +494,13 @@ redirects to the sign-in page (fetch follows it): the script says to sign in aga
 | `GET /workspace/rooms/:room_id/panel` | The panel (fragment); `204` room not linked; `404` not the user's room |
 | `GET /workspace/settings` | The settings page; `403` unless administrator |
 | `POST /workspace/settings` (JSON above) | `200 {"ok": true}`; `422 invalid_settings` with the reason; `500 settings_not_saved` when the file can't be written (nothing changed); `403` unless administrator |
-| `GET /hermes/:bot_key/workspace/settings.json` | Bots only (`403` for people): `{"incident_board", "severity_tags", "departments": [{"name", "tag", "rooms": [{"id", "name"}]}], "duty_managers": [{"id", "name"}], "confirm_policy"}`, for Hermes's skill to tag cards by department. No bot write endpoint |
+| `GET /hermes/:bot_key/workspace/settings.json` | Bots only (`403` for people): `{"incident_board", "severity_tags", "departments": [{"name", "tag", "rooms": [{"id", "name"}]}], "duty_managers": [{"id", "name"}], "confirm_policy", "autonomy"}`, for Hermes's skill to tag cards by department. No bot endpoint writes settings |
+| `GET /workspace/hermes[?filter=created\|tags\|moves\|comments\|questions\|failures]` | The Hermes tab (HTML) |
+| `GET /workspace/hermes/proposals.json?ids=a,b` | `200 {"proposals": {"a": {"status", "label"}}}` (unknown ids left out; 50 at most) |
+| `POST /workspace/hermes/proposals/:id/decision` `{"decision": "confirm" \| "dismiss"}` | `201 {"status", "message", "card", "url", "chip", "warning"}`; `422 invalid_decision`, `422 not_pending` (with its state), `403` (policy, or the dial now Never), `404`, `502` |
+| `POST /workspace/hermes/actions/:id/undo` | `200 {"ok", "message", "chip"}`; `422 changed_since` / `already_undone` / `too_old` / `cannot_undo` with the reason; `403` (D8); `404`; `502` |
+| `POST /hermes/:bot_key/workspace/proposals` (the proposal JSON, plus the bridge's `context`: `{"source", "room_id", "room_name", "user_id", "user_name", "message_id"}`) | Bots only (`403` for people). `201 {"status": "done", "id", "action", "card", "url", "message", "warning"}`; `202 {"status": "pending", …, "draft_message_id", "duplicate"}`; `403 {"status": "refused", "error": "never"}`; `404 {"status": "not_found"}`; `422 {"status": "invalid", "error": code}`; `502 {"status": "failed"}` |
+| `GET /hermes/:bot_key/workspace/proposals/:id` | Bots only: `200 {"status": "pending"\|"done"\|"dismissed"\|"expired"\|"failed"\|"superseded", "id", "action", "card", "url", "message", "decided_by"}`, the bot's own proposals; else `404` |
 
 ## Crate layout
 
@@ -328,14 +514,19 @@ redirects to the sign-in page (fetch follows it): the script says to sign in aga
 | `…/src/drafts.rs` | Draft detection, pending drafts, `Decision`, the buttons |
 | `…/src/home.rs`, `templates/workspace/home.html`, `_card.html` | Home view-model and template |
 | `…/src/overlay.rs`, `templates/workspace/_tab_bar.html`, `_nav.html` | Tab bar (and the room panel it carries), pages' nav, page location |
-| `…/src/settings.rs` | `Settings`, `Department`, `Policy`/`Act` (the policy point), `SettingsStore` (the JSON file, atomic serialized writes, fail-closed reads) |
-| `…/src/writes.rs` | `TokenSource`/`SharedToken`/`ActingIdentity`, `Writer` (every Fizzy write, audited), `ActionError`, `WriteRecord`, toggle diffing |
+| `…/src/settings.rs` | `Settings` (version 2), `Department`, `Policy`/`Act` (the policy point), `Autonomy`/`Dial`/`ActionKind` (the dial), `SettingsStore` (the JSON file, atomic serialized writes, fail-closed reads) |
+| `…/src/store.rs` | The files under `hermes/`: atomic JSON documents, JSON Lines appended and rotated by size, compaction |
+| `…/src/journal.rs` | `ActionLog`: the durable write log (`actions.jsonl`) |
+| `…/src/hermes_log.rs`, `templates/workspace/hermes.html` | `HermesLog` (`hermes-log.jsonl`), `Entry`, `Reverse` (undo), Hermes's direct actions from Fizzy's feed, Campfire's own writes recognized |
+| `…/src/proposals.rs` | `Proposal`, `ProposalStore` (`proposals.json`), parsing, the draft and its marker, confirmed live reports |
+| `…/src/hermes.rs` | `Workspace::{propose, decide, undo, poll_hermes, hermes_page}`, the Hermes tab's view |
+| `…/src/writes.rs` | `TokenSource`/`SharedToken`/`ActingIdentity`, `Writer` (every Fizzy write, audited, with its `Purpose`), `ActionError`, `WriteRecord`, toggle diffing |
 | `…/src/actions.rs` | `Change`, `Target`, `NewCard` (input parsing and validation); `Workspace::{authorize, card_sheet, change_card, create_card}` |
 | `…/src/pages.rs`, `templates/workspace/{board,sheet,_panel,_list_card,new_card,settings}.html` | Board, card sheet, room panel, new-card form, settings page, the bot's settings JSON |
 | `…/src/lib.rs` | `Workspace` (state shared by poll, hooks and routes: snapshot, settings, token source, audit sink), `ChatSource` trait (the app implements it) |
 | `crates/campfire/src/controllers/workspace.rs` | **The adapter**: boot (`build`, `start`: bots, hooks, poll task, the write log), the actions, `ChatSource` over campfire_db (one SQL query: the user's rooms' messages of the last day), a draft's reporter (one SQL query), rooms and people for the settings, `HttpClient` over `integrations::net` (GET, POST, PUT, DELETE) |
 | `crates/views/src/hermes.rs` (end) | `WorkspaceHooks`, `install_workspace_hooks`, the two seam functions (fork-owned file) |
-| `crates/assets/overrides/hermes/workspace.css`, `workspace.js`, `home.svg`, `board.svg` | Frontend. Under `hermes/`, which `build.rs` leaves out of `stylesheet_link_tag :all`; the script isn't pinned in the import map (only `pin_all_from` directories are), so upstream pages keep their exact asset tags |
+| `crates/assets/overrides/hermes/workspace.css`, `workspace.js`, `workspace_logic.js`, `home.svg`, `board.svg`; `crates/assets/tests/js/workspace_logic.test.mjs` | Frontend (the Hermes tab's icon is upstream's `bot.svg`). Under `hermes/`, which `build.rs` leaves out of `stylesheet_link_tag :all`; the script isn't pinned in the import map (only `pin_all_from` directories are), so upstream pages keep their exact asset tags |
 
 ## Seams in upstream-owned files
 
@@ -351,12 +542,13 @@ Every one is marked `Hermes fork:` in the file. Line numbers as of this commit.
 | `crates/campfire/src/app.rs:112-113, 126` | `let workspace = controllers::workspace::build(&config);` and the field in the `AppState` literal | Built before `config` moves into the state |
 | `crates/campfire/src/app.rs:129-130` | `controllers::workspace::start(&app).await;` | Bots, hooks and the poll task need the booted app; while off it only makes sure no hooks are installed |
 | `crates/campfire/src/controllers.rs:48-49` | `pub mod workspace;` | The adapter module |
-| `crates/campfire/src/controllers.rs:329-342` | Twelve rows in `HERMES_ROUTES` (three for phase 0, nine for phase 1) | The fork's own route table (the Rails table stays identical to `bin/rails routes`) |
+| `crates/campfire/src/controllers.rs:329-351` | Eighteen rows in `HERMES_ROUTES` (three for phase 0, nine for phase 1, six for phase 2) | The fork's own route table (the Rails table stays identical to `bin/rails routes`) |
 | `crates/views/src/messages/presentation.rs:19-20` | `MessageContent::Text { html } => crate::hermes::workspace_message_html(message, html)` | The one hook in message rendering: chips and draft buttons, at render time |
 | `crates/views/templates/layouts/application.html:55` | `{{ crate::hermes::workspace_overlay(ctx)\|safe }}` after the lightbox include, same line | The one include in the layout: stylesheet, script, tab bar. Renders `""` while off, and being on the same line adds no whitespace |
 
-Phase 1 added no seam: only rows in the existing `HERMES_ROUTES` block. Everything else is in
-fork-owned files.
+Phases 1 and 2 added no seam: only rows in the existing `HERMES_ROUTES` block. Everything else is
+in fork-owned files (phase 2's new environment variable, `HERMES_FIZZY_TOKEN`, is read by the
+workspace crate's own `WorkspaceConfig::from_lookup`).
 
 Not seams (fork-owned or new files): `crates/workspace/**`, `controllers/workspace.rs`,
 `crates/views/src/hermes.rs`, `crates/views/tests/workspace_hooks.rs`,
@@ -367,7 +559,8 @@ Not seams (fork-owned or new files): `crates/workspace/**`, `controllers/workspa
 
 1. `git grep -n "Hermes fork" -- ':!docs' ':!crates/workspace'` and compare with the table above:
    every seam still there, once.
-2. `cargo test -p campfire_workspace --offline` (the feature, anywhere).
+2. `cargo test -p campfire_workspace --offline` (the feature, anywhere), and
+   `node --test crates/assets/tests/js/*.test.mjs` (the page logic, Node 22, no npm).
 3. `cargo test -p campfire_views --offline`: the goldens (hooks not installed = upstream's bytes)
    and `tests/workspace_hooks.rs` (the overlay lands once after the lightbox; removing the hooks
    gives upstream's bytes back). If upstream moved the lightbox include or the `app-logo` link, move
@@ -452,14 +645,45 @@ Not seams (fork-owned or new files): `crates/workspace/**`, `controllers/workspa
   closed while a missing one is the defaults, the settings page's warning, a failed write being an
   I/O error that changes nothing, concurrent saves ending with file and memory agreeing), the
   policy table.
+- Phase 2, in `crates/workspace` against the stateful fake Fizzy (now also: tokens' identities,
+  comment ids and their author's token for deletion, steps added, titles, the activity feeds):
+  settings v1 → v2 (defaults, partial maps, a bad dial failing closed, the Hermes user id), `Undo`
+  permissions under every policy; the write log (append, rotation, torn lines, read back after a
+  restart, a failed append reported once, never a token); proposals by the dial (Alone runs at once
+  as Hermes with its token and is logged with its way back; Ask first writes nothing, is kept and
+  logged, the same proposal twice is one; Never is refused and logged; parse refusals: delete,
+  assign, unknown columns and departments, bad tags and steps; a card on another board is 404;
+  nothing kept for any of them), confirming (the draft's marker gets buttons only on the bot's own
+  message and isn't a text draft, the card created with its tags, steps and link back, as Hermes,
+  "confirmed by", a second File refused with who did it, Dismiss), expiry after 24 h, the confirm
+  policy on proposals, confirmed live reports (once, only the reporter's own), without
+  `HERMES_FIZZY_TOKEN` ("Hermes: " comments with the workspace token); undo of each reverse action
+  (severity, move, comment deleted with the token that wrote it, a created card closed with a
+  comment, a direct creation), and its refusals (D8, changed since in Campfire, state changed,
+  a later change in Fizzy's feed, too old, already undone, a direct move); the Hermes log (only
+  Hermes's activities on the incident board, deduplicated, kept across a restart, Campfire's own
+  proposal writes not logged twice, people's workspace actions left out when the workspace shares
+  Hermes's token), the Hermes tab (pending with buttons, via labels, undo buttons by permission,
+  filters, questions from the viewer's rooms, the notice when Hermes's user is unknown), Home's
+  pending proposals, the proposals' states JSON; chips re-read after 15 minutes, a deleted card
+  dropped.
+- `crates/assets/tests/js/workspace_logic.test.mjs` (`node --test`): chip versions, chip numbers,
+  proposal ids, reply handling (signed out, server messages), drafts' status lines, proposal states,
+  card sheet change bodies, the settings body.
 - `crates/campfire/src/controllers/workspace.rs` (needs the app to link, i.e. libvips; runs in CI):
   route recognition (all routes), `FizzyHttp` against a fake server (headers, query, `Link`,
   `X-Total-Count`, 404,
   errors without the token, a POST's method and body), settings ids; request tests against the
   parity seed (skip without it): phase 1 routes 404 while off, errors before Fizzy answers (502,
-  422, 404, the form, the panel's 204), settings saved by an administrator and read by a bot.
+  422, 404, the form, the panel's 204), settings saved by an administrator and read by a bot;
+  phase 2 routes (404 while off, the Hermes tab, decisions and undo of unknown ids, the proposals'
+  states, the bot route refusing people, a proposal that doesn't parse, Fizzy down, no token in
+  the reply).
 
-Not covered by automated tests: the actions end to end against a real Fizzy (writes are only
+Not covered by automated tests (phase 2 too): the DOM behaviour of `hermes/workspace.js` (proposal
+buttons' states, Undo, the settings' dial), the bridge ↔ Campfire proposal route end to end, and
+Fizzy's real activity feed for Hermes (the `creator_ids[]`/`board_ids[]` filters, `particulars`,
+the comment ids a reply carries). Also: the actions end to end against a real Fizzy (writes are only
 tested against the fake, and request tests only reach Fizzy-down paths), `hermes/workspace.js` (no
 JS test harness in the repo), and the look of the CSS. Check in a browser after deploying: a chip
 in a room (a click opens the sheet), File/Dismiss/Edit on a real Hermes draft (the Edit prefill
@@ -472,6 +696,22 @@ Move, the sheet (severity twice, a department, a step, a comment, "Open in Fizzy
 dark.
 
 ## Deliberately deferred or different from the mockup
+
+Phase 2 (2.0, 2.2–2.4):
+
+- **Hermes keeps its own Fizzy write token** (D7 = no): the dial binds proposals only; direct
+  actions are logged ("direct") as far as Fizzy's feed tells and only simple ones can be undone.
+- **Direct tags and steps aren't logged** (Fizzy's feed has no event for them), and a direct move
+  can't be undone (the feed gives only the new column).
+- **"For whom" of a direct action** is the report's "Reported by" text, unverified; only duty
+  managers can undo it.
+- **A typed "@Hermes confirm" under a proposal's draft** doesn't confirm it (Hermes can't confirm its
+  own proposal); the skill answers to press File.
+- **Steps default to Ask first** (D5 didn't list them).
+- **The Hermes tab's bot messages** (drafts, questions, errors) come from the viewer's own rooms
+  only, so nobody reads a room they aren't in there.
+- Not in this build: 2.1's bridge part, 2.5 alerts, 2.6 handover, 2.7 visibility, 2.8 personal
+  Fizzy logins.
 
 Phase 1:
 
