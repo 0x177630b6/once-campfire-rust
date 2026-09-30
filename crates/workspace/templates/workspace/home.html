@@ -6,9 +6,9 @@
 
   {%- match fizzy %}
   {%- when FizzyStatus::Ok %}
-  {%- when FizzyStatus::Waiting with { error } %}
+  {%- when FizzyStatus::Waiting with { failed } %}
   <p class="ws-notice" role="status">
-    {%- if let Some(error) = error %}<strong>Boards unavailable.</strong> Your messages still go through. Cards will appear as soon as Fizzy responds (retrying every {{ retry_seconds }}&nbsp;s). <span class="ws-notice__detail">{{ error }}</span>
+    {%- if failed %}<strong>Boards unavailable.</strong> Your messages still go through. Cards will appear as soon as Fizzy responds (retrying every {{ retry_seconds }}&nbsp;s).
     {%- else %}Loading the Incident Log…{% endif %}
   </p>
   {%- when FizzyStatus::Stale with { since } %}
@@ -23,7 +23,7 @@
     <ul class="ws-list">
       {%- for draft in to_confirm %}
       <li class="ws-item ws-item--draft">
-        <p class="ws-item__meta"><span class="ws-ai">Hermes drafted an incident</span> in <a href="{{ draft.url }}" data-turbo-frame="_top">{{ draft.room_name }}</a> · <time datetime="{{ draft.created_at }}" data-local-time-target="time"></time></p>
+        <p class="ws-item__meta"><span class="ws-ai">Hermes drafted an incident</span> in <a href="{{ draft.url }}" data-turbo-frame="_top">{{ draft.room_name }}</a> · <time datetime="{{ draft.created_at }}" data-local-time-target="datetime"></time></p>
         <p class="ws-item__title">{{ draft.title }}{% if let Some(severity) = draft.severity %} <span class="ws-sev ws-sev--{{ severity }}">{{ severity }}</span>{% endif %}</p>
         {{ draft.buttons|safe }}
       </li>
@@ -56,7 +56,7 @@
     <ul class="ws-list">
       {%- for mention in mentions %}
       <li class="ws-item">
-        <p class="ws-item__meta"><strong>{{ mention.author_name }}</strong> on <a href="{{ mention.card_url }}" target="_blank" rel="noopener">No. {{ mention.card_number }}{% if !mention.card_title.is_empty() %} · {{ mention.card_title }}{% endif %}</a> · <time datetime="{{ mention.created_at }}" data-local-time-target="time"></time></p>
+        <p class="ws-item__meta"><strong>{{ mention.author_name }}</strong> on <a href="{{ mention.card_url }}" target="_blank" rel="noopener">No. {{ mention.card_number }}{% if !mention.card_title.is_empty() %} · {{ mention.card_title }}{% endif %}</a> · <time datetime="{{ mention.created_at }}" data-local-time-target="datetime"></time></p>
         <p class="ws-item__text">{{ mention.excerpt }}</p>
       </li>
       {%- endfor %}

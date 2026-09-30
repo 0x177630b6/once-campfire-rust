@@ -384,12 +384,6 @@ a.ws-chip {
   padding: 0.75em 1em;
 }
 
-.ws-notice__detail {
-  color: color-mix(in srgb, var(--color-text) 60%, transparent);
-  display: block;
-  font-size: 0.85em;
-}
-
 .ws-section {
   display: flex;
   flex-direction: column;

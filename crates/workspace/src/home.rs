@@ -81,9 +81,10 @@ pub struct MentionItem {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FizzyStatus {
     Ok,
-    /// Not polled successfully yet.
+    /// Not polled successfully yet; `failed` once a poll failed (the error is in the server log
+    /// only).
     Waiting {
-        error: Option<String>,
+        failed: bool,
     },
     /// The last poll failed; what's shown is from `since`.
     Stale {
@@ -117,7 +118,7 @@ pub fn build(
     let fizzy = match (&snapshot.last_success, &snapshot.last_error) {
         (Some(_), None) => FizzyStatus::Ok,
         (Some(since), Some(_)) => FizzyStatus::Stale { since: since.to_string() },
-        (None, error) => FizzyStatus::Waiting { error: error.clone() },
+        (None, error) => FizzyStatus::Waiting { failed: error.is_some() },
     };
     let board = snapshot.board.as_ref();
     let incident_cards: Vec<&Card> = snapshot.open.iter().filter_map(|n| snapshot.card(*n)).filter(|card| !card.closed).collect();
@@ -411,7 +412,10 @@ mod tests {
         assert!(matches!(home.fizzy, FizzyStatus::Stale { .. }));
         assert!(home.render().unwrap().contains("Boards unavailable"));
         let waiting = build(&config(), &Snapshot::default(), &maya(), &[], &[], now());
-        assert!(matches!(waiting.fizzy, FizzyStatus::Waiting { .. }));
+        assert!(matches!(waiting.fizzy, FizzyStatus::Waiting { failed: false }));
         assert!(waiting.open.is_empty());
+        let failed = Snapshot { last_error: Some("could not reach Fizzy: connection refused (10.0.0.7:80)".into()), ..Snapshot::default() };
+        let html = build(&config(), &failed, &maya(), &[], &[], now()).render().unwrap();
+        assert!(html.contains("Boards unavailable") && !html.contains("10.0.0.7"), "the detail stays in the server log");
     }
 }
