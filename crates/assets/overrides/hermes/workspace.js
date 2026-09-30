@@ -38,7 +38,8 @@ async function refreshChips() {
   let cards
   try {
     const response = await fetch(`${url}?numbers=${numbers.join(",")}`, { credentials: "same-origin", headers: { "Accept": "application/json" } })
-    if (!response.ok) return
+    // Signed out: the session check redirects to the sign-in page, which fetch follows (200, HTML).
+    if (!response.ok || response.redirected) return
     cards = (await response.json())?.cards || {}
   } catch {
     return // Fizzy or the network is down: links stay as they are
@@ -96,8 +97,11 @@ async function answerDraft(draft, decision) {
       headers: { "Content-Type": "application/json", "Accept": "application/json" },
       body: JSON.stringify({ decision })
     })
+    // Signed out: the session check redirects to the sign-in page, which fetch follows (200), and
+    // nothing was posted.
+    if (response.redirected || response.status === 401) throw new Error("you’re signed out. Sign in again, then retry.")
     const body = await response.json().catch(() => ({}))
-    if (!response.ok) throw new Error(body?.message || `HTTP ${response.status}`)
+    if (response.status !== 201) throw new Error(body?.message || `HTTP ${response.status}`)
     draft.dataset.wsDraftState = "sent"
     setStatus(draft, decision === "confirm" ? "Sent “confirm” to Hermes." : "Sent “cancel” to Hermes.")
   } catch (error) {
