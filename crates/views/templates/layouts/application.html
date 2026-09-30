@@ -52,7 +52,7 @@
     <aside id="sidebar" data-controller="toggle-class" data-toggle-class-toggle-class="open">
 {% block sidebar %}{% endblock %}    </aside>
 
-    {% include "layouts/_lightbox.html" %}
+    {% include "layouts/_lightbox.html" %}{{ crate::hermes::workspace_overlay(ctx)|safe }}{# Hermes fork: the Duty Manager Workspace's tab bar and assets, nothing while it's off (docs/hermes-workspace.md) #}
 
     <a href="https://once.com" id="app-logo" target="_blank" aria-label="Once software from 37signals home page">
       {{ h::image_tag(ctx, "campfire-icon.png", h::attrs().alt("Campfire logo").attr("width", 256).attr("height", 216)) }}

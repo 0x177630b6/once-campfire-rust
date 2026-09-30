@@ -4,6 +4,8 @@
 //!   the `voice` Stimulus controller (`crates/assets/overrides/controllers/voice_controller.js`).
 //!   See docs/hermes-gemini-live.md.
 //! - [`audio_preview`]: an audio attachment (a voice note from the composer) as an inline player.
+//! - [`WorkspaceHooks`]: where the Duty Manager Workspace (`campfire_workspace`,
+//!   docs/hermes-workspace.md) plugs into rendering; nothing is installed while it's off.
 //!
 //! Their styles are `hermes/hermes.css` (crates/assets/overrides), which the Hermes templates link.
 
@@ -89,4 +91,39 @@ pub(crate) fn audio_preview(ctx: &ViewContext, attachment: &AttachmentView) -> S
         label = escape(&label),
         meta = meta,
     )
+}
+
+// --- Duty Manager Workspace hooks -----------------------------------------------------------------
+
+/// Hermes fork: what the Duty Manager Workspace (docs/hermes-workspace.md, `campfire_workspace`)
+/// adds to rendering, through two seams in upstream files: the end of `layouts/application.html`
+/// ([`workspace_overlay`]) and `message_presentation`'s text case ([`workspace_message_html`]).
+/// Nothing is installed while the feature is off, and both render exactly what upstream does.
+pub trait WorkspaceHooks: Send + Sync {
+    /// Appended to the application layout's body (stylesheet, script, tab bar).
+    fn layout_overlay(&self, ctx: &ViewContext) -> String;
+    /// A text message's body as shown (card chips, draft buttons), or `None` to keep it. It ends up
+    /// in the shared message fragment cache, so it must not depend on who's looking.
+    fn message_html(&self, message: &crate::messages::MessageView, html: &str) -> Option<String>;
+}
+
+static WORKSPACE_HOOKS: std::sync::RwLock<Option<std::sync::Arc<dyn WorkspaceHooks>>> = std::sync::RwLock::new(None);
+
+/// Installs (or, with `None`, removes) the workspace's hooks. The app does it once at boot.
+pub fn install_workspace_hooks(hooks: Option<std::sync::Arc<dyn WorkspaceHooks>>) {
+    *WORKSPACE_HOOKS.write().unwrap_or_else(|e| e.into_inner()) = hooks;
+}
+
+fn workspace_hooks() -> Option<std::sync::Arc<dyn WorkspaceHooks>> {
+    WORKSPACE_HOOKS.read().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// The layout seam: empty unless the workspace is on.
+pub fn workspace_overlay(ctx: &ViewContext) -> String {
+    workspace_hooks().map(|hooks| hooks.layout_overlay(ctx)).unwrap_or_default()
+}
+
+/// The message seam: the body as stored unless the workspace decorates it.
+pub(crate) fn workspace_message_html(message: &crate::messages::MessageView, html: &str) -> String {
+    workspace_hooks().and_then(|hooks| hooks.message_html(message, html)).unwrap_or_else(|| html.to_string())
 }

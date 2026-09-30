@@ -16,7 +16,8 @@ pub fn message_presentation(ctx: &ViewContext, message: &MessageView) -> String 
     match &message.content {
         MessageContent::Attachment(attachment) => attachment_presentation(ctx, attachment),
         MessageContent::Sound(sound) => sound_presentation(sound),
-        MessageContent::Text { html } => html.clone(),
+        // Hermes fork: card chips and draft buttons (docs/hermes-workspace.md); `html` while the workspace is off.
+        MessageContent::Text { html } => crate::hermes::workspace_message_html(message, html),
         // `messages/_message` renders `messages/_unrenderable` instead.
         MessageContent::Unrenderable => String::new(),
     }
