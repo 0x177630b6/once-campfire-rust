@@ -35,6 +35,9 @@ pub struct TabBar {
     pub report_icon: String,
     /// The room's cards panel (rendered), or empty.
     pub panel: String,
+    /// The policy lets the viewer create cards: the script adds "Create a card" to the message
+    /// menus only then (the server checks again).
+    pub can_create: bool,
 }
 
 /// `/workspace`
@@ -102,6 +105,7 @@ mod tests {
             chats_icon: "/assets/messages-outlined-1.svg".into(),
             report_icon: "/assets/headset-1.svg".into(),
             panel: String::new(),
+            can_create: true,
         }
     }
 
@@ -145,5 +149,8 @@ mod tests {
 
         let hidden = TabBar { show_bar: false, ..bar(Tab::Chats, None) }.render().unwrap();
         assert!(!hidden.contains("<nav") && hidden.contains("workspace-1.js"));
+        assert!(hidden.contains(r#"<template data-ws-viewer data-ws-can-create="true"></template>"#), "{hidden}");
+        let cannot = TabBar { can_create: false, ..bar(Tab::Chats, None) }.render().unwrap();
+        assert!(cannot.contains(r#"data-ws-can-create="false""#));
     }
 }

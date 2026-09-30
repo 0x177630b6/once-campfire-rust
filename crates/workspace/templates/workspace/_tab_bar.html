@@ -1,6 +1,7 @@
 
     <link rel="stylesheet" href="{{ stylesheet_url }}">
     <script type="module" src="{{ script_url }}"></script>
+    <template data-ws-viewer data-ws-can-create="{{ can_create }}"></template>
 {%- if show_bar %}
     <nav class="ws-tabbar" aria-label="Workspace" data-ws-cards-url="{{ cards_url }}">
       <a class="ws-tab" href="{{ home_url }}"{% if active == Tab::Home %} aria-current="page"{% endif %}>

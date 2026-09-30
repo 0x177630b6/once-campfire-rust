@@ -154,9 +154,13 @@ are never changed.
   JSON lists), and jumps to the page holding the 100th newest comment and the ones after it: three
   requests at most. Without that header it walks the pages (20 at most), keeping the last 100.
   Each control saves at once;
-  the sheet, the card's chips and the room panel are replaced from the reply.
+  the sheet, the card's chips and the room panel are replaced from the reply. A change that fails
+  shows its error and reloads the sheet (the card as it really is), keeping what was typed in the
+  comment box.
 - **Create a card from this message**: an entry in every message's action menu (added by the
-  script to `.message__actions-grid`), and "New card" in the panel and on the board. The form is
+  script to `.message__actions-grid`, only when the policy lets the viewer create cards: the
+  layout's overlay says so in `<template data-ws-viewer data-ws-can-create>`), and "New card" in
+  the panel and on the board (same condition, rendered by the server). The form is
   prefilled: title = the message's first line (120 characters at most), details = its text,
   department = the room's (first) linked department, severity to pick. It creates the card on the
   incident board, adds the severity and department tags, comments "Karim: Created from Maya's
@@ -275,7 +279,7 @@ redirects to the sign-in page (fetch follows it): the script says to sign in aga
 | `POST /workspace/drafts/:message_id/reply` `{"decision": "confirm" \| "dismiss"}` | `201 {"message_id", "reply": "confirm" \| "cancel"}`; `404` when the message isn't in one of the user's rooms; `422 invalid_decision`; `422 not_a_draft` (not from an active bot, or not a draft); `403 forbidden` (policy) |
 | `GET /workspace/board?dept=&sev[]=` | The board (HTML) |
 | `GET /workspace/cards/:number[?fragment=1]` | The card's sheet (page, or fragment for the overlay); `404` not on the incident board; `502` + a notice when Fizzy doesn't answer |
-| `GET /workspace/cards/new?message_id=…\|room_id=…[&fragment=1]` | The new-card form; `404` for a message or room that isn't the user's |
+| `GET /workspace/cards/new?message_id=…\|room_id=…[&fragment=1]` | The new-card form; `404` for a message or room that isn't the user's, then `403` (a notice) when the policy doesn't let them create cards |
 | `POST /workspace/cards` `{"title", "description", "severity", "department" \| "departments", "message_id" \| "room_id"}` | `201 {"number", "url", "chip", "message_id", "warning"}` (`message_id` = the room message with the link); `403`, `404`, `422`, `502` |
 | `POST /workspace/cards/:number/:change` — `move {"to": "new"\|"column:<id>"\|"not_now"\|"closed"}`, `severity {"severity": "high"\|""}`, `departments {"tags": […]}`, `step {"step_id", "completed"}`, `comment {"body"}` | `200 {"number", "sheet", "chip"}` (the fresh sheet and chip); unknown change `404`; `403`, `404`, `422`, `502` |
 | `GET /workspace/rooms/:room_id/panel` | The panel (fragment); `204` room not linked; `404` not the user's room |

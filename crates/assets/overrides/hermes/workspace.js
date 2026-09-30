@@ -17,7 +17,9 @@
 // - Room panel: the cards of the departments linked to the room, behind a "N cards" button the
 //   script adds to the room's nav; open or closed is remembered per browser.
 // - "Create a card": an entry in every message's action menu (and New card buttons) opens the
-//   new-card form (GET /workspace/cards/new?fragment=1), posted as JSON to /workspace/cards.
+//   new-card form (GET /workspace/cards/new?fragment=1), posted as JSON to /workspace/cards. Only
+//   when the policy lets the viewer create cards (`[data-ws-viewer][data-ws-can-create]`).
+// - A failed change in the sheet shows the error and keeps what was typed in the comment box.
 // - Settings: the departments rows (add / remove) and the form, posted as JSON.
 //
 // Every write answers JSON; a refusal or an error shows its message where the action was. A reply
@@ -351,11 +353,15 @@ async function changeCard(sheet, kind, body) {
     }
   } catch (error) {
     showStatus(sheet, error.message, "error")
-    // Show the card as it really is now (a toggle may have half-applied).
+    // Show the card as it really is now (a toggle may have half-applied), keeping what was typed
+    // in the comment box: a failed comment (or any failed change) mustn't lose it.
     if (sheet.closest("dialog.ws-overlay")) {
+      const typed = sheet.querySelector("[data-ws-comment] textarea")?.value || ""
       const { ok, html } = await getFragment(sheet.dataset.wsActionUrl).catch(() => ({ ok: false }))
       const next = ok && fragment(html)
       if (next) {
+        const box = next.querySelector("[data-ws-comment] textarea")
+        if (box) box.value = typed
         sheet.replaceWith(next)
         showStatus(next, error.message, "error")
       }
@@ -493,8 +499,17 @@ document.addEventListener("click", event => {
 
 // --- "Create a card from this message" -------------------------------------------------------------
 
+// The policy lets the viewer create cards (the layout's overlay says; the server checks again).
+function canCreateCards() {
+  return document.querySelector("[data-ws-viewer]")?.dataset.wsCanCreate !== "false"
+}
+
 function addCardActions() {
   if (!document.querySelector("meta[name='current-room-id']")) return
+  if (!canCreateCards()) {
+    for (const button of document.querySelectorAll(".ws-card-action")) button.remove()
+    return
+  }
   const icon = document.querySelector(".ws-tabbar a[href='/workspace/board'] img")?.getAttribute("src")
   for (const grid of document.querySelectorAll(".message .message__actions-grid:not([data-ws-card-action])")) {
     const message = grid.closest(".message")

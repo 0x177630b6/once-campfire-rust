@@ -190,6 +190,7 @@ impl WorkspaceHooks for Hooks {
             chats_icon: ctx.asset("messages-outlined.svg"),
             report_icon: ctx.asset("headset.svg"),
             panel,
+            can_create: self.workspace.may(&Act::CreateCard, &viewer),
         };
         bar.render().unwrap_or_default()
     }
@@ -345,7 +346,8 @@ pub async fn card(c: &mut Ctx) -> Result {
 }
 
 /// `GET /workspace/cards/new?message_id=…` (or `?room_id=…`): the new-card form, prefilled from
-/// the message (a page, or a fragment with `?fragment=1`).
+/// the message (a page, or a fragment with `?fragment=1`). `404` for a message or room that isn't
+/// the user's, then `403` (a notice) when the policy doesn't let them create cards.
 pub async fn new_card(c: &mut Ctx) -> Result {
     let workspace = feature(c)?;
     before_actions(c, Before::default()).await?;
@@ -355,9 +357,16 @@ pub async fn new_card(c: &mut Ctx) -> Result {
         find_template(c, &format::HTML)?;
     }
     let (message_id, room_id) = (id_param(c.params.get("message_id")), id_param(c.params.get("room_id")));
-    let app = c.app().clone();
+    let (app, reader) = (c.app().clone(), user.clone());
     let found =
-        c.app().db.read(move |conn| source_of(conn, &app, &user, message_id, room_id)).await.map_err(db_error)?.ok_or(Error::NotFound)?;
+        c.app().db.read(move |conn| source_of(conn, &app, &reader, message_id, room_id)).await.map_err(db_error)?.ok_or(Error::NotFound)?;
+    if let Err(error) = workspace.authorize(&Act::CreateCard, &viewer(&user)) {
+        let html = notice(&error.message());
+        if fragment {
+            return Ok(c.render_html(StatusCode::FORBIDDEN, html));
+        }
+        return page(c, StatusCode::FORBIDDEN, "New card", format!(r#"<section class="ws-home ws-sheet-page">{html}</section>"#)).await;
+    }
     let form_source = found.message.as_ref().map(|message| FormSource {
         message_id: message.id,
         author_name: message.author_name.clone(),
@@ -892,6 +901,20 @@ mod tests {
         assert_eq!(bot.status, StatusCode::OK, "{}", bot.text());
         assert_eq!(bot.json()["departments"][0]["tag"], "engineering");
         assert_eq!(david.get("/hermes/nope/workspace/settings.json").await.status, StatusCode::FORBIDDEN, "people aren't bots");
+
+        // Nobody may create cards: no menu entry for the script, and the form is refused.
+        let workspace = app.booted.app.workspace.clone().unwrap();
+        let closed = Settings {
+            duty_managers: Some(Vec::new()),
+            confirm_policy: campfire_workspace::Policy::DutyManagersOnly,
+            ..Settings::default()
+        };
+        workspace.settings_store().save(closed).unwrap();
+        assert!(david.get(&format!("/rooms/{ALL_TALK}")).await.text().contains(r#"data-ws-can-create="false""#));
+        let refused = david.get(&format!("/workspace/cards/new?room_id={ALL_TALK}&fragment=1")).await;
+        assert_eq!(refused.status, StatusCode::FORBIDDEN, "{}", refused.text());
+        assert!(refused.text().contains("Only duty managers"));
+        assert_eq!(david.get("/workspace/cards/new?message_id=1").await.status, StatusCode::NOT_FOUND, "404 before the policy");
     }
 
     #[test]
