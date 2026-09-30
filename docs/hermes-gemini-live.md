@@ -125,10 +125,12 @@ manifest (`campfire_assets::try_asset_path`); it's served like every digested as
 best) and tells the model to:
 
 - **Speak the employee's language**, whatever it is (French, English, Spanish, Portuguese, Arabic,
-  Tagalog, Hindi…), and switch when they switch. Before they speak, greet in the first language of
-  the browser's `Accept-Language` (at most three well-formed tags, by quality, `*` and `q=0`
-  dropped: `preferred_languages`; e.g. « Their device prefers these languages, in order: "es-MX",
-  "es". Greet them in the first one »); without the header, a short greeting in English.
+  Tagalog, Hindi…), and switch when they switch. Before they speak, greet in the first of the
+  device's preferred languages, which sit in the quoted context block as data (« - device's
+  preferred languages, most preferred first: "es-MX", "es" », or `unknown` → a short greeting in
+  English). They come from `Accept-Language` (`preferred_languages`: only its first 256 bytes and
+  20 entries are read; at most three well-formed tags by quality, each at most 35 characters and 4
+  subtags; `*`, `q=0` and duplicates dropped).
 - **Take any ticket**: type `request | task | fault | complaint | incident | safety`, where (room,
   building, floor, area), what needs to be done, how urgent; ask only what's missing and matters
   (a simple request needs what and where; incidents and safety issues also when, who, injuries,
@@ -140,7 +142,11 @@ best) and tells the model to:
   `severity` are English enum values, never translated; room numbers, building names, people's
   names and codes kept exactly as said ("room 101", "building 7").
 - **Never claim the ticket exists**: after `submit_incident` answers ok, say it was sent to Hermes,
-  who files it and confirms in the room; no card number. On an error, say so and offer to retry.
+  who files it and confirms in the room; no card number. On `already_submitted` (the page answers
+  that to a second call in the same conversation), don't call it again: say it was already sent
+  (another ticket = a new conversation). On an error, say so and offer to retry.
+- **Title**: « verb object — place » (`Refill water bottles — room 101`), the same format as the
+  `incident-report` skill's.
 
 The page's kickoff and reconnection texts (`KICKOFF_TEXT`, `recapText`) and the tool errors it
 returns to the model are English too; the transcript's labels are `Employee:` / `Assistant:`.
@@ -170,7 +176,7 @@ Checked against the live API on 2026-09-29 (200 with that shape, including the `
 function schema).
 
 `submit_incident` (the name is kept; it sends any ticket) parameters (all strings): `title` (short
-and actionable: verb, object, place — "Refill water bottles, room 101") and `summary` (required),
+and actionable: verb and object — place, "Refill water bottles — room 101") and `summary` (required),
 `type` (`request` | `task` | `fault` | `complaint` | `incident` | `safety`), `what_happened`,
 `location`, `occurred_at`, `people_involved`, `injuries`, `actions_taken`, `severity`
 (`low` | `medium` | `high` | `critical`).

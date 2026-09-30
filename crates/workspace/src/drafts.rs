@@ -156,14 +156,27 @@ impl Decision {
     }
 }
 
-/// A message that answers `bot`'s draft (yes or no, in either language): one that mentions the bot
-/// (the composer's mention, or a typed "@Name") in at most six words with a decision word, or
-/// exactly one decision word ("ok", "confirm"). "ok thanks" or "no worries" aren't answers.
+/// A message that answers `bot`'s draft (yes or no): one that mentions the bot (the composer's
+/// mention, or a typed "@Name") in at most six words with a decision word, or exactly one decision
+/// word ("ok", "confirm", "sí"). "ok thanks" or "no worries" aren't answers. Words are matched
+/// whole, lowercased; the list covers English and French plus common yes / no / confirm / cancel
+/// words in Spanish, Portuguese, Italian, German, Arabic, Tagalog and Hindi (Devanagari and
+/// romanized). Words that are also ordinary words elsewhere (French "si", Tagalog "hindi" = the
+/// language's name in English, Arabic "لا") only count as a reply on their own.
 pub fn is_decision_reply(body_html: &str, bot_id: i64, bot_name: &str) -> bool {
-    const WORDS: [&str; 17] = [
+    const WORDS: [&str; 56] = [
+        // English, French
         "confirm", "confirmed", "confirme", "confirmer", "yes", "oui", "ok", "okay", "valide", "valider", "go", "cancel", "dismiss",
-        "annule", "annuler", "no", "non",
+        "annule", "annuler", "no", "non", // Spanish, Portuguese
+        "sí", "confirmo", "confirmar", "confirmado", "vale", "cancelar", "cancela", "sim", "não", "nao", // Italian
+        "sì", "conferma", "confermo", "confermare", "annulla", "annullare", // German
+        "ja", "bestätigen", "bestätige", "abbrechen", "nein", // Arabic
+        "نعم", "أكد", "تأكيد", "إلغاء", "الغاء", // Tagalog
+        "oo", "opo", "sige", "kumpirmahin", "kanselahin", "huwag", // Hindi
+        "हाँ", "हां", "नहीं", "haan", "han", "nahi", "nahin",
     ];
+    /// Decision words only when they are the whole message.
+    const ALONE: [&str; 3] = ["si", "hindi", "لا"];
     let mut text = html::to_text(body_html).to_lowercase();
     let typed = format!("@{}", bot_name.trim().to_lowercase());
     let mut mentioned = crate::fizzy::mentioned_user_ids(body_html).contains(&bot_id.to_string());
@@ -173,7 +186,7 @@ pub fn is_decision_reply(body_html: &str, bot_id: i64, bot_name: &str) -> bool {
     }
     let words: Vec<&str> = text.split(|c: char| !c.is_alphanumeric()).filter(|word| !word.is_empty()).collect();
     match words.as_slice() {
-        [word] => WORDS.contains(word),
+        [word] => WORDS.contains(word) || ALONE.contains(word),
         words => mentioned && words.len() <= 6 && words.iter().any(|word| WORDS.contains(word)),
     }
 }
@@ -387,6 +400,36 @@ mod tests {
             mention_sgid(5)
         );
         assert!(!reply(&other_user), "a mention of someone else");
+    }
+
+    #[test]
+    fn decision_replies_in_other_languages() {
+        let reply = |body: &str| is_decision_reply(body, 9, "Hermes");
+        let yes = [
+            "Sí", "si", "confirmo", "Vale", "sim", "Não", "sì", "Conferma", "ja", "Bestätigen", "nein", "نعم", "لا", "oo", "Opo", "sige",
+            "hindi", "हाँ", "हां", "नहीं", "haan", "nahi",
+        ];
+        for word in yes {
+            assert!(reply(&format!("<p>{word}</p>")), "{word}");
+            assert!(reply(&format!("<p>{word}.</p>")), "{word} with a full stop");
+        }
+        assert!(reply("<p>@Hermes sí, confirmo</p>"));
+        assert!(reply("<p>@Hermes sim, pode criar</p>"));
+        assert!(reply("<p>@Hermes ja, bitte bestätigen</p>"));
+        assert!(reply("<p>@Hermes نعم أكد</p>"));
+        assert!(reply("<p>@Hermes oo sige po</p>"));
+        assert!(reply("<p>@Hermes haan theek hai</p>"));
+        // Ordinary words and chatter aren't answers.
+        for chatter in [
+            "<p>@Hermes si tu peux, ajoute la chambre 12</p>",
+            "<p>@Hermes can you reply in hindi</p>",
+            "<p>@Hermes لا أعرف أين المفتاح</p>",
+            "<p>gracias, vale la pena</p>",
+            "<p>sim card lost in room 3</p>",
+            "<p>nein danke, alles gut hier heute</p>",
+        ] {
+            assert!(!reply(chatter), "{chatter}");
+        }
     }
 
     /// A Campfire mention sgid's payload (not signed here: only read).

@@ -101,7 +101,7 @@ export const MESSAGES = {
   askAnswered: "Réponse reçue",
   askFailed: "Pas de réponse",
   published: "Ticket envoyé",
-  publishedIn: (room) => `Ticket envoyé dans «${NB}${room}${NB}»${NB}: Hermes le crée et confirme dans le salon.`
+  publishedIn: (room) => `Ticket envoyé dans «${NB}${room}${NB}»${NB}: Hermes le traite et confirme dans le salon.`
 }
 
 // Button labels (the round button's accessible name).

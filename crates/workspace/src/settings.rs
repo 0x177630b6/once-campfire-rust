@@ -8,9 +8,11 @@
 //! `fsync`), one save at a time. A missing file is the defaults (anyone may act). A file that
 //! exists but can't be read or doesn't validate **fails closed** ([`Settings::fail_closed`]: no
 //! departments, duty managers only, the administrators being the duty managers) and says so in the
-//! log and on the settings page; saving replaces it. One exception: a handover time zone this system
-//! can't resolve is read as UTC, with a warning ([`SettingsStore::load_warning`]), since it only
-//! moves the shift ends. Saving also refuses a restricted department linked to an open room
+//! log and on the settings page; saving replaces it. Two exceptions, read with a warning
+//! ([`SettingsStore::load_warning`]) rather than failing the whole file closed: a handover time zone
+//! this system can't resolve is read as UTC (it only moves the shift ends), and a department whose
+//! tag is a ticket type ([`TICKET_TYPE_TAGS`], refused on save since the broader tickets) is kept
+//! as saved (it worked that way before; turning every department off over it would be worse). Saving also refuses a restricted department linked to an open room
 //! ([`Settings::check_open_rooms`], checked by the app, which knows the rooms).
 //!
 //! ```json
@@ -53,6 +55,10 @@ pub const MAX_FIZZY_ID_CHARS: usize = 64;
 pub const MAX_DEPARTMENTS: usize = 50;
 pub const MAX_NAME_CHARS: usize = 60;
 pub const MAX_TAG_CHARS: usize = 40;
+/// The ticket types the incident-report skill tags cards with (`request`, `fault`…): a
+/// department can't use one as its tag, or every ticket of that type would count as that
+/// department's.
+pub const TICKET_TYPE_TAGS: [&str; 8] = ["request", "task", "fault", "complaint", "incident", "safety", "handover", "inspection"];
 pub const MAX_DUTY_MANAGERS: usize = 200;
 pub const MAX_ROOMS_PER_DEPARTMENT: usize = 100;
 
@@ -385,7 +391,13 @@ impl Settings {
 
     /// The settings cleaned up (trimmed, tags normalized, duplicates of room and user ids dropped),
     /// or why they can't be saved.
-    pub fn validated(mut self) -> Result<Self, SettingsError> {
+    pub fn validated(self) -> Result<Self, SettingsError> {
+        self.validate(false)
+    }
+
+    /// [`validated`](Self::validated), except that a department tagged with a ticket type is
+    /// accepted (a file saved before that was refused, read at boot).
+    fn validate(mut self, allow_ticket_type_tags: bool) -> Result<Self, SettingsError> {
         let invalid = |message: String| Err(SettingsError(message));
         if self.departments.len() > MAX_DEPARTMENTS {
             return invalid(format!("At most {MAX_DEPARTMENTS} departments."));
@@ -411,6 +423,12 @@ impl Settings {
             }
             if tag.starts_with("sev-") {
                 return invalid(format!("“{tag}” is a severity tag; pick another tag for “{name}”."));
+            }
+            if !allow_ticket_type_tags && TICKET_TYPE_TAGS.contains(&tag.as_str()) {
+                return invalid(format!(
+                    "“{tag}” is a ticket type (one of {}); pick another tag for “{name}”, e.g. “{tag}-team”.",
+                    TICKET_TYPE_TAGS.join(", ")
+                ));
             }
             if names.contains(&name.to_lowercase()) {
                 return invalid(format!("Two departments are named “{name}”."));
@@ -565,7 +583,21 @@ fn read(path: &Path) -> Result<(Settings, Option<String>), SettingsError> {
         ));
         settings.handover.time_zone = "UTC".into();
     }
-    let settings = settings.validated().map_err(|error| SettingsError(format!("{} isn't valid: {error}", path.display())))?;
+    let settings = settings.validate(true).map_err(|error| SettingsError(format!("{} isn't valid: {error}", path.display())))?;
+    let reserved: Vec<&str> =
+        settings.departments.iter().map(|department| department.tag.as_str()).filter(|tag| TICKET_TYPE_TAGS.contains(tag)).collect();
+    if !reserved.is_empty() {
+        let note = format!(
+            "the department tag(s) {} in {} are ticket types: every card of that type counts as that department's; \
+rename them in the settings (a save refuses them)",
+            reserved.iter().map(|tag| format!("“{tag}”")).collect::<Vec<_>>().join(", "),
+            path.display()
+        );
+        warning = Some(match warning {
+            Some(first) => format!("{first}; {note}"),
+            None => note,
+        });
+    }
     Ok((settings, warning))
 }
 
@@ -605,6 +637,8 @@ mod tests {
             (vec![department("", "x", &[])], "needs a name"),
             (vec![department("A", "two words", &[])], "can only use"),
             (vec![department("A", "sev-high", &[])], "severity tag"),
+            (vec![department("A", "#Incident", &[])], "“incident” is a ticket type"),
+            (vec![department("Front desk", "request", &[])], "pick another tag for “Front desk”, e.g. “request-team”"),
             (vec![department("A", "a", &[]), department("a", "b", &[])], "Two departments are named"),
             (vec![department("A", "x", &[]), department("B", "#X", &[])], "Two departments use the tag"),
             (vec![department("A", "x", &[0])], "rooms"),
@@ -872,6 +906,36 @@ mod tests {
         assert!(store.save(bad).is_err(), "a save still refuses it");
         store.save((*store.get()).clone()).unwrap();
         assert_eq!(store.load_warning(), None, "saved: nothing read differently any more");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn ticket_type_department_tags_are_refused_on_save_but_read_with_a_warning() {
+        // The demo's departments are fine.
+        let demo = ["front-desk", "housekeeping", "maintenance", "security"].map(|tag| department(tag, tag, &[]));
+        assert!(Settings { departments: demo.to_vec(), ..Settings::default() }.validated().is_ok());
+
+        // A file saved before the rule: kept as saved, with a warning, not failed closed.
+        let dir = scratch_dir("settings-ticket-types");
+        let path = dir.join("workspace.json");
+        std::fs::write(
+            &path,
+            r#"{"version": 3, "departments": [{"name": "Safety", "tag": "safety", "rooms": [3]}, {"name": "Front desk", "tag": "front-desk"}], "handover": {"time_zone": "Nowhere/Land"}}"#,
+        )
+        .unwrap();
+        let store = SettingsStore::open(&path);
+        assert_eq!(store.load_error(), None);
+        let warning = store.load_warning().unwrap();
+        assert!(warning.contains("“Nowhere/Land”") && warning.contains("“safety”") && warning.contains("are ticket types"), "{warning}");
+        assert_eq!(store.get().departments.len(), 2, "not failed closed");
+        assert_eq!(store.get().department_by_tag("safety").unwrap().rooms, vec![3]);
+        let error = store.save((*store.get()).clone()).unwrap_err();
+        assert!(matches!(&error, SaveError::Invalid(error) if error.0.contains("“safety” is a ticket type")), "{error:?}");
+        let mut fixed = (*store.get()).clone();
+        fixed.departments[0].tag = "safety-team".into();
+        fixed.handover.time_zone = "UTC".into();
+        store.save(fixed).unwrap();
+        assert_eq!(store.load_warning(), None);
         std::fs::remove_dir_all(dir).unwrap();
     }
 

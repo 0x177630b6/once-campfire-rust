@@ -674,9 +674,17 @@ and every internal identifier and route keeps "incident" (`incident_board`, `sub
 line ("Loading the ticket board…"), the Hermes log's "Drafted a ticket in …", the department-room
 alert ("**Critical ticket** (Engineering): …") and a text draft's fallback title ("Ticket draft").
 The ticket's type is an extra tag (`request`, `task`, `fault`, `complaint`, `incident`, `safety`,
-plus the older `handover`, `inspection`, `maintenance`, `other`), chosen by the Hermes
+plus `handover` and `inspection`, and the older `maintenance`, `other`), chosen by the Hermes
 `incident-report` skill; tags, severities and department tags are fixed identifiers in any
-language. The live voice page (`docs/hermes-gemini-live.md`) takes tickets in any language.
+language. A department can't use a ticket type as its tag (`settings::TICKET_TYPE_TAGS`: request,
+task, fault, complaint, incident, safety, handover, inspection), or every ticket of that type would
+count as that department's: a save refuses it with « “incident” is a ticket type (…); pick another
+tag for “…”, e.g. “incident-team” ». A settings file saved before that rule is **not** failed
+closed over it: it's read as saved, with a load warning (log and settings page) naming the tags,
+until an administrator renames them — failing every department closed would hide more than the
+ambiguity it avoids. Drafts' typed answers (`drafts::is_decision_reply`) also count yes / no /
+confirm / cancel words in Spanish, Portuguese, Italian, German, Arabic, Tagalog and Hindi (whole
+words; « si », « hindi » and « لا » only on their own). The live voice page (`docs/hermes-gemini-live.md`) takes tickets in any language.
 
 ## Routes and contract
 

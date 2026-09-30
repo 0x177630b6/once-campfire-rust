@@ -125,14 +125,14 @@ async fn token_mints_with_the_locked_setup() {
     assert_eq!(setup["tools"][0]["functionDeclarations"][0]["name"], "submit_incident");
     let instruction = setup["systemInstruction"]["parts"][0]["text"].as_str().unwrap();
     assert!(instruction.contains(r#""David""#) && instruction.contains(r#""All Talk""#), "{instruction}");
-    assert!(instruction.contains("preferred language is unknown"), "no Accept-Language: {instruction}");
+    assert!(instruction.ends_with("most preferred first: unknown"), "no Accept-Language: {instruction}");
 
     // The browser's languages decide the greeting's.
     let spanish = david.write(json_post(&voice_token_path(ALL_TALK), &json!({})).header("accept-language", "es-MX,es;q=0.9")).await;
     assert_eq!(spanish.status, StatusCode::OK);
     let requests = minter.requests.lock().unwrap().clone();
     let instruction = requests[1]["bidiGenerateContentSetup"]["systemInstruction"]["parts"][0]["text"].as_str().unwrap().to_string();
-    assert!(instruction.contains(r#"in order: "es-MX", "es". Greet them in the first one"#), "{instruction}");
+    assert!(instruction.ends_with(r#"most preferred first: "es-MX", "es""#), "{instruction}");
 
     // Forgery protection, membership, no GET.
     let cross_site = david.send(json_post(&voice_token_path(ALL_TALK), &json!({})).header("sec-fetch-site", "cross-site")).await;
