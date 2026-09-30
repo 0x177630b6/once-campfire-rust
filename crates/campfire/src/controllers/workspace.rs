@@ -60,6 +60,9 @@ use crate::controllers::presenters::view_context::{find_template, page_in_any_fo
 use crate::integrations::net::Network;
 use crate::integrations::net::http::{self, Body, Endpoint, Timeouts};
 
+/// After a visibility change, when the message fragments are cleared a second time.
+const FRAGMENT_RECLEAR_AFTER: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// The most messages the Home page reads for drafts (the last day of the user's rooms).
 const RECENT_MESSAGES: i64 = 500;
 /// The most chips one request asks for.
@@ -708,9 +711,16 @@ pub async fn update_settings(c: &mut Ctx) -> Result {
     match workspace.settings_store().save(settings) {
         Ok(saved) => {
             // Message HTML is cached for every viewer with the chips as they were rendered: when
-            // the visibility changes, render it all again (restricted = links only marked).
+            // the visibility changes, render it all again (restricted = links only marked). A
+            // render that read the old mode just before may still insert its fragment after this
+            // clear: clear once more when any such render is long finished.
             if saved.visibility.mode != visibility_before {
                 c.app().fragment_cache.clear();
+                let cache = c.app().fragment_cache.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(FRAGMENT_RECLEAR_AFTER).await;
+                    cache.clear();
+                });
             }
             let user_id = require_current_user(c)?.id;
             tracing::info!(
