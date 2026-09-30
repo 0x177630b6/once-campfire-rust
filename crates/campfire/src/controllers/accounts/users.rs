@@ -8,9 +8,9 @@ use campfire_views::accounts;
 
 use crate::app::AppCtx;
 use crate::concerns::{self, Before, cast_integer};
+use crate::controllers::presenters;
 use crate::controllers::presenters::pagination::Page;
 use crate::controllers::presenters::view_context::Layout;
-use crate::controllers::presenters;
 
 /// `set_page_and_extract_portion_from User.active.ordered.without_bots, per_page: 500`,
 /// rendered as `index.turbo_stream.erb` (the only template, so other formats are 406).

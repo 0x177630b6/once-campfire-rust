@@ -7,9 +7,7 @@ use crate::tables::APPROXIMATIONS;
 pub fn format(disposition: &str, filename: &str) -> String {
     format!(
         "{disposition}; filename=\"{}\"; filename*=UTF-8''{}",
-        percent_escape(&transliterate(filename), |b| {
-            b == b' ' || b.is_ascii_alphanumeric() || b"!#$+.^_`|~-".contains(&b)
-        }),
+        percent_escape(&transliterate(filename), |b| { b == b' ' || b.is_ascii_alphanumeric() || b"!#$+.^_`|~-".contains(&b) }),
         percent_escape(filename, |b| b.is_ascii_alphanumeric() || b"!#$&+.^_`|~-".contains(&b)),
     )
 }

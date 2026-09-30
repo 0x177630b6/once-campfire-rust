@@ -53,7 +53,10 @@ fn set_last_updated_at(c: &Ctx) -> Result<Timestamp> {
         },
     };
     // Outside the representable range (a crafted `since`), the nearest end of it.
-    let since = jiff::Timestamp::from_microsecond(since.saturating_mul(1000))
-        .unwrap_or(if since < 0 { jiff::Timestamp::MIN } else { jiff::Timestamp::MAX });
+    let since = jiff::Timestamp::from_microsecond(since.saturating_mul(1000)).unwrap_or(if since < 0 {
+        jiff::Timestamp::MIN
+    } else {
+        jiff::Timestamp::MAX
+    });
     Ok(Timestamp::from_jiff(since))
 }

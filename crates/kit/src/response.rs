@@ -103,9 +103,7 @@ pub fn content_disposition(disposition: &str, filename: Option<&str>) -> String 
     match filename {
         Some(filename) => format!(
             "{disposition}; filename=\"{}\"; filename*=UTF-8''{}",
-            percent_escape(&transliterate(filename), |b| {
-                b == b' ' || b.is_ascii_alphanumeric() || b"!#$+.^_`|~-".contains(&b)
-            }),
+            percent_escape(&transliterate(filename), |b| { b == b' ' || b.is_ascii_alphanumeric() || b"!#$+.^_`|~-".contains(&b) }),
             percent_escape(filename, |b| b.is_ascii_alphanumeric() || b"!#$&+.^_`|~-".contains(&b)),
         ),
         None => disposition.to_string(),
@@ -179,13 +177,7 @@ pub struct SendOptions {
 
 impl Default for SendOptions {
     fn default() -> Self {
-        Self {
-            filename: None,
-            content_type: None,
-            disposition: Some("attachment".into()),
-            status: StatusCode::OK,
-            ranges: false,
-        }
+        Self { filename: None, content_type: None, disposition: Some("attachment".into()), status: StatusCode::OK, ranges: false }
     }
 }
 
@@ -222,8 +214,7 @@ pub(crate) fn send(options: &SendOptions, range_header: Option<&str>, body: Send
 
     match range {
         Some(RangeResult::Unsatisfiable) => {
-            let mut response = Response::new(StatusCode::RANGE_NOT_SATISFIABLE)
-                .header(header::CONTENT_RANGE, &format!("bytes */{total}"));
+            let mut response = Response::new(StatusCode::RANGE_NOT_SATISFIABLE).header(header::CONTENT_RANGE, &format!("bytes */{total}"));
             response.body = Body::Empty;
             response
         }
@@ -379,10 +370,7 @@ mod tests {
     #[test]
     fn content_disposition_like_rails() {
         assert_eq!(content_disposition("inline", None), "inline");
-        assert_eq!(
-            content_disposition("attachment", Some("logo.png")),
-            "attachment; filename=\"logo.png\"; filename*=UTF-8''logo.png"
-        );
+        assert_eq!(content_disposition("attachment", Some("logo.png")), "attachment; filename=\"logo.png\"; filename*=UTF-8''logo.png");
         assert_eq!(
             content_disposition("inline", Some("résumé 1.pdf")),
             "inline; filename=\"resume 1.pdf\"; filename*=UTF-8''r%C3%A9sum%C3%A9%201.pdf"

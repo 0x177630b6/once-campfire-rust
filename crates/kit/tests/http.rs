@@ -3,10 +3,10 @@
 use std::net::SocketAddr;
 
 use axum::Router;
-use campfire_kit::exceptions::ErrorPages;
 use axum::body::Body as AxumBody;
 use axum::extract::ConnectInfo;
 use axum::http::{Request as HttpRequest, header};
+use campfire_kit::exceptions::ErrorPages;
 use campfire_kit::format::{HTML, JSON, TURBO_STREAM};
 use campfire_kit::{
     Cookie, Ctx, ExpiresIn, Freshness, Kit, KitConfig, Redirect, Result, SendOptions, StatusCode, action, front, halt, testing,
@@ -159,9 +159,7 @@ async fn redirects(c: &mut Ctx) -> Result {
     match c.param_str("to").unwrap_or("") {
         "relative" => c.redirect_to("rooms/1"),
         "other" => c.redirect_to("https://evil.example/"),
-        "other_allowed" => {
-            c.redirect_to_with("https://docs.example/", Redirect { allow_other_host: true, ..Redirect::default() })
-        }
+        "other_allowed" => c.redirect_to_with("https://docs.example/", Redirect { allow_other_host: true, ..Redirect::default() }),
         "see_other" => c.redirect_to_with("/rooms", Redirect { status: Some(StatusCode::SEE_OTHER), ..Redirect::default() }),
         "back" => c.redirect_back_or_to("/fallback"),
         _ => c.redirect_to("/rooms/1?x=1"),
@@ -487,11 +485,7 @@ async fn session_cookie_is_written_only_when_the_session_changes() {
     assert_eq!(again.json()["id"], id.as_str());
 
     // Resetting leaves nothing to keep, so the cookie goes.
-    let reset = send(
-        &app,
-        HttpRequest::delete("/session").header(header::COOKIE, &cookie).body(AxumBody::empty()).unwrap(),
-    )
-    .await;
+    let reset = send(&app, HttpRequest::delete("/session").header(header::COOKIE, &cookie).body(AxumBody::empty()).unwrap()).await;
     assert!(reset.cookies().iter().any(|c| c.starts_with("_campfire_session=;")), "{:?}", reset.cookies());
     let after = send(&app, get("/session").header(header::COOKIE, reset.cookie_jar()).body(AxumBody::empty()).unwrap()).await;
     assert_eq!(after.json()["value"], serde_json::Value::Null);
@@ -523,8 +517,12 @@ async fn signed_permanent_cookies_and_deletion() {
     let app = app();
     let signed_in = send(&app, get("/sign_in").body(AxumBody::empty()).unwrap()).await;
     let cookies = signed_in.cookies();
-    assert!(cookies.iter().any(|c| c.starts_with("session_token=")
-        && c.ends_with("; path=/; expires=Wed, 01 Jun 2044 12:00:00 GMT; httponly; samesite=lax")));
+    assert!(
+        cookies
+            .iter()
+            .any(|c| c.starts_with("session_token=")
+                && c.ends_with("; path=/; expires=Wed, 01 Jun 2044 12:00:00 GMT; httponly; samesite=lax"))
+    );
     assert!(cookies.contains(&"last_room=7; path=/; expires=Wed, 01 Jun 2044 12:00:00 GMT; samesite=lax".to_string()));
 
     // Rails' Live responses send the action's cookies twice; this sends them once.
@@ -603,17 +601,12 @@ async fn redirects_like_rails() {
     let allowed = send(&app, get("/redirect?to=other_allowed").body(AxumBody::empty()).unwrap()).await;
     assert_eq!(allowed.header("location"), Some("https://docs.example/"));
 
-    let back = send(
-        &app,
-        get("/redirect?to=back").header(header::REFERER, "http://chat.example.com/rooms/3").body(AxumBody::empty()).unwrap(),
-    )
-    .await;
+    let back =
+        send(&app, get("/redirect?to=back").header(header::REFERER, "http://chat.example.com/rooms/3").body(AxumBody::empty()).unwrap())
+            .await;
     assert_eq!(back.header("location"), Some("http://chat.example.com/rooms/3"));
-    let foreign = send(
-        &app,
-        get("/redirect?to=back").header(header::REFERER, "https://evil.example/x").body(AxumBody::empty()).unwrap(),
-    )
-    .await;
+    let foreign =
+        send(&app, get("/redirect?to=back").header(header::REFERER, "https://evil.example/x").body(AxumBody::empty()).unwrap()).await;
     assert_eq!(foreign.header("location"), Some("http://chat.example.com/fallback"));
 }
 
@@ -640,23 +633,20 @@ async fn send_file_with_disposition_and_ranges() {
     assert_eq!(whole.header("content-transfer-encoding"), Some("binary"));
     assert_eq!(whole.header("content-length"), Some("10"));
 
-    let ignored = send(&app, get(&format!("/file?path={encoded}")).header(header::RANGE, "bytes=2-4").body(AxumBody::empty()).unwrap()).await;
+    let ignored =
+        send(&app, get(&format!("/file?path={encoded}")).header(header::RANGE, "bytes=2-4").body(AxumBody::empty()).unwrap()).await;
     assert_eq!(ignored.status, StatusCode::OK);
 
-    let ranged = send(
-        &app,
-        get(&format!("/file?path={encoded}&ranges=1")).header(header::RANGE, "bytes=2-4").body(AxumBody::empty()).unwrap(),
-    )
-    .await;
+    let ranged =
+        send(&app, get(&format!("/file?path={encoded}&ranges=1")).header(header::RANGE, "bytes=2-4").body(AxumBody::empty()).unwrap())
+            .await;
     assert_eq!(ranged.status, StatusCode::PARTIAL_CONTENT);
     assert_eq!(ranged.body, b"234");
     assert_eq!(ranged.header("content-range"), Some("bytes 2-4/10"));
 
-    let unsatisfiable = send(
-        &app,
-        get(&format!("/file?path={encoded}&ranges=1")).header(header::RANGE, "bytes=20-").body(AxumBody::empty()).unwrap(),
-    )
-    .await;
+    let unsatisfiable =
+        send(&app, get(&format!("/file?path={encoded}&ranges=1")).header(header::RANGE, "bytes=20-").body(AxumBody::empty()).unwrap())
+            .await;
     assert_eq!(unsatisfiable.status, StatusCode::RANGE_NOT_SATISFIABLE);
     assert_eq!(unsatisfiable.header("content-range"), Some("bytes */10"));
 
@@ -681,7 +671,8 @@ async fn stale_and_expires_in() {
     let etag = fresh.header("etag").unwrap().to_string();
     let cached = send(&app, get("/fresh").header(header::IF_NONE_MATCH, &etag).body(AxumBody::empty()).unwrap()).await;
     assert_eq!(cached.status, StatusCode::NOT_MODIFIED);
-    let listed = send(&app, get("/fresh").header(header::IF_NONE_MATCH, format!("\"other\", {etag}")).body(AxumBody::empty()).unwrap()).await;
+    let listed =
+        send(&app, get("/fresh").header(header::IF_NONE_MATCH, format!("\"other\", {etag}")).body(AxumBody::empty()).unwrap()).await;
     assert_eq!(listed.status, StatusCode::NOT_MODIFIED);
 
     // Turbo Frame requests get a different ETag (turbo-rails' frame etagger).

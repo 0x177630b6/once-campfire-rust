@@ -128,12 +128,7 @@ async fn open_database(config: &Config, clock: SharedClock, jobs: jobs::Jobs, ri
     let mut db_config = campfire_db::Config::new(&config.storage.database);
     db_config.readers = config.db_readers;
     db_config.environment = config.environment.clone();
-    let env = campfire_db::Env {
-        clock: Arc::new(DbClock(clock)),
-        sink: Arc::new(jobs),
-        rich_text,
-        bcrypt_cost: 12,
-    };
+    let env = campfire_db::Env { clock: Arc::new(DbClock(clock)), sink: Arc::new(jobs), rich_text, bcrypt_cost: 12 };
     Ok(tokio::task::spawn_blocking(move || Database::open(db_config, env)).await??)
 }
 
@@ -176,9 +171,7 @@ fn static_response(request: &axum::extract::Request) -> Option<axum::response::R
     *response.status_mut() = axum::http::StatusCode::from_u16(served.status).unwrap_or(axum::http::StatusCode::OK);
     response.extensions_mut().insert(campfire_kit::deflater::StaticFile);
     for (name, value) in served.headers {
-        if let (Ok(name), Ok(value)) =
-            (axum::http::HeaderName::from_bytes(name.as_bytes()), axum::http::HeaderValue::from_str(&value))
-        {
+        if let (Ok(name), Ok(value)) = (axum::http::HeaderName::from_bytes(name.as_bytes()), axum::http::HeaderValue::from_str(&value)) {
             response.headers_mut().append(name, value);
         }
     }
@@ -260,7 +253,8 @@ fn init_logging(config: &Config) {
     // The front server logs on its own terms, as Thruster did: requests at info, more with DEBUG.
     let front = if campfire_kit::front::FrontConfig::from_env().debug { "debug" } else { "info" };
     let default = format!("{level},thruster={front},campfire_kit::front={front}");
-    let filter = tracing_subscriber::EnvFilter::try_from_env("CAMPFIRE_LOG").unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default));
+    let filter =
+        tracing_subscriber::EnvFilter::try_from_env("CAMPFIRE_LOG").unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default));
     let _ = tracing_subscriber::fmt().with_env_filter(filter).try_init();
 }
 

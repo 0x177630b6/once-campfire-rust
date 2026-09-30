@@ -5,11 +5,11 @@ use campfire_db::{Account, FirstRun, PasswordDigest};
 use campfire_kit::{Ctx, Error, Result, StatusCode, format, halt};
 use campfire_views::first_runs;
 
-use super::presenters::attachments::{self, Assignment, Record};
 use super::presenters;
+use super::presenters::attachments::{self, Assignment, Record};
 use crate::app::AppCtx;
-use crate::controllers::presenters::page::framed_page;
 use crate::concerns::{self, Before};
+use crate::controllers::presenters::page::framed_page;
 
 /// `allow_unauthenticated_access`, `before_action :prevent_repeats`
 pub async fn show(c: &mut Ctx) -> Result {

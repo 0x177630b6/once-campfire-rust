@@ -92,11 +92,8 @@ pub fn button_to_copy_to_clipboard(url: &str, content: &str) -> Html {
 /// `link_to_zoom_qr_code(url) { content }`: the QR code route takes the URL, base64url-encoded.
 pub fn link_to_zoom_qr_code(url: &str, content: &str) -> Html {
     let path = campfire_routes::qr_code(urlsafe_encode64(url));
-    let options = attrs()
-        .class("btn")
-        .data("lightbox_target", "image")
-        .data("action", "lightbox#open")
-        .data("lightbox_url_value", path.as_str());
+    let options =
+        attrs().class("btn").data("lightbox_target", "image").data("action", "lightbox#open").data("lightbox_url_value", path.as_str());
     link_to(&path, options, content)
 }
 

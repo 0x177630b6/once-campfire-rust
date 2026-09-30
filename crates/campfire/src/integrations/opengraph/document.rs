@@ -78,7 +78,11 @@ mod tests {
         };
         let pages = [
             fill("<meta property=\"og:title\" content=\"x\" ", &|i| format!("a{i:07} "), ">"),
-            fill("<meta charset=utf-8>", &|i| format!("<meta property=\"og:t{i}\" content=\"x\">"), "<meta property=\"og:title\" content=\"x\">"),
+            fill(
+                "<meta charset=utf-8>",
+                &|i| format!("<meta property=\"og:t{i}\" content=\"x\">"),
+                "<meta property=\"og:title\" content=\"x\">",
+            ),
             fill("<meta property=\"og:title\" content=\"", &|_| "&amp;é".to_string(), "\">"),
         ];
         for page in pages {

@@ -10,11 +10,11 @@ mod tests;
 
 use campfire_db::{Account, CachedStatements, Connection, Membership, PushSubscription, Room, RoomType, User};
 use campfire_kit::Ctx;
+use campfire_views::Platform;
 use campfire_views::accounts::{Bot, BotForm, BotRoom, HelpContact};
 use campfire_views::users::{
     MentionUser, ProfileMembership, PushSubscription as PushSubscriptionView, SidebarDirect, SidebarDirectItem, SidebarRoom, UserSummary,
 };
-use campfire_views::Platform;
 use rails_compat::Secrets;
 use rails_compat::global_id::{self, GlobalId};
 use rusqlite::params;
@@ -58,9 +58,11 @@ pub fn platform(c: &Ctx) -> Platform {
 /// `User.administrator.first`, for `accounts/_help_contact`.
 pub fn help_contact(conn: &Connection) -> campfire_db::Result<Option<HelpContact>> {
     let owner: Option<(String, Option<String>)> = conn
-        .query_row_cached(r#"SELECT "users"."name", "users"."email_address" FROM "users" WHERE "users"."role" = 1 ORDER BY "users"."id" ASC LIMIT 1"#, [], |row| {
-            Ok((row.get(0)?, row.get(1)?))
-        })
+        .query_row_cached(
+            r#"SELECT "users"."name", "users"."email_address" FROM "users" WHERE "users"."role" = 1 ORDER BY "users"."id" ASC LIMIT 1"#,
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
         .map(Some)
         .or_else(no_rows)?;
     Ok(owner.map(|(name, email_address)| HelpContact { name, email_address: email_address.unwrap_or_default() }))

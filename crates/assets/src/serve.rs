@@ -36,10 +36,7 @@ pub struct StaticResponse {
 
 impl StaticResponse {
     pub fn header(&self, name: &str) -> Option<&str> {
-        self.headers
-            .iter()
-            .find(|(n, _)| n.eq_ignore_ascii_case(name))
-            .map(|(_, v)| v.as_str())
+        self.headers.iter().find(|(n, _)| n.eq_ignore_ascii_case(name)).map(|(_, v)| v.as_str())
     }
 }
 
@@ -67,16 +64,10 @@ fn find_file(path_info: &str, accept_encoding: &str) -> Option<(&'static [u8], C
         candidates.push(([path.as_slice(), b"/index.html"].concat(), "text/html"));
     }
 
-    candidates
-        .into_iter()
-        .find_map(|(path, content_type)| try_files(&path, content_type, accept_encoding))
+    candidates.into_iter().find_map(|(path, content_type)| try_files(&path, content_type, accept_encoding))
 }
 
-fn try_files(
-    path: &[u8],
-    content_type: &'static str,
-    accept_encoding: &str,
-) -> Option<(&'static [u8], ContentHeaders)> {
+fn try_files(path: &[u8], content_type: &'static str, accept_encoding: &str) -> Option<(&'static [u8], ContentHeaders)> {
     let mut headers: ContentHeaders = vec![("content-type", content_type.to_string())];
 
     if !compressible(content_type) {
@@ -96,18 +87,10 @@ fn try_files(
 }
 
 /// Rack::Files#serving, then FileHandler#serve's `headers.update(content_headers)`.
-fn serve_file(
-    request: &StaticRequest,
-    file: &'static [u8],
-    content_headers: ContentHeaders,
-) -> StaticResponse {
+fn serve_file(request: &StaticRequest, file: &'static [u8], content_headers: ContentHeaders) -> StaticResponse {
     let last_modified = embedded::BUILT_AT;
     if request.if_modified_since == Some(last_modified) {
-        return StaticResponse {
-            status: 304,
-            headers: Vec::new(),
-            body: Body::Borrowed(b""),
-        };
+        return StaticResponse { status: 304, headers: Vec::new(), body: Body::Borrowed(b"") };
     }
 
     let size = file.len();
@@ -143,8 +126,10 @@ fn serve_file(
             let mut multipart = Vec::new();
             for &(start, end) in &ranges {
                 multipart.extend_from_slice(
-                    format!("\r\n--{MULTIPART_BOUNDARY}\r\ncontent-type: {content_type}\r\ncontent-range: bytes {start}-{end}/{size}\r\n\r\n")
-                        .as_bytes(),
+                    format!(
+                        "\r\n--{MULTIPART_BOUNDARY}\r\ncontent-type: {content_type}\r\ncontent-range: bytes {start}-{end}/{size}\r\n\r\n"
+                    )
+                    .as_bytes(),
                 );
                 multipart.extend_from_slice(&file[start..=end]);
             }
@@ -171,11 +156,7 @@ fn serve_file(
         body = Body::Borrowed(b"");
     }
 
-    StaticResponse {
-        status,
-        headers,
-        body,
-    }
+    StaticResponse { status, headers, body }
 }
 
 /// Rack::Utils.get_byte_ranges: None to serve the whole file, Some(empty) when unsatisfiable.
@@ -228,11 +209,7 @@ fn byte_ranges(header: Option<&str>, size: usize) -> Option<Vec<(usize, usize)>>
 
 /// String#to_i: leading digits, 0 if none.
 fn to_i(s: &str) -> i64 {
-    let digits: String = s
-        .trim_start()
-        .chars()
-        .take_while(|c| c.is_ascii_digit())
-        .collect();
+    let digits: String = s.trim_start().chars().take_while(|c| c.is_ascii_digit()).collect();
     digits.parse().unwrap_or(0)
 }
 
@@ -287,38 +264,22 @@ fn hex_value(b: u8) -> Option<u8> {
 
 fn file(path: &[u8]) -> Option<&'static [u8]> {
     let path = std::str::from_utf8(path).ok()?;
-    embedded::FILES
-        .binary_search_by(|(url, _)| (*url).cmp(path))
-        .ok()
-        .map(|index| embedded::FILES[index].1)
+    embedded::FILES.binary_search_by(|(url, _)| (*url).cmp(path)).ok().map(|index| embedded::FILES[index].1)
 }
 
 /// FileHandler's compressible_content_types: /\A(?:text\/|application\/javascript|image\/svg\+xml)/
 fn compressible(content_type: &str) -> bool {
-    content_type.starts_with("text/")
-        || content_type.starts_with("application/javascript")
-        || content_type.starts_with("image/svg+xml")
+    content_type.starts_with("text/") || content_type.starts_with("application/javascript") || content_type.starts_with("image/svg+xml")
 }
 
 /// `accept_encoding.any? { |enc, _| /\b#{encoding}\b/i.match?(enc) }` over Rack's parsed header.
 fn accepts(accept_encoding: &str, encoding: &str) -> bool {
-    accept_encoding
-        .split(',')
-        .map(|part| {
-            part.split(';')
-                .next()
-                .unwrap_or("")
-                .trim()
-                .to_ascii_lowercase()
+    accept_encoding.split(',').map(|part| part.split(';').next().unwrap_or("").trim().to_ascii_lowercase()).any(|value| {
+        value.match_indices(encoding).any(|(i, _)| {
+            let word = |b: Option<&u8>| b.is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_');
+            !word(i.checked_sub(1).and_then(|j| value.as_bytes().get(j))) && !word(value.as_bytes().get(i + encoding.len()))
         })
-        .any(|value| {
-            value.match_indices(encoding).any(|(i, _)| {
-                let word =
-                    |b: Option<&u8>| b.is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_');
-                !word(i.checked_sub(1).and_then(|j| value.as_bytes().get(j)))
-                    && !word(value.as_bytes().get(i + encoding.len()))
-            })
-        })
+    })
 }
 
 /// File.extname on bytes.

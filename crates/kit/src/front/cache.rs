@@ -268,7 +268,10 @@ mod tests {
     fn lifetime_needs_public_and_a_max_age() {
         let ok = StatusCode::OK;
         assert_eq!(cache_lifetime(ok, &headers(&[("cache-control", "public, max-age=2592000")])), Some(Duration::from_secs(2592000)));
-        assert_eq!(cache_lifetime(ok, &headers(&[("cache-control", "max-age=300, public, stale-while-revalidate=604800")])), Some(Duration::from_secs(300)));
+        assert_eq!(
+            cache_lifetime(ok, &headers(&[("cache-control", "max-age=300, public, stale-while-revalidate=604800")])),
+            Some(Duration::from_secs(300))
+        );
         assert_eq!(cache_lifetime(ok, &headers(&[("cache-control", "public, s-max-age=10, max-age=99")])), Some(Duration::from_secs(10)));
         assert_eq!(cache_lifetime(ok, &headers(&[("cache-control", "max-age=0, private, must-revalidate")])), None);
         assert_eq!(cache_lifetime(ok, &headers(&[("cache-control", "public")])), None);

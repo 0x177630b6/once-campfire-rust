@@ -16,8 +16,8 @@ use jiff::{Timestamp, ToSpan, tz::TimeZone};
 use serde_json::Value;
 
 use crate::message_verifier::{Digest, Encoding};
-use crate::{MessageEncryptor, MessageVerifier, Secrets, json};
 use crate::metadata::Serializer;
+use crate::{MessageEncryptor, MessageVerifier, Secrets, json};
 
 pub const SIGNED_COOKIE_SALT: &str = "signed cookie";
 pub const AUTHENTICATED_ENCRYPTED_COOKIE_SALT: &str = "authenticated encrypted cookie";
@@ -46,10 +46,7 @@ pub fn verify_signed(secrets: &Secrets, name: &str, raw: &str, now: Timestamp) -
 /// Reads `cookies.signed[name]` as whatever JSON value it holds.
 pub fn verify_signed_value(secrets: &Secrets, name: &str, raw: &str, now: Timestamp) -> Option<Value> {
     let verifier = signed_cookie_verifier(secrets);
-    let dumped = verifier
-        .verify(raw, Some(&purpose(name)), now)
-        .or_else(|_| verifier.verify(raw, None, now))
-        .ok()?;
+    let dumped = verifier.verify(raw, Some(&purpose(name)), now).or_else(|_| verifier.verify(raw, None, now)).ok()?;
     load(dumped)
 }
 
@@ -63,10 +60,8 @@ pub fn encrypt(secrets: &Secrets, name: &str, value: &Value, expires_at: Option<
 /// Reads `cookies.encrypted[name]`; `None` wherever Rails returns nil.
 pub fn decrypt(secrets: &Secrets, name: &str, raw: &str, now: Timestamp) -> Option<Value> {
     let encryptor = encrypted_cookie_encryptor(secrets);
-    let dumped = encryptor
-        .decrypt_and_verify(raw, Some(&purpose(name)), now)
-        .or_else(|_| encryptor.decrypt_and_verify(raw, None, now))
-        .ok()?;
+    let dumped =
+        encryptor.decrypt_and_verify(raw, Some(&purpose(name)), now).or_else(|_| encryptor.decrypt_and_verify(raw, None, now)).ok()?;
     load(dumped)
 }
 

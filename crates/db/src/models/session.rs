@@ -38,50 +38,25 @@ impl Session {
     }
 
     pub fn find(conn: &Connection, id: i64) -> Result<Self> {
-        query_one(
-            conn,
-            r#"SELECT * FROM "sessions" WHERE "sessions"."id" = ? LIMIT 1"#,
-            [id],
-            Self::from_row,
-        )?
-        .or_not_found("Session")
+        query_one(conn, r#"SELECT * FROM "sessions" WHERE "sessions"."id" = ? LIMIT 1"#, [id], Self::from_row)?.or_not_found("Session")
     }
 
     /// `Session.find_by(token:)`
     pub fn find_by_token(conn: &Connection, token: &str) -> Result<Option<Self>> {
-        query_one(
-            conn,
-            r#"SELECT * FROM "sessions" WHERE "sessions"."token" = ? LIMIT 1"#,
-            [token],
-            Self::from_row,
-        )
+        query_one(conn, r#"SELECT * FROM "sessions" WHERE "sessions"."token" = ? LIMIT 1"#, [token], Self::from_row)
     }
 
     pub fn for_user(conn: &Connection, user_id: i64) -> Result<Vec<Self>> {
-        query_all(
-            conn,
-            r#"SELECT * FROM "sessions" WHERE "sessions"."user_id" = ?"#,
-            [user_id],
-            Self::from_row,
-        )
+        query_all(conn, r#"SELECT * FROM "sessions" WHERE "sessions"."user_id" = ?"#, [user_id], Self::from_row)
     }
 
     pub fn count_for_user(conn: &Connection, user_id: i64) -> Result<i64> {
-        sql::count(
-            conn,
-            r#"SELECT COUNT(*) FROM "sessions" WHERE "sessions"."user_id" = ?"#,
-            [user_id],
-        )
+        sql::count(conn, r#"SELECT COUNT(*) FROM "sessions" WHERE "sessions"."user_id" = ?"#, [user_id])
     }
 
     /// `user.sessions.start!(user_agent:, ip_address:)`: a new 24-character base58
     /// `has_secure_token`, and `last_active_at ||= Time.now` in `before_create`.
-    pub fn start(
-        tx: &mut Tx<'_>,
-        user_id: i64,
-        user_agent: Option<&str>,
-        ip_address: Option<&str>,
-    ) -> Result<Self> {
+    pub fn start(tx: &mut Tx<'_>, user_id: i64, user_agent: Option<&str>, ip_address: Option<&str>) -> Result<Self> {
         let now = tx.now();
         let last_active_at = tx.now();
         let token = sql::base58(24);
@@ -108,12 +83,7 @@ impl Session {
     }
 
     /// `resume`: refreshes activity, user agent and IP at most once an hour.
-    pub fn resume(
-        &mut self,
-        tx: &mut Tx<'_>,
-        user_agent: Option<&str>,
-        ip_address: Option<&str>,
-    ) -> Result<()> {
+    pub fn resume(&mut self, tx: &mut Tx<'_>, user_agent: Option<&str>, ip_address: Option<&str>) -> Result<()> {
         let now = tx.now();
         if !self.needs_resume(now) {
             return Ok(());
@@ -131,10 +101,7 @@ impl Session {
 
     /// `destroy!`
     pub fn destroy(&self, tx: &mut Tx<'_>) -> Result<()> {
-        tx.conn().execute_cached(
-            r#"DELETE FROM "sessions" WHERE "sessions"."id" = ?"#,
-            [self.id],
-        )?;
+        tx.conn().execute_cached(r#"DELETE FROM "sessions" WHERE "sessions"."id" = ?"#, [self.id])?;
         Ok(())
     }
 }

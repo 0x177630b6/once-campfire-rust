@@ -6,9 +6,9 @@ use campfire_kit::{Ctx, Error, Result, StatusCode, format};
 use campfire_views::sessions;
 
 use crate::app::AppCtx;
-use crate::controllers::presenters::page::framed_page;
 use crate::concerns::{self, Before};
 use crate::controllers::presenters;
+use crate::controllers::presenters::page::framed_page;
 
 /// `allow_unauthenticated_access`: an auto-submitting form that PUTs back to this URL.
 pub async fn show(c: &mut Ctx) -> Result {

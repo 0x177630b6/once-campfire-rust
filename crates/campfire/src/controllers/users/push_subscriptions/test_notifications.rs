@@ -29,7 +29,8 @@ pub async fn create(c: &mut Ctx) -> Result {
 
     let location = c.url_for(&campfire_routes::user_push_subscriptions());
     let web_push = c.app().web_push.as_ref().ok_or_else(|| Error::internal(anyhow::anyhow!("Web Push is off (no valid VAPID keys)")))?;
-    web_push::deliver_test_notification(&Network::system(), web_push.vapid(), &subscription, badge, &location).await
+    web_push::deliver_test_notification(&Network::system(), web_push.vapid(), &subscription, badge, &location)
+        .await
         .map_err(|error| Error::internal(anyhow::anyhow!("{error:?}")))?;
     c.redirect_to(&location)
 }

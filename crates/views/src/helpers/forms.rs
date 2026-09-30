@@ -91,10 +91,7 @@ impl FormWith {
 
     /// `form_with ... do |form|`'s builder methods, scoped to `object_name[...]`.
     fn builder(&self) -> FormBuilder {
-        FormBuilder {
-            object_name: self.object_name.clone().unwrap_or_default(),
-            multipart: self.multipart.clone(),
-        }
+        FormBuilder { object_name: self.object_name.clone().unwrap_or_default(), multipart: self.multipart.clone() }
     }
 
     /// `<form ...>` plus the `_method` hidden field (`html_options_for_form_with` +
@@ -252,10 +249,8 @@ impl FormBuilder {
 /// `object_name.gsub(/\]\[|[^-a-zA-Z0-9:.]/, "_").delete_suffix("_")`.
 fn sanitize_object_name(name: &str) -> String {
     let replaced = name.replace("][", "_");
-    let sanitized: String = replaced
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '-' | ':' | '.') { c } else { '_' })
-        .collect();
+    let sanitized: String =
+        replaced.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '-' | ':' | '.') { c } else { '_' }).collect();
     sanitized.strip_suffix('_').map(str::to_string).unwrap_or(sanitized)
 }
 
@@ -274,10 +269,7 @@ pub fn hidden_field_tag(name: &str, value: Option<&str>, options: Attrs) -> Html
 
 /// `sanitize_to_id`: `]` removed, other non-id characters become "_".
 fn sanitize_to_id(name: &str) -> String {
-    name.replace(']', "")
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | ':' | '.') { c } else { '_' })
-        .collect()
+    name.replace(']', "").chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | ':' | '.') { c } else { '_' }).collect()
 }
 
 /// `button_to(url, options) { content }`. `options` may carry `method` ("delete", "put",

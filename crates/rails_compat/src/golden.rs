@@ -147,7 +147,8 @@ fn rails_session_and_its_forms_are_accepted() {
 fn signed_ids() {
     for case in cases("signed_ids.generate") {
         let model = str(&case["model"]);
-        let generated = signed_id::generate(&SECRETS, model, case["id"].as_i64().unwrap(), opt_str(&case["purpose"]), opt_time(&case["expires_at"]));
+        let generated =
+            signed_id::generate(&SECRETS, model, case["id"].as_i64().unwrap(), opt_str(&case["purpose"]), opt_time(&case["expires_at"]));
         assert_eq!(generated, str(&case["signed_id"]), "{model} {} {}", case["id"], case["purpose"]);
     }
     for case in cases("signed_ids.verify") {
@@ -319,13 +320,18 @@ fn write_rust_output_for_rails_to_verify() {
         .map(|parts| json!({ "signed": turbo::signed_stream_name(secrets, parts), "expected": parts.join(":") }))
         .collect();
 
-    let passwords: Vec<Value> = [("secret123456", password::COST), ("pässwörd ☃", password::MIN_COST), (&"a".repeat(80), password::MIN_COST)]
-        .iter()
-        .map(|(pw, cost)| json!({ "password": pw, "digest": password::digest_with_cost(pw, *cost) }))
-        .collect();
+    let passwords: Vec<Value> =
+        [("secret123456", password::COST), ("pässwörd ☃", password::MIN_COST), (&"a".repeat(80), password::MIN_COST)]
+            .iter()
+            .map(|(pw, cost)| json!({ "password": pw, "digest": password::digest_with_cost(pw, *cost) }))
+            .collect();
 
     let app_verifiers: Vec<Value> = [
-        (r#"{"key":"k1","disposition":"inline; filename=\"a\u0026b.png\"","content_type":"image/png","service_name":"local"}"#, Some("blob_key"), Some(four_hours)),
+        (
+            r#"{"key":"k1","disposition":"inline; filename=\"a\u0026b.png\"","content_type":"image/png","service_name":"local"}"#,
+            Some("blob_key"),
+            Some(four_hours),
+        ),
         ("42", Some("blob_id"), None),
         (r#"{"z":1,"a":2}"#, Some("x"), None),
     ]

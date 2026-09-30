@@ -6,7 +6,9 @@ use campfire_db::{Room, RoomType, User};
 use campfire_kit::{Ctx, Result, StatusCode};
 use campfire_views::rooms::{FormRoom, OpenFormView, OpensEdit, OpensNew};
 
-use super::{Scope, ensure_can_administer, ensure_permission_to_create_rooms, redirect_to_room, render_shared_room, room_name_param, set_room};
+use super::{
+    Scope, ensure_can_administer, ensure_permission_to_create_rooms, redirect_to_room, render_shared_room, room_name_param, set_room,
+};
 use crate::app::AppCtx;
 use crate::concerns::{self, Before, before_actions, require_current_user};
 use crate::controllers::presenters::page::{self, db_error};
@@ -39,12 +41,8 @@ pub async fn create(c: &mut Ctx) -> Result {
     let name = room_name_param(c)?.flatten();
     let user_id = require_current_user(c)?.id;
     // Rooms::Open.create_for(room_params, users: Current.user)
-    let room = c
-        .app()
-        .db
-        .write(move |tx| Room::create_for(tx, RoomType::Open, name.as_deref(), user_id, &[user_id]))
-        .await
-        .map_err(db_error)?;
+    let room =
+        c.app().db.write(move |tx| Room::create_for(tx, RoomType::Open, name.as_deref(), user_id, &[user_id])).await.map_err(db_error)?;
     let partials = render_shared_room(c, &room).await?;
     c.app().broadcasts.open_room_create(&room, &partials);
     redirect_to_room(c, room.id)

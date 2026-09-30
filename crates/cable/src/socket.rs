@@ -485,15 +485,15 @@ mod tests {
         let unmasked = vec![0x81, 0x02, b'h', b'i'];
         let cases = [
             unmasked,
-            client_frame(OP_TEXT, true, true, &deflated("hi")),     // compressed, not negotiated
-            client_frame(OP_TEXT, true, false, &[0xff, 0xfe]),     // not UTF-8
-            client_frame(OP_CONTINUATION, true, false, b"x"),      // nothing to continue
-            client_frame(OP_PING, false, false, b"x"),             // fragmented control frame
-            client_frame(0x3, true, false, b"x"),                  // reserved opcode
+            client_frame(OP_TEXT, true, true, &deflated("hi")), // compressed, not negotiated
+            client_frame(OP_TEXT, true, false, &[0xff, 0xfe]),  // not UTF-8
+            client_frame(OP_CONTINUATION, true, false, b"x"),   // nothing to continue
+            client_frame(OP_PING, false, false, b"x"),          // fragmented control frame
+            client_frame(0x3, true, false, b"x"),               // reserved opcode
             client_frame(OP_TEXT, true, false, &vec![b'a'; MAX_MESSAGE + 1]),
-            client_frame(OP_CLOSE, true, false, &[0x03]),                       // one-byte close
-            client_frame(OP_CLOSE, true, false, &1005u16.to_be_bytes()),        // reserved code
-            client_frame(OP_CLOSE, true, false, &[0x03, 0xe8, 0xff]),           // reason not UTF-8
+            client_frame(OP_CLOSE, true, false, &[0x03]),                // one-byte close
+            client_frame(OP_CLOSE, true, false, &1005u16.to_be_bytes()), // reserved code
+            client_frame(OP_CLOSE, true, false, &[0x03, 0xe8, 0xff]),    // reason not UTF-8
         ];
         for bytes in cases {
             let read = read_all(bytes, false).await;
@@ -521,7 +521,11 @@ mod tests {
                     len => (len as usize, at + 2),
                 };
                 let payload = &out[start..start + len];
-                let text = if b0 & 0x40 != 0 { String::from_utf8(inflate(payload).unwrap()).unwrap() } else { String::from_utf8(payload.to_vec()).unwrap() };
+                let text = if b0 & 0x40 != 0 {
+                    String::from_utf8(inflate(payload).unwrap()).unwrap()
+                } else {
+                    String::from_utf8(payload.to_vec()).unwrap()
+                };
                 texts.push((b0 & 0x40 != 0, text));
                 at = start + len;
             }

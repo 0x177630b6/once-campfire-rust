@@ -106,7 +106,10 @@ fn script(tokens: &BTreeMap<String, String>) -> Vec<(String, Step)> {
         ("A presence", Send("A", subscribe(&presence))),
         ("A presence in a room A isn't in", Send("A", subscribe(&json!({ "channel": "PresenceChannel", "room_id": closed_id })))),
         ("A presence with a non-numeric room", Send("A", subscribe(&json!({ "channel": "PresenceChannel", "room_id": "abc" })))),
-        ("A presence with a numeric string room", Send("A", subscribe(&json!({ "channel": "PresenceChannel", "room_id": room_id.to_string() })))),
+        (
+            "A presence with a numeric string room",
+            Send("A", subscribe(&json!({ "channel": "PresenceChannel", "room_id": room_id.to_string() }))),
+        ),
         ("A room", Send("A", subscribe(&room))),
         ("A room A isn't in", Send("A", subscribe(&json!({ "channel": "RoomChannel", "room_id": closed_id })))),
         ("A room without an id", Send("A", subscribe(&json!({ "channel": "RoomChannel" })))),
@@ -121,8 +124,14 @@ fn script(tokens: &BTreeMap<String, String>) -> Vec<(String, Step)> {
             Send("A", subscribe(&json!({ "channel": "RoomMessagesChannel", "signed_stream_name": t("CLOSED_MESSAGES_SIGNED") }))),
         ),
         ("A room messages without a name", Send("A", subscribe(&json!({ "channel": "RoomMessagesChannel" })))),
-        ("A room messages with a forged name", Send("A", subscribe(&json!({ "channel": "RoomMessagesChannel", "signed_stream_name": forged })))),
-        ("A room messages with the rooms name", Send("A", subscribe(&json!({ "channel": "RoomMessagesChannel", "signed_stream_name": t("ROOMS_SIGNED") })))),
+        (
+            "A room messages with a forged name",
+            Send("A", subscribe(&json!({ "channel": "RoomMessagesChannel", "signed_stream_name": forged }))),
+        ),
+        (
+            "A room messages with the rooms name",
+            Send("A", subscribe(&json!({ "channel": "RoomMessagesChannel", "signed_stream_name": t("ROOMS_SIGNED") }))),
+        ),
         ("A turbo rooms", Send("A", subscribe(&rooms))),
         ("A turbo own rooms", Send("A", subscribe(&turbo(t("A_ROOMS_SIGNED"))))),
         ("A turbo guarded room messages", Send("A", subscribe(&guarded))),

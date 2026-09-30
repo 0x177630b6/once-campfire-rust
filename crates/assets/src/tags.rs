@@ -47,10 +47,7 @@ pub fn stylesheet_link_tag(sources: &[&str], options: &[(&str, &str)]) -> Styles
         html.push(tag);
     }
 
-    StylesheetTags {
-        html: html.join("\n"),
-        preload_links,
-    }
+    StylesheetTags { html: html.join("\n"), preload_links }
 }
 
 /// Appends preload links to a response's existing `link` header value the way

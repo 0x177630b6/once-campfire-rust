@@ -6,9 +6,9 @@ use campfire_kit::{Ctx, Error, Redirect, Result, StatusCode, format, permit_keys
 use campfire_views::users;
 
 use crate::app::AppCtx;
-use crate::controllers::presenters::page::framed_page;
 use crate::concerns::{self, Before};
 use crate::controllers::presenters::attachments::{self, Assignment, Record};
+use crate::controllers::presenters::page::framed_page;
 use crate::controllers::presenters::{self, accounts::string_attribute};
 
 /// `set_user` (`Current.user`); memberships partitioned into direct and shared rooms.

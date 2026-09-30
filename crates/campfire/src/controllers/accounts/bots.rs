@@ -7,10 +7,10 @@ use campfire_kit::{Ctx, Error, Param, ParamMap, Result, StatusCode, format, perm
 use campfire_views::accounts;
 
 use crate::app::AppCtx;
-use crate::controllers::presenters::page::framed_page;
 use crate::concerns::{self, Before, cast_integer};
-use crate::controllers::presenters::attachments::{self, Assignment, Record};
 use crate::controllers::presenters;
+use crate::controllers::presenters::attachments::{self, Assignment, Record};
+use crate::controllers::presenters::page::framed_page;
 
 /// `@bots = User.active_bots.ordered`
 pub async fn index(c: &mut Ctx) -> Result {
@@ -37,7 +37,10 @@ pub async fn create(c: &mut Ctx) -> Result {
     before(c).await?;
     let params = bot_params(c)?;
     // users.name is NOT NULL.
-    let name = params.get("name").and_then(Param::to_s).ok_or_else(|| Error::internal(anyhow::anyhow!("NOT NULL constraint failed: users.name")))?;
+    let name = params
+        .get("name")
+        .and_then(Param::to_s)
+        .ok_or_else(|| Error::internal(anyhow::anyhow!("NOT NULL constraint failed: users.name")))?;
     // `create_webhook!(url: webhook_url) if webhook_url`: any non-nil value, "" included.
     let webhook_url = params.get("webhook_url").and_then(Param::to_s);
     let avatar = Assignment::from_params(&params, "avatar")?.stage(c.app()).await?;
@@ -59,7 +62,8 @@ pub async fn edit(c: &mut Ctx) -> Result {
     let bot = set_bot(c).await?;
     c.respond_to(&[&format::HTML])?;
     let (storage, base_url, bot_id) = (c.app().storage.clone(), c.url_for(""), bot.id);
-    let form = c.app().db.read(move |conn| presenters::accounts::bot_form(conn, &storage, &base_url, &bot)).await.map_err(Error::internal)?;
+    let form =
+        c.app().db.read(move |conn| presenters::accounts::bot_form(conn, &storage, &base_url, &bot)).await.map_err(Error::internal)?;
     framed_page!(c, StatusCode::OK, |ctx| accounts::BotsEdit { ctx, bot_id, bot: form.clone() }).await
 }
 

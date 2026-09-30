@@ -10,6 +10,8 @@
 # - `TokenizerOpts::max_attributes` and `Tokenizer::too_many_attributes`: starting an attribute on a
 #   tag that already has `max_attributes` sets the flag, and attributes past the limit are dropped
 #   without the duplicate scan (quadratic in a tag's attributes), as Gumbo's tokenizer does.
+#
+# rustfmt.toml is ours too: it keeps `cargo fmt --all` off upstream's code.
 [package]
 edition = "2021"
 name = "html5ever"

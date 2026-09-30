@@ -55,10 +55,8 @@ impl Clock for FrozenClock {
 pub fn from_env() -> anyhow::Result<SharedClock> {
     match std::env::var(FROZEN_TIME_ENV) {
         Ok(value) if !value.trim().is_empty() => {
-            let now: Timestamp = value
-                .trim()
-                .parse()
-                .map_err(|e| anyhow::anyhow!("{FROZEN_TIME_ENV}={value:?} is not an RFC 3339 timestamp: {e}"))?;
+            let now: Timestamp =
+                value.trim().parse().map_err(|e| anyhow::anyhow!("{FROZEN_TIME_ENV}={value:?} is not an RFC 3339 timestamp: {e}"))?;
             Ok(Arc::new(FrozenClock::new(now)))
         }
         _ => Ok(Arc::new(SystemClock)),
@@ -67,10 +65,7 @@ pub fn from_env() -> anyhow::Result<SharedClock> {
 
 /// `n.years.from_now` as ActiveSupport computes it: calendar years in UTC.
 pub fn years_from(now: Timestamp, years: i64) -> Timestamp {
-    now.to_zoned(jiff::tz::TimeZone::UTC)
-        .checked_add(jiff::Span::new().years(years))
-        .map(|z| z.timestamp())
-        .unwrap_or(now)
+    now.to_zoned(jiff::tz::TimeZone::UTC).checked_add(jiff::Span::new().years(years)).map(|z| z.timestamp()).unwrap_or(now)
 }
 
 /// An HTTP date (`Time#httpdate`): `Thu, 01 Jan 1970 00:00:00 GMT`.

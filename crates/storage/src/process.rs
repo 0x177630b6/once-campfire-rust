@@ -83,12 +83,7 @@ fn blank(value: &Value) -> bool {
 pub fn ffmpeg_exists() -> bool {
     static EXISTS: OnceLock<bool> = OnceLock::new();
     *EXISTS.get_or_init(|| {
-        Command::new(ffmpeg_path())
-            .arg("-version")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .is_ok_and(|s| s.success())
+        Command::new(ffmpeg_path()).arg("-version").stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok_and(|s| s.success())
     })
 }
 

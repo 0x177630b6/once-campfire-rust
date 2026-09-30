@@ -71,21 +71,13 @@ impl Timestamp {
     /// also tolerating a `T` separator and a trailing `Z` or ` UTC`.
     pub fn parse_db(text: &str) -> Option<Self> {
         let text = text.trim();
-        let text = text
-            .strip_suffix(" UTC")
-            .or_else(|| text.strip_suffix('Z'))
-            .unwrap_or(text);
+        let text = text.strip_suffix(" UTC").or_else(|| text.strip_suffix('Z')).unwrap_or(text);
         if text.len() < 19 || !text.is_char_boundary(19) {
             return None;
         }
         let (whole, fraction) = text.split_at(19);
         let b = whole.as_bytes();
-        if b[4] != b'-'
-            || b[7] != b'-'
-            || !(b[10] == b' ' || b[10] == b'T')
-            || b[13] != b':'
-            || b[16] != b':'
-        {
+        if b[4] != b'-' || b[7] != b'-' || !(b[10] == b' ' || b[10] == b'T') || b[13] != b':' || b[16] != b':' {
             return None;
         }
         let num = |range: std::ops::Range<usize>| whole.get(range)?.parse::<i32>().ok();
@@ -101,13 +93,7 @@ impl Timestamp {
             None if fraction.is_empty() => 0,
             _ => return None,
         };
-        let time = jiff::civil::Time::new(
-            num(11..13)? as i8,
-            num(14..16)? as i8,
-            num(17..19)? as i8,
-            micros * 1000,
-        )
-        .ok()?;
+        let time = jiff::civil::Time::new(num(11..13)? as i8, num(14..16)? as i8, num(17..19)? as i8, micros * 1000).ok()?;
         let datetime = jiff::civil::DateTime::from_parts(date, time);
         let zoned = datetime.to_zoned(jiff::tz::TimeZone::UTC).ok()?;
         Some(Self(zoned.timestamp()))
@@ -135,8 +121,7 @@ impl ToSql for Timestamp {
 impl FromSql for Timestamp {
     fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
         let text = value.as_str()?;
-        Timestamp::parse_db(text)
-            .ok_or_else(|| FromSqlError::Other(format!("invalid datetime {text:?}").into()))
+        Timestamp::parse_db(text).ok_or_else(|| FromSqlError::Other(format!("invalid datetime {text:?}").into()))
     }
 }
 
@@ -200,9 +185,7 @@ impl TestClock {
 impl Clock for TestClock {
     fn now(&self) -> Timestamp {
         let state = self.state.lock().unwrap();
-        state
-            .frozen
-            .unwrap_or_else(|| SystemClock.now().since(state.offset))
+        state.frozen.unwrap_or_else(|| SystemClock.now().since(state.offset))
     }
 }
 
@@ -220,32 +203,14 @@ mod tests {
     fn encodes_like_active_record() {
         let ts = Timestamp::parse_db("2026-09-26 12:34:56.123456").unwrap();
         assert_eq!(ts.to_db(), "2026-09-26 12:34:56.123456");
-        assert_eq!(
-            Timestamp::parse_db("2026-09-26 12:34:56").unwrap().to_db(),
-            "2026-09-26 12:34:56"
-        );
-        assert_eq!(
-            Timestamp::parse_db("2026-09-26 12:34:56.120000")
-                .unwrap()
-                .to_db(),
-            "2026-09-26 12:34:56.120000"
-        );
-        assert_eq!(
-            Timestamp::parse_db("2026-01-01 00:00:00.000001")
-                .unwrap()
-                .to_db(),
-            "2026-01-01 00:00:00.000001"
-        );
+        assert_eq!(Timestamp::parse_db("2026-09-26 12:34:56").unwrap().to_db(), "2026-09-26 12:34:56");
+        assert_eq!(Timestamp::parse_db("2026-09-26 12:34:56.120000").unwrap().to_db(), "2026-09-26 12:34:56.120000");
+        assert_eq!(Timestamp::parse_db("2026-01-01 00:00:00.000001").unwrap().to_db(), "2026-01-01 00:00:00.000001");
     }
 
     #[test]
     fn reads_sqlite_strftime_milliseconds() {
-        assert_eq!(
-            Timestamp::parse_db("2026-09-26 12:25:26.826")
-                .unwrap()
-                .to_db(),
-            "2026-09-26 12:25:26.826000"
-        );
+        assert_eq!(Timestamp::parse_db("2026-09-26 12:25:26.826").unwrap().to_db(), "2026-09-26 12:25:26.826000");
     }
 
     #[test]

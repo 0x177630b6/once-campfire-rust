@@ -1,12 +1,12 @@
 //! `ActionCable::Channel::Base`: one instance per subscription, driven by the connection.
 use std::sync::Arc;
 
+use futures_util::stream::{AbortHandle, AbortRegistration};
 use serde::Serialize;
 use serde_json::{Map, Value};
-use futures_util::stream::{AbortHandle, AbortRegistration};
 
 use crate::pubsub::Subscriber;
-use crate::{json, naming, protocol, Server};
+use crate::{Server, json, naming, protocol};
 
 pub type Params = Map<String, Value>;
 

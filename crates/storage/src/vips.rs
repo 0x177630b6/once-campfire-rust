@@ -3,7 +3,7 @@
 //!
 //! libvips must be the same version as the reference image's for variants to be byte-identical.
 
-#![warn(clippy::undocumented_unsafe_blocks)]
+#![allow(unsafe_code, reason = "the libvips FFI: every call into libvips is unsafe")]
 
 use std::ffi::{CStr, CString, c_char, c_double, c_int, c_void};
 use std::path::Path;
