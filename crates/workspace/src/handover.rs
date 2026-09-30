@@ -14,7 +14,8 @@
 //! (phase 2.7): the rest is counted, not named, in a note above the box (not in the message). While
 //! the room's members aren't known (the people and rooms not read yet, or nobody known to be in
 //! it), only what a person in no room may see is listed, and no proposal.
-//! Until a room is set the page shows the summary but can't post it.
+//! Until a room is set the page shows the summary but can't post it. A summary longer than a message
+//! can be (10,000 characters) is cut at a line, with a note saying so.
 
 use askama::Template;
 use jiff::Timestamp;
@@ -225,7 +226,22 @@ pub fn summary(input: &Input<'_>) -> Summary {
         };
         text.push_str(&format!("- {}{whom}\n", proposal.summary));
     }
-    Summary { text: text.trim_end().to_string(), since, shift_end, left_out }
+    Summary { text: fit(text.trim_end()), since, shift_end, left_out }
+}
+
+/// Said at the end of a summary cut to fit a message.
+const CUT_NOTE: &str = "… Cut here: longer than a handover can be; the rest is on the board.";
+
+/// `text`, cut at a line to fit a message ([`MAX_HANDOVER_CHARS`]) with a note, when it's longer.
+fn fit(text: &str) -> String {
+    if text.chars().count() <= MAX_HANDOVER_CHARS {
+        return text.to_string();
+    }
+    let room = MAX_HANDOVER_CHARS - CUT_NOTE.chars().count() - 2;
+    let end = text.char_indices().nth(room).map_or(text.len(), |(at, _)| at);
+    let kept = &text[..end];
+    let kept = kept.rfind('\n').map_or(kept, |at| &kept[..at]).trim_end();
+    format!("{kept}\n\n{CUT_NOTE}")
 }
 
 /// The posted message's HTML: paragraphs at blank lines, lines kept, links made clickable (a card's

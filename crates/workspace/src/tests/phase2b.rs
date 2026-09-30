@@ -688,3 +688,21 @@ async fn a_handover_posted_early_is_where_the_next_one_starts() {
     let page = workspace.handover_page(&manager()).unwrap();
     assert!(page.text.contains("Since 15:00: 0 new"), "{}", page.text);
 }
+
+#[tokio::test]
+async fn a_long_handover_is_cut_to_what_can_be_posted() {
+    let mut settings = restricted();
+    settings.handover.room_id = Some(3);
+    settings.handover.time_zone = "UTC".into();
+    let (fizzy, workspace, clock) = alerting(settings).await;
+    let title = "Water leaking from the ceiling above the corridor near the service lift, level ".repeat(2);
+    let cards: Vec<Value> =
+        (100..250).map(|number| card_at(number, &format!("{title}{number}"), &["engineering"], "2026-09-30T08:00:00Z")).collect();
+    with_cards(&fizzy, &cards);
+    poll_at(&fizzy, &workspace, &clock, 0).await;
+    let text = workspace.handover_page(&manager()).unwrap().text;
+    assert!(text.chars().count() <= crate::handover::MAX_HANDOVER_CHARS, "{}", text.chars().count());
+    assert!(text.ends_with("the rest is on the board."), "{}", &text[text.len() - 200..]);
+    assert!(text.starts_with("Handover: shift ending"));
+    assert!(crate::handover::message_html(&text).is_ok(), "it can be posted as it is");
+}
