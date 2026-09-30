@@ -90,7 +90,12 @@ test("the settings form as the server reads it", () => {
   assert.deepEqual(defaults.visibility, { mode: "everyone", untagged: "everyone" })
   assert.equal(defaults.handover.room_id, null, "no room picked")
   assert.equal(logic.settingsBody({ handover: { room: "x" } }).handover.room_id, null)
-  assert.equal(logic.settingsBody({ notifications: { newReminder: "-3" } }).notifications.new_reminder_min, 15)
+  assert.equal(logic.settingsProblem({ notifications: { newReminder: "20", draftReminder: "" } }), null, "empty: the default")
+  for (const bad of [ "-3", "2.5", "abc", "1441" ]) {
+    const problem = logic.settingsProblem({ notifications: { newReminder: bad } })
+    assert.match(problem, /whole number of minutes/, bad)
+    assert.equal(logic.settingsBody({ notifications: { draftReminder: bad } }).notifications.draft_reminder_min, null, `${bad}: not a silent default`)
+  }
   assert.equal(logic.settingsBody({ departments: [ { name: "S", tag: "s", restricted: "on" } ] }).departments[0].restricted, true)
 })
 

@@ -71,10 +71,26 @@ export function shiftEnds(text) {
   return String(text || "").split(/[\s,;]+/).map(value => value.trim()).filter(Boolean)
 }
 
-// A whole number of minutes from a number field; empty or invalid → `fallback`.
+export const MAX_REMINDER_MINUTES = 24 * 60
+
+// A whole number of minutes from a number field: empty → `fallback`, invalid → null (which the
+// server refuses: never a silent default; `settingsProblem` says what's wrong before posting).
 function minutes(value, fallback) {
-  const number = Number(String(value ?? "").trim())
-  return String(value ?? "").trim() !== "" && Number.isInteger(number) && number >= 0 ? number : fallback
+  const text = String(value ?? "").trim()
+  if (text === "") return fallback
+  const number = Number(text)
+  return /^\d+$/.test(text) && number <= MAX_REMINDER_MINUTES ? number : null
+}
+
+// What's wrong with the settings form before posting it, or null (the server checks the rest).
+export function settingsProblem({ notifications = {} } = {}) {
+  const fields = [ [ notifications.newReminder, "“Still in New” reminder" ], [ notifications.draftReminder, "Waiting proposal reminder" ] ]
+  for (const [ value, label ] of fields) {
+    if (minutes(value, 0) === null) {
+      return `${label}: give a whole number of minutes, 0 to ${MAX_REMINDER_MINUTES} (0 turns it off).`
+    }
+  }
+  return null
 }
 
 // The settings form as POST /workspace/settings reads it. `autonomy` maps action → dial; ids are
@@ -133,5 +149,5 @@ export function handoverProblem(text) {
 
 globalThis.HermesWorkspace = {
   SIGNED_OUT, UNREACHABLE, MAX_CHIPS, hash, chipNumbers, proposalIds, replyProblem, draftBusyText, draftSentText,
-  proposalStateText, changeBody, settingsBody, shiftEnds, chipsToHide, MAX_HANDOVER_CHARS, handoverProblem
+  proposalStateText, changeBody, settingsBody, settingsProblem, MAX_REMINDER_MINUTES, shiftEnds, chipsToHide, MAX_HANDOVER_CHARS, handoverProblem
 }

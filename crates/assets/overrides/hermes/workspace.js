@@ -674,12 +674,14 @@ async function saveSettings(form) {
   }))
   const checked = name => Boolean(form.querySelector(`input[name=${name}]`)?.checked)
   const value = name => form.elements[name]?.value ?? ""
+  // A number field holding what isn't a number reads as "": say it's invalid instead.
+  const number = name => (form.elements[name]?.validity?.badInput ? "invalid" : value(name))
   const autonomy = {}
   for (const row of form.querySelectorAll("[data-ws-autonomy]")) {
     const checked = row.querySelector("input[type=radio]:checked")
     if (checked) autonomy[row.dataset.wsAutonomy] = checked.value
   }
-  const body = logic.settingsBody({
+  const input = {
     departments,
     listed: form.querySelector("input[name=managers][value=listed]")?.checked,
     managers: [ ...form.querySelectorAll("input[name=duty_managers]:checked") ].map(input => input.value),
@@ -694,8 +696,8 @@ async function saveSettings(form) {
       enabled: checked("alerts_enabled"),
       severities: [ ...form.querySelectorAll("input[name=alert_severities]:checked") ].map(input => input.value),
       departmentRooms: checked("alert_department_rooms"),
-      newReminder: value("new_reminder_min"),
-      draftReminder: value("draft_reminder_min")
+      newReminder: number("new_reminder_min"),
+      draftReminder: number("draft_reminder_min")
     },
     handover: {
       room: value("handover_room"),
@@ -703,7 +705,10 @@ async function saveSettings(form) {
       timeZone: value("time_zone"),
       reminder: checked("handover_reminder")
     }
-  })
+  }
+  const problem = logic.settingsProblem?.(input)
+  if (problem) return showStatus(form, problem, "error")
+  const body = logic.settingsBody(input)
   const submit = form.querySelector("[type=submit]")
   submit.disabled = true
   showStatus(form, "Saving…")
