@@ -1,4 +1,4 @@
-{#- Hermes fork: the live voice incident report (docs/hermes-gemini-live.md). A column: the intro,
+{#- Hermes fork: the live voice ticket — request, fault, complaint, incident (docs/hermes-gemini-live.md). A column: the intro,
     the transcript (the only part that scrolls), and a control bar at the bottom with the round
     mic / hang-up button. Styles: hermes/hermes.css. -#}
 {% extends "layouts/application.html" %}
@@ -21,7 +21,7 @@
 
 {%- block content %}
 <section class="voice" data-controller="voice" data-voice-state="idle" data-voice-activity="listening" data-voice-token-url-value="{{ voice.token_url }}" data-voice-report-url-value="{{ voice.report_url }}"{% if let Some(ask_url) = voice.ask_url %} data-voice-ask-url-value="{{ ask_url }}"{% endif %} data-voice-worklet-url-value="{{ voice.worklet_url }}" data-voice-room-url-value="{{ voice.room_url }}" data-voice-room-name-value="{{ voice.room_name }}">
-  <p class="voice__intro txt-small">Racontez l’incident&nbsp;: l’assistant pose les questions manquantes puis publie le compte rendu dans «&nbsp;{{ voice.room_name }}&nbsp;» après votre accord.</p>
+  <p class="voice__intro txt-small">Décrivez la demande, la panne, la plainte ou l’incident, dans votre langue&nbsp;: l’assistant pose les questions manquantes puis envoie le ticket dans «&nbsp;{{ voice.room_name }}&nbsp;» après votre accord.</p>
 
   <div class="voice__transcript" data-voice-target="transcript" aria-live="off" aria-label="Transcription"></div>
 
@@ -38,7 +38,7 @@
 
   <div class="voice__result" data-voice-target="result" hidden>
     <span class="voice__result-icon">{{ h::image_tag(ctx, "check.svg", h::attrs().aria("hidden", true).size(28).class("colorize--white")) }}</span>
-    <p class="txt-medium" data-voice-target="resultText">Compte rendu publié.</p>
+    <p class="txt-medium" data-voice-target="resultText">Ticket envoyé.</p>
     <div class="voice__result-actions">
       <a class="btn btn--reversed" href="{{ voice.room_url }}" data-voice-target="messageLink">Voir le message</a>
       <a class="btn" href="{{ voice.room_url }}">Retour au salon</a>

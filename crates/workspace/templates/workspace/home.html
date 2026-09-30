@@ -9,7 +9,7 @@
   {%- when FizzyStatus::Waiting with { failed } %}
   <p class="ws-notice" role="status">
     {%- if failed %}<strong>Boards unavailable.</strong> Your messages still go through. Cards will appear as soon as Fizzy responds (retrying every {{ retry_seconds }}&nbsp;s).
-    {%- else %}Loading the Incident Log…{% endif %}
+    {%- else %}Loading the ticket board…{% endif %}
   </p>
   {%- when FizzyStatus::Stale with { since } %}
   <p class="ws-notice" role="status"><strong>Boards unavailable.</strong> Your messages still go through. Showing cards as of <time datetime="{{ since }}" data-local-time-target="time"></time>; retrying every {{ retry_seconds }}&nbsp;s.</p>
@@ -34,7 +34,7 @@
       {%- endfor %}
       {%- for draft in to_confirm %}
       <li class="ws-item ws-item--draft">
-        <p class="ws-item__meta"><span class="ws-ai">Hermes drafted an incident</span> in <a href="{{ draft.url }}" data-turbo-frame="_top">{{ draft.room_name }}</a> · <time datetime="{{ draft.created_at }}" data-local-time-target="datetime"></time></p>
+        <p class="ws-item__meta"><span class="ws-ai">Hermes drafted a ticket</span> in <a href="{{ draft.url }}" data-turbo-frame="_top">{{ draft.room_name }}</a> · <time datetime="{{ draft.created_at }}" data-local-time-target="datetime"></time></p>
         <p class="ws-item__title">{{ draft.title }}{% if let Some(severity) = draft.severity %} <span class="ws-sev ws-sev--{{ severity }}">{{ severity }}</span>{% endif %}</p>
         {{ draft.buttons|safe }}
       </li>
@@ -44,11 +44,11 @@
   </section>
 
   <section class="ws-section" aria-labelledby="ws-open">
-    <h2 id="ws-open" class="ws-section__title">Open incidents <span class="ws-count">{{ open_count }}</span>
+    <h2 id="ws-open" class="ws-section__title">Open tickets <span class="ws-count">{{ open_count }}</span>
       <a class="ws-section__link" href="{{ board_page }}">Board</a>
       {%- if let Some(board_url) = board_url %} <a class="ws-section__link ws-section__link--next" href="{{ board_url }}" target="_blank" rel="noopener">{{ board_name }} ↗</a>{% endif %}</h2>
     {%- if open.is_empty() %}
-    <p class="ws-empty">No open incidents on {{ board_name }}.</p>
+    <p class="ws-empty">No open tickets on {{ board_name }}.</p>
     {%- endif %}
     {%- for group in open %}
     <h3 class="ws-column ws-cc--{{ group.tone }}">{{ group.label }} <span class="ws-column__count">{{ group.cards.len() }}</span></h3>
@@ -91,7 +91,7 @@
     <h2 id="ws-handover" class="ws-section__title">Handover <span class="ws-section__hint">changed in the last 12&nbsp;h</span> <span class="ws-count">{{ handover.len() }}</span>
       {%- if let Some(url) = handover_url %} <a class="ws-section__link" href="{{ url }}" data-ws-prepare-handover>Prepare handover</a>{% endif %}</h2>
     {%- if handover.is_empty() %}
-    <p class="ws-empty">No incident changed in the last 12 hours.</p>
+    <p class="ws-empty">No ticket changed in the last 12 hours.</p>
     {%- else %}
     <ul class="ws-cards">
       {%- for card in handover %}

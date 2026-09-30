@@ -125,13 +125,21 @@ async fn token_mints_with_the_locked_setup() {
     assert_eq!(setup["tools"][0]["functionDeclarations"][0]["name"], "submit_incident");
     let instruction = setup["systemInstruction"]["parts"][0]["text"].as_str().unwrap();
     assert!(instruction.contains(r#""David""#) && instruction.contains(r#""All Talk""#), "{instruction}");
+    assert!(instruction.contains("preferred language is unknown"), "no Accept-Language: {instruction}");
+
+    // The browser's languages decide the greeting's.
+    let spanish = david.write(json_post(&voice_token_path(ALL_TALK), &json!({})).header("accept-language", "es-MX,es;q=0.9")).await;
+    assert_eq!(spanish.status, StatusCode::OK);
+    let requests = minter.requests.lock().unwrap().clone();
+    let instruction = requests[1]["bidiGenerateContentSetup"]["systemInstruction"]["parts"][0]["text"].as_str().unwrap().to_string();
+    assert!(instruction.contains(r#"in order: "es-MX", "es". Greet them in the first one"#), "{instruction}");
 
     // Forgery protection, membership, no GET.
     let cross_site = david.send(json_post(&voice_token_path(ALL_TALK), &json!({})).header("sec-fetch-site", "cross-site")).await;
     assert_eq!(cross_site.status, StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(david.write(json_post(&voice_token_path(DIRECT_KEVIN_BENDER), &json!({}))).await.status, StatusCode::NOT_FOUND);
     assert_eq!(david.get(&voice_token_path(ALL_TALK)).await.status, StatusCode::NOT_FOUND);
-    assert_eq!(minter.requests.lock().unwrap().len(), 1);
+    assert_eq!(minter.requests.lock().unwrap().len(), 2);
 }
 
 #[tokio::test]
@@ -370,6 +378,7 @@ fn reads_the_report_and_caps_its_sizes() {
         "summary": "s",
         "location": "",
         "severity": "HIGH",
+        "type": " Fault ",
         "people_involved": "x".repeat(MAX_FIELD_BYTES + 10),
         "transcript": long,
     })))
@@ -377,13 +386,16 @@ fn reads_the_report_and_caps_its_sizes() {
     assert_eq!(report.title, "Chute");
     assert_eq!(report.location, None);
     assert_eq!(report.severity, Some(Severity::High));
+    assert_eq!(report.ticket_type, Some("fault"));
     let people = report.people_involved.as_deref().unwrap();
     assert!(people.len() <= MAX_FIELD_BYTES && people.ends_with('…'));
     let transcript = report.transcript.as_deref().unwrap();
     assert!(transcript.len() <= MAX_TRANSCRIPT_BYTES && transcript.ends_with('…'));
 
-    let unknown = IncidentReport::from_params(&params(json!({ "title": "t", "summary": "s", "severity": "apocalyptic" }))).unwrap();
+    let unknown =
+        IncidentReport::from_params(&params(json!({ "title": "t", "summary": "s", "severity": "apocalyptic", "type": "panne" }))).unwrap();
     assert_eq!(unknown.severity, None);
+    assert_eq!(unknown.ticket_type, None, "types are fixed English identifiers");
 }
 
 #[test]
@@ -402,12 +414,33 @@ fn the_report_is_escaped_markup_with_the_mention_first() {
     ));
     assert!(html.contains("<h3>&lt;b&gt;Titre&lt;/b&gt;</h3>"));
     assert!(html.contains("Ligne 1<br>Ligne &quot;2&quot;"));
-    assert!(html.contains("<li><strong>Blessures :</strong> aucune</li>"));
-    assert!(html.contains("<li><strong>Lieu :</strong> <em>non précisé</em></li>"));
-    assert!(html.contains("critique (critical)"));
-    assert!(html.contains("Transcription de l’entretien (tronquée) :"));
+    assert!(html.contains(&format!("</action-text-attachment> {}.</p>", campfire_workspace::proposals::LIVE_REPORT_OPENING)));
+    assert!(html.contains("<li><strong>Injuries:</strong> aucune</li>"), "values stay in the employee's language");
+    assert!(html.contains("<li><strong>Location:</strong> <em>not stated</em></li>"));
+    assert!(html.contains("<li><strong>Type:</strong> <em>not stated</em></li>"));
+    assert!(html.contains("<li><strong>Severity:</strong> critical</li>"));
+    assert!(html.contains("Conversation transcript (cut):"));
     assert!(html.contains("<blockquote>a &lt;img src=x onerror=alert(1)&gt;…</blockquote>"));
     assert!(!html.contains("<img"));
+}
+
+#[test]
+fn a_request_keeps_its_place_verbatim_and_its_type() {
+    let report = IncidentReport::from_params(&params(json!({
+        "title": "Rellenar botellas de agua, room 101",
+        "summary": "El huésped pide agua.",
+        "type": "request",
+        "location": "room 101",
+        "severity": "low",
+    })))
+    .unwrap();
+    let html = report.to_html("sgid");
+    assert!(html.contains("<h3>Rellenar botellas de agua, room 101</h3>"));
+    assert!(html.contains("<li><strong>Type:</strong> request</li>"));
+    assert!(html.contains("<li><strong>Location:</strong> room 101</li>"));
+    assert!(html.contains("<li><strong>Severity:</strong> low</li>"));
+    assert!(html.contains("<li><strong>Injuries:</strong> <em>not stated</em></li>"));
+    assert!(!html.contains("transcript"), "no transcript, no section");
 }
 
 #[test]

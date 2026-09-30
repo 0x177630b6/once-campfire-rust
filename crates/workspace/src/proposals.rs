@@ -41,8 +41,11 @@ const MAX_KEPT: usize = 500;
 /// A live voice report counts as confirmed for this long after it was posted.
 pub const LIVE_REPORT_WINDOW: SignedDuration = SignedDuration::from_hours(2);
 /// What the voice page posts under the reporter's name once they confirmed the recap
-/// (`controllers/voice.rs`).
-pub const LIVE_REPORT_OPENING: &str = "Compte rendu d’incident dicté en direct (voix), confirmé par l’auteur";
+/// (`controllers/voice.rs`): a fixed English marker, whatever language the ticket is in.
+pub const LIVE_REPORT_OPENING: &str = "Live voice ticket, confirmed by the reporter";
+/// The opening images up to v0.1.2-hermes.16 posted (French only), still recognized so a report
+/// posted just before an upgrade is still filed at once.
+pub const LEGACY_LIVE_REPORT_OPENINGS: [&str; 1] = ["Compte rendu d’incident dicté en direct (voix), confirmé par l’auteur"];
 const MAX_SUMMARY_CHARS: usize = 200;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -134,7 +137,7 @@ pub fn is_confirmed_live_report(message: &SourceMessage, user_id: Option<i64>, n
     !message.creator_is_bot
         && Some(message.creator_id) == user_id
         && now.duration_since(message.created_at) <= LIVE_REPORT_WINDOW
-        && text.trim_start().starts_with(LIVE_REPORT_OPENING)
+        && std::iter::once(LIVE_REPORT_OPENING).chain(LEGACY_LIVE_REPORT_OPENINGS).any(|opening| text.trim_start().starts_with(opening))
 }
 
 /// A proposal, from the moment Hermes made it to its outcome.
@@ -622,8 +625,14 @@ mod tests {
         assert!(!is_confirmed_live_report(&message, Some(5), now + SignedDuration::from_hours(3)), "too old");
         let typed = SourceMessage { body_html: "<p>@Hermes please file it</p>".into(), ..message.clone() };
         assert!(!is_confirmed_live_report(&typed, Some(5), now));
-        let quoted = SourceMessage { body_html: format!("<p>He said: {LIVE_REPORT_OPENING}</p>"), ..message };
+        let quoted = SourceMessage { body_html: format!("<p>He said: {LIVE_REPORT_OPENING}</p>"), ..message.clone() };
         assert!(!is_confirmed_live_report(&quoted, Some(5), now), "only at the start");
+        // What images up to v0.1.2-hermes.16 posted, in French.
+        let legacy = SourceMessage {
+            body_html: "<p>Compte rendu d’incident dicté en direct (voix), confirmé par l’auteur.</p><p>Chute</p>".into(),
+            ..message
+        };
+        assert!(is_confirmed_live_report(&legacy, Some(5), now));
     }
 
     #[test]

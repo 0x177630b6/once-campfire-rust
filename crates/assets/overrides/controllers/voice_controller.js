@@ -1,6 +1,7 @@
 import { Controller } from "@hotwired/stimulus"
 
-// Live voice incident report over Gemini Live, spoken directly from the browser.
+// Live voice ticket (a request, fault, complaint or incident, in any language) over Gemini Live,
+// spoken directly from the browser.
 //
 // The server mints a single-use ephemeral token that locks the whole session setup (model,
 // instructions, tools, transcription, resumption, compression), so the browser only ever sends
@@ -29,13 +30,15 @@ const FINISH_TIMEOUT_MS = 10000
 const ASK_TIMEOUT_MS = 65000
 const PLAYBACK_LEAD_S = 0.05
 
-// The report's transcript says « Employé »; the page says « Vous ».
-const LABELS = { user: "Employé", model: "Assistant" }
+// The report's transcript says "Employee" (fixed English labels, like the report's, whatever language
+// is spoken); the page says « Vous ».
+const LABELS = { user: "Employee", model: "Assistant" }
 const SCREEN_LABELS = { user: "Vous", model: "Assistant" }
 
-// Sent as text right after setup so the assistant speaks first (greets, asks what happened). Text
-// input isn't transcribed, so it shows neither on the page nor in the report.
-export const KICKOFF_TEXT = "[La session commence : salue brièvement l’employé et demande-lui ce qui s’est passé.]"
+// Sent as text right after setup so the assistant speaks first (greets, asks what they need). Text
+// input isn't transcribed, so it shows neither on the page nor in the report. In English, like the
+// system instruction, which says which language to greet in.
+export const KICKOFF_TEXT = "[The session starts: greet the employee briefly, in the language your instructions say, and ask what they need or what happened.]"
 
 // Every start-up step has a deadline, so a stalled step ends with a message naming it instead of
 // an endless "Connexion…".
@@ -78,7 +81,7 @@ export const MESSAGES = {
   reconnecting: "Reconnexion…",
   listening: "À vous",
   speaking: "L’assistant parle…",
-  liveHint: `Dites «${NB}c’est bon${NB}» à l’assistant pour publier.`,
+  liveHint: "Confirmez le récapitulatif à l’assistant pour envoyer le ticket.",
   resumeFailed: "Connexion rétablie, l’assistant a repris le fil.",
   rateLimited: "Trop de sessions demandées en peu de temps. Patientez une minute puis réessayez.",
   tokenError: "Impossible d’ouvrir une session vocale. Réessayez dans un instant.",
@@ -89,17 +92,16 @@ export const MESSAGES = {
   retry: "Appuyez sur le micro pour réessayer",
   unavailable: "Indisponible",
   paused: "Conversation en pause",
-  submitting: "Publication du compte rendu…",
-  submitError: "La publication du compte rendu a échoué. L’assistant va vous proposer de réessayer.",
-  finishing: "Compte rendu publié. L’assistant termine…",
+  submitting: "Envoi du ticket…",
+  submitError: "L’envoi du ticket a échoué. L’assistant va vous proposer de réessayer.",
+  finishing: "Ticket envoyé. L’assistant termine…",
   asking: "Hermes consulté…",
   askLabel: "Question à Hermes",
   askPending: "En attente de la réponse…",
   askAnswered: "Réponse reçue",
   askFailed: "Pas de réponse",
-  askToolError: "Hermes n’a pas répondu.",
-  published: "Compte rendu publié",
-  publishedIn: (room) => `Compte rendu publié dans «${NB}${room}${NB}».`
+  published: "Ticket envoyé",
+  publishedIn: (room) => `Ticket envoyé dans «${NB}${room}${NB}»${NB}: Hermes le crée et confirme dans le salon.`
 }
 
 // Button labels (the round button's accessible name).
@@ -164,7 +166,7 @@ export function toolResponseMessage(responses) {
   return { toolResponse: { functionResponses: responses } }
 }
 
-// Accumulates the incremental transcriptions into alternating "Employé : …" / "Assistant : …"
+// Accumulates the incremental transcriptions into alternating "Employee: …" / "Assistant: …"
 // turns.
 export class Transcript {
   constructor() {
@@ -201,7 +203,7 @@ export class Transcript {
 
   toString() {
     return this.lines
-      .map(({ role, text }) => `${LABELS[role]} : ${text.replace(/\s+/g, " ").trim()}`)
+      .map(({ role, text }) => `${LABELS[role]}: ${text.replace(/\s+/g, " ").trim()}`)
       .filter(line => !line.endsWith(": "))
       .join("\n")
   }
@@ -211,9 +213,9 @@ export class Transcript {
 // the server only issued a resumption handle right after setup, so the conversation since then
 // was lost. Replaying the transcript makes reconnects safe either way.
 export function recapText(transcript) {
-  return "[Reprise après une coupure de connexion. Voici la conversation jusqu’ici ; " +
-    "ne la répète pas et ne pose pas de nouveau les questions déjà traitées : " +
-    "continue là où elle s’est arrêtée.]\n" + transcript.toString()
+  return "[Resuming after a connection loss. Here is the conversation so far; do not repeat it " +
+    "and do not ask again what was already answered: carry on where it stopped, in the language " +
+    "the employee was speaking.]\n" + transcript.toString()
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -343,7 +345,7 @@ export class LiveSession {
     try {
       response = this.handlers.onToolCall
         ? await this.handlers.onToolCall({ id, name, args: args || {} })
-        : { error: `Outil inconnu : ${name}` }
+        : { error: `Unknown tool: ${name}` }
     } catch (error) {
       response = { error: String(error?.message || error) }
     }
@@ -742,7 +744,7 @@ export default class extends Controller {
   #handleToolCall({ name, args }) {
     if (name === "submit_incident") return this.#submitIncident(args)
     if (name === "ask_hermes" && this.askUrlValue) return this.#askHermes(args)
-    return { error: `Outil inconnu : ${name}` }
+    return { error: `Unknown tool: ${name}` }
   }
 
   // `ask_hermes`: the answer (or an error the assistant tells the employee about) is the tool
@@ -750,7 +752,7 @@ export default class extends Controller {
   // auprès d'Hermes… ».
   async #askHermes(args) {
     const question = String(args?.question || "").trim()
-    if (!question) return { error: "Question vide." }
+    if (!question) return { error: "Empty question." }
 
     const line = this.#appendHermesLine(question)
     this.#setTransient(MESSAGES.asking)
@@ -763,7 +765,7 @@ export default class extends Controller {
     } catch (error) {
       console.warn("voice: ask_hermes failed", error)
       this.#settleHermesLine(line, false)
-      return { error: MESSAGES.askToolError }
+      return { error: "Hermes did not answer." }
     } finally {
       if (this.transient === MESSAGES.asking) this.#setTransient(null)
     }
@@ -788,7 +790,7 @@ export default class extends Controller {
       console.warn("voice: report failed", error)
       this.#setTransient(null)
       this.#showNotice({ message: MESSAGES.submitError, details: error.message })
-      return { result: "error", error: "Le compte rendu n’a pas pu être publié. Préviens l’employé et propose de réessayer." }
+      return { result: "error", error: "The ticket could not be sent. Tell the employee, in their language, and offer to try again." }
     }
   }
 

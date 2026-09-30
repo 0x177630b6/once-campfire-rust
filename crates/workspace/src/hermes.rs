@@ -979,7 +979,7 @@ fn classify(message: &ChatMessage) -> Option<(&'static str, String)> {
     let text = html::to_text(&message.body_html);
     let lower = text.to_lowercase();
     if let Some(draft) = drafts::detect(&message.body_html) {
-        return Some(("other", format!("Drafted an incident in {}: {}", message.room_name, draft.title)));
+        return Some(("other", format!("Drafted a ticket in {}: {}", message.room_name, draft.title)));
     }
     if lower.contains("could not reach the agent")
         || lower.contains("could not transcribe")

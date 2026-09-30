@@ -105,7 +105,7 @@ fn title(body_html: &str, text: &str) -> String {
     if let Some(bold) = bold {
         return clean(&bold);
     }
-    text.lines().next().map(clean).unwrap_or_else(|| "Incident draft".into())
+    text.lines().next().map(clean).unwrap_or_else(|| "Ticket draft".into())
 }
 
 fn severity(text: &str) -> Option<Severity> {

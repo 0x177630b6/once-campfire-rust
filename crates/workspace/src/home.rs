@@ -1,7 +1,7 @@
 //! The read-only Home page (`GET /workspace`): what's waiting for the signed-in user.
 //!
 //! - **To confirm**: Hermes drafts in the user's rooms that nobody answered yet ([`drafts::pending`]).
-//! - **Open incidents**: the incident board's cards that aren't closed, by column ("New" first,
+//! - **Open tickets**: the incident board's cards that aren't closed, by column ("New" first,
 //!   "Monitoring" last), most severe first, then oldest first.
 //! - **Mentions**: comments on the incident board's cards that @mention the user (matched by email
 //!   address), last 7 days.
@@ -429,8 +429,7 @@ mod tests {
         let mut snapshot = snapshot();
         snapshot.cards.get_mut(&13).unwrap().title = "<script>alert(1)</script>".into();
         let html = build(&config(), &snapshot, &maya(), &[], &[], now()).render().unwrap();
-        for expected in ["To confirm", "Open incidents", "Mentions", "Handover", "ws-card ws-cc--new", "https://fizzy.example/897/cards/12"]
-        {
+        for expected in ["To confirm", "Open tickets", "Mentions", "Handover", "ws-card ws-cc--new", "https://fizzy.example/897/cards/12"] {
             assert!(html.contains(expected), "{expected}");
         }
         assert!(html.contains("alert(1)") && !html.contains("<script>alert"));

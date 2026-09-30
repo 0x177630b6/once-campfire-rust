@@ -265,7 +265,7 @@ async fn a_critical_card_alerts_the_duty_managers_once_and_never_at_the_first_po
     let dm = html_for(&sent, To::Person(1));
     assert!(dm.contains("<strong>Critical</strong>: Smoke in kitchen · #16 · nobody assigned"), "{dm}");
     assert!(dm.contains(r#"<a href="https://fizzy.example/897/cards/16">"#), "its link, which renders as a chip: {dm}");
-    assert!(html_for(&sent, To::Room(3)).contains("Critical incident</strong> (Engineering)"));
+    assert!(html_for(&sent, To::Room(3)).contains("Critical ticket</strong> (Engineering)"));
     assert!(poll_at(&fizzy, &workspace, &clock, 3).await.is_empty(), "once");
 
     // Medium doesn't alert (critical and high by default); raised to high, it does.

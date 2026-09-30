@@ -93,14 +93,14 @@ fn the_composer_links_to_the_live_report_only_when_gemini_is_on() {
     });
     let form = composer(&html);
     let link = format!(
-        r#"<a class="btn btn--borderless txt-small flex-item-no-shrink hermes-live-link" href="/rooms/{}/voice" data-turbo-frame="_top" title="Rapport d’incident vocal">"#,
+        r#"<a class="btn btn--borderless txt-small flex-item-no-shrink hermes-live-link" href="/rooms/{}/voice" data-turbo-frame="_top" title="Ticket vocal (demande, panne, incident)">"#,
         show.room.id
     );
     let at = form.find(&link).expect(form);
     assert!(form.find("hermes-voice-note__toggle").unwrap() < at, "after the record button");
     assert!(form[at..].contains(r#"src="/assets/headset.svg""#));
     assert!(form[at..].contains(r#"<span class="hermes-live-link__text" aria-hidden="true">Rapport</span>"#), "visible on touch screens");
-    assert!(form[at..].contains(r#"<span class="for-screen-reader">Rapport d’incident vocal</span>"#));
+    assert!(form[at..].contains(r#"<span class="for-screen-reader">Ticket vocal (demande, panne, incident)</span>"#));
     assert!(!form.contains("Gemini"));
     assert!(!html[..html.find("</nav>").unwrap()].contains("/voice"), "the nav's mic button is gone");
     assert_eq!(form.matches("hermes/hermes.css").count(), 1, "the stylesheet once");

@@ -283,7 +283,7 @@ pub fn plan(events: &[Event], plan: &Plan<'_>) -> Vec<Delivery> {
                 if settings.notifications.department_rooms {
                     let departments: Vec<String> = settings.departments_of(&card.tags).iter().map(|d| d.name.clone()).collect();
                     let notice = format!(
-                        "<strong>{} incident</strong> ({}): {} · #{}<br>{link}",
+                        "<strong>{} ticket</strong> ({}): {} · #{}<br>{link}",
                         capitalized(severity.as_str()),
                         escape(&departments.join(", ")),
                         escape(title(card)),

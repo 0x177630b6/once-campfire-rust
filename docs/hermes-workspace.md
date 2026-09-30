@@ -20,8 +20,8 @@ after them.
 - **Tab bar**: on phones a bottom bar **Home · Chats · Report · Boards · Hermes** (Report = the live
   voice report of the room on screen; Boards since phase 1, Hermes since phase 2); a slim rail on
   wide screens.
-- **Home** (`/workspace`): *To confirm* (Hermes drafts nobody answered), *Open incidents* (the
-  Incident Log's cards that aren't closed, by column, most severe first), *Mentions* (Fizzy comments
+- **Home** (`/workspace`): *To confirm* (Hermes drafts nobody answered), *Open tickets* (the
+  incident board's cards that aren't closed — any ticket: requests, faults, complaints, incidents — by column, most severe first), *Mentions* (Fizzy comments
   on incident-board cards that @mention you), *Handover* (incident cards changed in the last 12 h).
   Every card links to Fizzy.
 
@@ -491,8 +491,9 @@ the instance gets `403 not_hermes_bot`, logged.
 - **Expiry**: a pending proposal nobody answered in 24 h becomes "Dismissed (timed out)" (checked at
   every poll and whenever proposals are read), logged.
 - **Confirmed live voice reports** count as confirmed: when the context's message is the reporter's
-  own live voice report ("Compte rendu d’incident dicté en direct (voix), confirmé par l’auteur",
-  posted in the last 2 h under their name), a `create` runs at once unless the dial says Never.
+  own live voice report ("Live voice ticket, confirmed by the reporter", `LIVE_REPORT_OPENING`; the
+  French opening of images up to v0.1.2-hermes.16 is still recognized; posted in the last 2 h under
+  their name), a `create` runs at once unless the dial says Never.
   Once per report: a second card from the same message asks first, even while the first is still
   being filed (checked and recorded in one step under the proposals' lock).
 - Home's **To confirm** lists pending proposals too, with their buttons.
@@ -661,6 +662,21 @@ Handover section, which opens `GET /workspace/handover`:
   card was given a restricted department) keeps the card's title and link; only chips re-check.
   A restricted department can't be linked to an open room (saving refuses it), but a room made
   open afterwards isn't re-checked until the next save.
+
+## Tickets, not only incidents
+
+The board holds **tickets**: any operational request, task, fault, complaint, incident or safety
+issue ("refill the water bottles in room 101", "fix the lift in building 7", "guest in room 403
+complained about noise"). The Fizzy board keeps its configured name (`WORKSPACE_INCIDENT_BOARD`)
+and every internal identifier and route keeps "incident" (`incident_board`, `submit_incident`,
+`/rooms/:id/voice/report`…); only user-facing wording says ticket where it reads better: Home's
+*Open tickets*, "Hermes drafted a ticket", "No ticket changed in the last 12 hours", the loading
+line ("Loading the ticket board…"), the Hermes log's "Drafted a ticket in …", the department-room
+alert ("**Critical ticket** (Engineering): …") and a text draft's fallback title ("Ticket draft").
+The ticket's type is an extra tag (`request`, `task`, `fault`, `complaint`, `incident`, `safety`,
+plus the older `handover`, `inspection`, `maintenance`, `other`), chosen by the Hermes
+`incident-report` skill; tags, severities and department tags are fixed identifiers in any
+language. The live voice page (`docs/hermes-gemini-live.md`) takes tickets in any language.
 
 ## Routes and contract
 
@@ -987,7 +1003,8 @@ Phase 0:
 - **No badge counts** on the tab bar (they'd need a per-user query on every page); Home shows the
   counts. **Three tabs**, not five: Boards and Hermes are phases 1 and 2.
 - **Report from Home** goes to the last room visited instead of asking "Where?".
-- **Open incidents** = every open card of the incident board, not "cards I own + unowned" (per the
+- **Open tickets** (named *Open incidents* before the broader tickets) = every open card of the
+  incident board, not "cards I own + unowned" (per the
   task); owners are shown on each card.
 - **Mentions** come from Fizzy comments only; Campfire @mentions already notify through Campfire.
 - **In-memory cache**, not SQLite: the first poll after a restart rebuilds it (activity pages 1–3,

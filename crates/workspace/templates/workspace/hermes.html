@@ -9,7 +9,7 @@
   {%- when FizzyStatus::Waiting with { failed } %}
   <p class="ws-notice" role="status">
     {%- if failed %}<strong>Boards unavailable.</strong> Hermes's direct actions will appear once Fizzy responds (retrying every {{ retry_seconds }}&nbsp;s).
-    {%- else %}Loading the Incident Log…{% endif %}
+    {%- else %}Loading the ticket board…{% endif %}
   </p>
   {%- when FizzyStatus::Stale with { since } %}
   <p class="ws-notice" role="status"><strong>Boards unavailable.</strong> Hermes's direct actions are as of <time datetime="{{ since }}" data-local-time-target="time"></time>; retrying every {{ retry_seconds }}&nbsp;s.</p>

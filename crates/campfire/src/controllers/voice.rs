@@ -1,4 +1,5 @@
-//! Hermes fork: live voice incident reports (docs/hermes-gemini-live.md). Not in the reference.
+//! Hermes fork: live voice tickets — requests, faults, complaints, incidents — in any language
+//! (docs/hermes-gemini-live.md). Not in the reference.
 //!
 //! - `GET /rooms/:room_id/voice`: the page, around the `voice` Stimulus controller.
 //! - `POST /rooms/:room_id/voice/token`: a single-use Gemini Live token, the session setup locked
@@ -16,6 +17,7 @@
 
 use campfire_db::{Room, User};
 use campfire_kit::{Ctx, Error, Param, ParamMap, Result, StatusCode};
+use campfire_workspace::proposals::LIVE_REPORT_OPENING;
 use serde_json::json;
 
 use crate::app::AppCtx;
@@ -80,6 +82,7 @@ pub async fn token(c: &mut Ctx) -> Result {
     }
 
     let room_name = room_display_name(c, &room).await?;
+    let languages = gemini_live::preferred_languages(c.request.header("accept-language"));
     let live = feature(c)?;
     let config = &live.config;
     let request = Interview {
@@ -88,6 +91,7 @@ pub async fn token(c: &mut Ctx) -> Result {
         user_name: &user.name,
         extra_instructions: config.extra_instructions.as_deref(),
         ask_hermes: live.ask_enabled(),
+        languages: &languages,
         now,
     }
     .token_request();
@@ -236,12 +240,15 @@ fn pick_bot(mut bots: Vec<User>, wanted: Option<&str>) -> Option<User> {
 pub const MAX_FIELD_BYTES: usize = 2 * 1024;
 pub const MAX_TRANSCRIPT_BYTES: usize = 20 * 1024;
 
-/// `submit_incident`'s arguments plus the transcript. Everything in it came from a model and a
-/// browser, so it's escaped into the message, never trusted as markup.
+/// `submit_incident`'s arguments plus the transcript: a ticket (request, fault, complaint,
+/// incident…). Everything in it came from a model and a browser, so it's escaped into the
+/// message, never trusted as markup.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct IncidentReport {
     pub title: String,
     pub summary: String,
+    /// One of [`gemini_live::TICKET_TYPES`].
+    pub ticket_type: Option<&'static str>,
     pub what_happened: Option<String>,
     pub location: Option<String>,
     pub occurred_at: Option<String>,
@@ -271,13 +278,14 @@ impl Severity {
         }
     }
 
-    /// French label, plus the value the incident-report skill tags with (`sev-<value>`).
+    /// The value the incident-report skill tags with (`sev-<value>`): a fixed identifier, never
+    /// translated.
     fn label(self) -> &'static str {
         match self {
-            Self::Low => "faible (low)",
-            Self::Medium => "moyenne (medium)",
-            Self::High => "élevée (high)",
-            Self::Critical => "critique (critical)",
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::Critical => "critical",
         }
     }
 }
@@ -292,6 +300,7 @@ impl IncidentReport {
         Some(Self {
             title: field("title")?,
             summary: field("summary")?,
+            ticket_type: params.get("type").and_then(Param::as_str).and_then(ticket_type),
             what_happened: field("what_happened"),
             location: field("location"),
             occurred_at: field("occurred_at"),
@@ -304,36 +313,46 @@ impl IncidentReport {
     }
 
     /// The message body: the bot's mention (an Action Text attachment, as the composer inserts
-    /// it), then the report and the transcript, in tags the rich text sanitizer keeps.
+    /// it), the fixed opening the workspace recognizes ([`LIVE_REPORT_OPENING`]), then the ticket
+    /// and the transcript, in tags the rich text sanitizer keeps. The labels are fixed English (the
+    /// skill reads them); the values are in the employee's language, as the interviewer wrote them.
     pub fn to_html(&self, bot_sgid: &str) -> String {
         let mut html = format!(
-            r#"<p><action-text-attachment sgid="{}" content-type="application/vnd.campfire.mention"></action-text-attachment> Compte rendu d’incident dicté en direct (voix), confirmé par l’auteur.</p>"#,
+            r#"<p><action-text-attachment sgid="{}" content-type="application/vnd.campfire.mention"></action-text-attachment> {LIVE_REPORT_OPENING}.</p>"#,
             escape(bot_sgid)
         );
         html.push_str(&format!("<h3>{}</h3>", escape(&self.title)));
-        html.push_str(&format!("<p><strong>Résumé :</strong> {}</p>", multiline(&self.summary)));
-        let details = [
-            ("Ce qui s’est passé", &self.what_happened),
-            ("Lieu", &self.location),
-            ("Date et heure", &self.occurred_at),
-            ("Personnes impliquées", &self.people_involved),
-            ("Blessures", &self.injuries),
-            ("Mesures prises", &self.actions_taken),
-        ];
+        html.push_str(&format!("<p><strong>Summary:</strong> {}</p>", multiline(&self.summary)));
+        let not_stated = || "<em>not stated</em>".to_string();
         html.push_str("<ul>");
+        html.push_str(&format!("<li><strong>Type:</strong> {}</li>", self.ticket_type.map(escape).unwrap_or_else(not_stated)));
+        let details = [
+            ("What happened / what is needed", &self.what_happened),
+            ("Location", &self.location),
+            ("When", &self.occurred_at),
+            ("People involved", &self.people_involved),
+            ("Injuries", &self.injuries),
+            ("Actions already taken", &self.actions_taken),
+        ];
         for (label, value) in details {
-            let value = value.as_deref().map(multiline).unwrap_or_else(|| "<em>non précisé</em>".into());
-            html.push_str(&format!("<li><strong>{label} :</strong> {value}</li>"));
+            let value = value.as_deref().map(multiline).unwrap_or_else(not_stated);
+            html.push_str(&format!("<li><strong>{label}:</strong> {value}</li>"));
         }
-        let severity = self.severity.map(|severity| escape(severity.label())).unwrap_or_else(|| "<em>non précisée</em>".into());
-        html.push_str(&format!("<li><strong>Gravité :</strong> {severity}</li></ul>"));
+        let severity = self.severity.map(|severity| escape(severity.label())).unwrap_or_else(not_stated);
+        html.push_str(&format!("<li><strong>Severity:</strong> {severity}</li></ul>"));
         if let Some(transcript) = &self.transcript {
-            let note = if transcript.ends_with(TRUNCATED) { " (tronquée)" } else { "" };
-            html.push_str(&format!("<p><strong>Transcription de l’entretien{note} :</strong></p>"));
+            let note = if transcript.ends_with(TRUNCATED) { " (cut)" } else { "" };
+            html.push_str(&format!("<p><strong>Conversation transcript{note}:</strong></p>"));
             html.push_str(&format!("<blockquote>{}</blockquote>", multiline(transcript)));
         }
         html
     }
+}
+
+/// `type`, when it's one of [`gemini_live::TICKET_TYPES`].
+fn ticket_type(value: &str) -> Option<&'static str> {
+    let value = value.trim().to_ascii_lowercase();
+    gemini_live::TICKET_TYPES.into_iter().find(|known| *known == value)
 }
 
 const TRUNCATED: &str = "…";

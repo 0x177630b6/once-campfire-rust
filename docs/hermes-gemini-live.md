@@ -1,14 +1,17 @@
-# Hermes fork: live voice incident reports (Gemini Live)
+# Hermes fork: live voice tickets (Gemini Live)
 
-An employee opens a room's voice page, talks an incident through with a Gemini Live voice
-interviewer that asks only for what's missing, confirms the recap, and the report is posted **in the
-room, as that employee**, with an @mention of the Hermes bot. The mention fires the bot's webhook
+An employee opens a room's voice page, talks a **ticket** through with a Gemini Live voice
+interviewer, in **any language**, that asks only for what's missing, confirms the recap, and the
+ticket is posted **in the room, as that employee**, with an @mention of the Hermes bot. A ticket is
+any operational request, task, fault, complaint, incident or safety issue: "refill the water
+bottles in room 101" (a low request), "fix the lift in building 7" (a high fault; critical with
+people stuck), "the guest in room 403 complained about the noise" (a medium complaint). The mention fires the bot's webhook
 exactly as a typed @mention would, so the Hermes bridge and its `incident-report` skill take it
 from there (Fizzy card etc.).
 
 During the interview the assistant can also **ask Hermes** (`ask_hermes`, with `HERMES_ASK_URL`):
-a procedure, the incidents already open on the Fizzy board, a contact… It says « Je vérifie auprès
-d'Hermes… », the page forwards the question through Campfire to the Hermes bridge, and the
+a procedure, the tickets already open on the Fizzy board, a contact… It says it's checking with
+Hermes (in the employee's language), the page forwards the question through Campfire to the Hermes bridge, and the
 assistant speaks the answer and carries on with the interview.
 
 This is a fork-only feature: none of it exists in the reference app or upstream
@@ -35,8 +38,9 @@ POST /rooms/:id/voice/report ────────────▶ message as 
 ```
 
 The API key never reaches the browser. The browser only gets a single-use ephemeral token whose
-`bidiGenerateContentSetup` fixes the model, the French interviewer instructions (with the room and
-user names frozen in, as quoted data), the `submit_incident` declaration (plus `ask_hermes` and its
+`bidiGenerateContentSetup` fixes the model, the interviewer instructions (English, multilingual —
+see *The interviewer* below — with the room and user names and the browser's languages frozen in,
+as quoted data), the `submit_incident` declaration (plus `ask_hermes` and its
 paragraph of instructions when `HERMES_ASK_URL` is set), audio transcription both ways, session
 resumption and sliding-window context compression.
 
@@ -100,8 +104,9 @@ running `mm:ss` clock). Right after setup the controller sends a short text inst
 (`KICKOFF_TEXT`) so the assistant speaks first; text input isn't transcribed, so it's neither on
 the page nor in the report. « Raccrocher » keeps the transcript and the session: « Reprendre »
 (`retry()`) reconnects with a fresh token and replays the transcript; « Recommencer » wipes it after
-an in-page confirmation. Publishing is by voice (« Dites « c’est bon » à l’assistant pour
-publier. »). Error sentences stay plain; HTTP/WebSocket codes and hostnames go in a
+an in-page confirmation. Publishing is by voice (« Confirmez le récapitulatif à l’assistant pour envoyer
+le ticket. »). The page's own texts are still French (Campfire has no i18n); the conversation is
+in the employee's language. Error sentences stay plain; HTTP/WebSocket codes and hostnames go in a
 « Détails techniques » disclosure and `console.warn`. Screen readers get the step while starting,
 each completed assistant turn once (the transcript itself is `aria-live="off"`), and the focus moves
 to « Voir le message » when done. Styles: `hermes/hermes.css` (below).
@@ -114,9 +119,38 @@ The worklet URL is the Propshaft-digested path of `voice/pcm-worklet.js`, resolv
 manifest (`campfire_assets::try_asset_path`); it's served like every digested asset
 (`text/javascript`, immutable), which `audioWorklet.addModule(url)` accepts.
 
+### The interviewer
+
+`Interview::system_instruction` (`gemini_live.rs`) is written in English (the model follows it
+best) and tells the model to:
+
+- **Speak the employee's language**, whatever it is (French, English, Spanish, Portuguese, Arabic,
+  Tagalog, Hindi…), and switch when they switch. Before they speak, greet in the first language of
+  the browser's `Accept-Language` (at most three well-formed tags, by quality, `*` and `q=0`
+  dropped: `preferred_languages`; e.g. « Their device prefers these languages, in order: "es-MX",
+  "es". Greet them in the first one »); without the header, a short greeting in English.
+- **Take any ticket**: type `request | task | fault | complaint | incident | safety`, where (room,
+  building, floor, area), what needs to be done, how urgent; ask only what's missing and matters
+  (a simple request needs what and where; incidents and safety issues also when, who, injuries,
+  actions taken); never invent.
+- **Severity guide**: low (routine request), medium (inconvenience or complaint, fix today), high
+  (a service down or someone seriously affected, e.g. a broken lift), critical (people in danger,
+  injured or trapped; a lift with people stuck inside is critical).
+- **Fixed identifiers**: the ticket's text fields in the employee's language; `type` and
+  `severity` are English enum values, never translated; room numbers, building names, people's
+  names and codes kept exactly as said ("room 101", "building 7").
+- **Never claim the ticket exists**: after `submit_incident` answers ok, say it was sent to Hermes,
+  who files it and confirms in the room; no card number. On an error, say so and offer to retry.
+
+The page's kickoff and reconnection texts (`KICKOFF_TEXT`, `recapText`) and the tool errors it
+returns to the model are English too; the transcript's labels are `Employee:` / `Assistant:`.
+`GEMINI_LIVE_EXTRA_INSTRUCTIONS` is appended under « Additional instructions from the
+organization » (any language).
+
 ### `POST /rooms/:room_id/voice/token`
 
-No body needed. `200`:
+No body needed; the `Accept-Language` request header (sent by every browser) picks the greeting's
+language. `200`:
 
 ```json
 {"token": "auth_tokens/…",
@@ -135,7 +169,9 @@ Upstream call: `POST https://generativelanguage.googleapis.com/v1alpha/auth_toke
 Checked against the live API on 2026-09-29 (200 with that shape, including the `enum` in the
 function schema).
 
-`submit_incident` parameters (all strings): `title` and `summary` (required), `what_happened`,
+`submit_incident` (the name is kept; it sends any ticket) parameters (all strings): `title` (short
+and actionable: verb, object, place — "Refill water bottles, room 101") and `summary` (required),
+`type` (`request` | `task` | `fault` | `complaint` | `incident` | `safety`), `what_happened`,
 `location`, `occurred_at`, `people_involved`, `injuries`, `actions_taken`, `severity`
 (`low` | `medium` | `high` | `critical`).
 
@@ -150,36 +186,38 @@ client (10 s to connect, 60 s in all) and answers `200 {"answer": "…"}`. Error
 it gives Hermes 55 s), `502 upstream_error` (anything else). One log line per question: room,
 user, lengths and duration, never the text.
 
-`ask_hermes` declaration: one required string parameter, `question`; a French description (the
-company's internal agent: procedures, existing or open incidents on the Fizzy board, contacts,
-anything company-specific; the answer can take several seconds). No `behavior` field: the default
+`ask_hermes` declaration: one required string parameter, `question` (in the employee's language,
+self-contained, room numbers and names as said); an English description (the organization's
+internal agent: procedures, tickets already open on the Fizzy board, contacts, anything
+organization-specific; files nothing; the answer can take several seconds). No `behavior` field: the default
 blocking call was checked against the live API on 2026-09-29 (the model says it's checking, waits
 for the `toolResponse`, then speaks the answer; 8 s tested). `NON_BLOCKING` + `INTERRUPT` worked
 too, `WHEN_IDLE` never delivered the answer. The system instruction gets a paragraph (before the
-quoted context): when the employee asks something company-specific or a company fact is missing,
-say « Je vérifie auprès d'Hermes… », call `ask_hermes`, give the answer in one or two sentences and
-resume; never invent company procedures; if Hermes doesn't answer, say so; such questions aren't
-off-topic; `ask_hermes` publishes nothing. `submit_incident` is unchanged.
+quoted context): when the employee asks something organization-specific or such a fact is missing
+(e.g. whether this fault is already reported), say briefly, in the employee's language, that it's
+checking with Hermes, call `ask_hermes`, give the answer in one or two sentences in the employee's
+language and resume; never invent procedures; if Hermes doesn't answer, say so; such questions
+aren't off-topic; `ask_hermes` files nothing. `submit_incident` is unchanged.
 
 The page (`#askHermes` in `voice_controller.js`) POSTs the question (same-origin, same headers as
 the report) with a 65 s client timeout, and answers the tool call with `{result: answer}` or
-`{error: "Hermes n’a pas répondu."}`. While it waits the status reads « Hermes consulté… », and the
+`{error: "Hermes did not answer."}`. While it waits the status reads « Hermes consulté… », and the
 transcript shows a centred, dashed « Question à Hermes » note (the question, then « En attente de
 la réponse… » → « Réponse reçue » or « Pas de réponse »). The answer itself isn't repeated there:
 the assistant speaks it, so it's in the assistant's next bubble. These notes stay **out of the
 report's transcript** (and of the reconnection recap): the assistant's own lines already carry
-« Je vérifie auprès d'Hermes… » and the answer.
+the "checking with Hermes" sentence and the answer.
 
 The bridge side (`campfire-bridge/server.py` in the Hermes repo, `BRIDGE_ASK_SECRET`) prefixes
-the question with `[user in room]` and a voice-style instruction (French, 1–3 short sentences, no
-markdown, say so if unknown), chains it on the room's own `voice:<room_id>` thread (apart from the
+the question with `[user in room]` and a voice-style instruction (answer in the question's
+language, 1–3 short sentences, no markdown, room numbers and names as written, say so if unknown), chains it on the room's own `voice:<room_id>` thread (apart from the
 room's chat thread), and strips leftover markdown from the answer.
 
 ### `POST /rooms/:room_id/voice/report`
 
 JSON body: the `submit_incident` arguments plus an optional `transcript` string. Each field is cut
 at 2 KB and the transcript at 20 KB (cut text ends with `…`, and the transcript heading says
-"(tronquée)"); an unknown `severity` is dropped. `201 {"message_id": 123, "message_url":
+"(cut)"); an unknown `severity` or `type` is dropped. `201 {"message_id": 123, "message_url":
 "https://host/rooms/:room_id/@123"}`. Errors: `422 invalid_report` (no title or summary),
 `422 bot_not_in_room`.
 
@@ -189,16 +227,22 @@ stored, broadcast, pushed and delivered exactly like a typed message. Its body, 
 HTML-escaped (the text comes from a model and a browser):
 
 ```html
-<p><action-text-attachment sgid="<bot's attachable sgid>" content-type="application/vnd.campfire.mention"></action-text-attachment> Compte rendu d’incident dicté en direct (voix), confirmé par l’auteur.</p>
+<p><action-text-attachment sgid="<bot's attachable sgid>" content-type="application/vnd.campfire.mention"></action-text-attachment> Live voice ticket, confirmed by the reporter.</p>
 <h3>title</h3>
-<p><strong>Résumé :</strong> summary</p>
-<ul><li><strong>Ce qui s’est passé :</strong> … </li> … <li><strong>Gravité :</strong> élevée (high)</li></ul>
-<p><strong>Transcription de l’entretien :</strong></p>
-<blockquote>line<br>line…</blockquote>
+<p><strong>Summary:</strong> summary</p>
+<ul><li><strong>Type:</strong> request</li><li><strong>What happened / what is needed:</strong> …</li>
+<li><strong>Location:</strong> room 101</li> … <li><strong>Severity:</strong> high</li></ul>
+<p><strong>Conversation transcript:</strong></p>
+<blockquote>Assistant: …<br>Employee: …</blockquote>
 ```
 
 Only tags the display sanitizer (`ContentFilters::SanitizeTags`) keeps are used (`<details>` is not
-one of them, hence the blockquote). Missing fields read *non précisé*.
+one of them, hence the blockquote). Missing fields read *not stated*. The labels, the type and the
+severity are fixed English identifiers the `incident-report` skill reads; the values are in the
+employee's language. The opening sentence is `campfire_workspace::proposals::LIVE_REPORT_OPENING`,
+which the workspace uses to recognize a confirmed live report; the French opening images up to
+v0.1.2-hermes.16 posted (« Compte rendu d’incident dicté en direct (voix), confirmé par
+l’auteur ») is still recognized (`LEGACY_LIVE_REPORT_OPENINGS`).
 
 ### Why the bot's webhook fires (the plan's open point)
 
@@ -234,7 +278,7 @@ The room composer gets up to two buttons after the attachment (paperclip) button
   sends any text typed in the composer. The button stays hidden where the browser can't record; on
   plain HTTP it shows and explains that HTTPS is needed.
 - **Live report** (headset, only when `ShowView::voice_path` is set, i.e. `GEMINI_API_KEY`): a
-  link to `/rooms/:id/voice` named « Rapport d’incident vocal », out of the composer's turbo frame
+  link to `/rooms/:id/voice` named « Ticket vocal (demande, panne, incident) », out of the composer's turbo frame
   (`data-turbo-frame="_top"`). On touch screens (no hover title) it shows a small « Rapport » label
   under the icon, in the round buttons' footprint. It replaces the room nav's mic button of
   v0.1.1-hermes.2.
