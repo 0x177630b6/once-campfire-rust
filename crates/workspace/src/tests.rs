@@ -374,7 +374,11 @@ async fn chips_ask_for_unknown_cards_and_the_next_poll_fetches_them() {
     workspace.poll(&fizzy, now()).await.unwrap();
 
     let chips = workspace.chips(&[12, 77]);
-    assert!(chips[&12].contains("Lift B out of service") && chips[&12].contains("https://fizzy.example/897/cards/12"));
+    assert!(
+        chips[&12].contains("Lift B out of service")
+            && chips[&12].contains(r#"href="/workspace/cards/12""#)
+            && !chips[&12].contains("fizzy.example")
+    );
     assert!(!chips.contains_key(&77));
 
     workspace.poll(&fizzy, now()).await.unwrap();
@@ -952,7 +956,9 @@ async fn the_card_sheet() {
     workspace.settings_store().save(departments()).unwrap();
     let managers = askama::Template::render(&CardSheet { fizzy_links: true, ..sheet.clone() }).unwrap();
     assert!(
-        managers.contains(r#"<a class="ws-link" role="menuitem" href="https://fizzy.example/897/cards/12" target="_blank" rel="noopener">Open in Fizzy (browser) ↗</a>"#),
+        managers.contains(
+            r#"<a class="ws-link" href="https://fizzy.example/897/cards/12" target="_blank" rel="noopener">Open in Fizzy (browser) ↗</a>"#
+        ),
         "{managers}"
     );
 
@@ -1001,6 +1007,17 @@ async fn the_sheet_shows_the_newest_comments() {
     let html = askama::Template::render(&capped).unwrap();
     assert!(html.contains("Only the last 1000 comments are shown.") && !html.contains("data-ws-earlier-comments"), "{html}");
     fizzy.comments.lock().unwrap().insert(12, (1..=250).map(comment).collect());
+    assert!(html.contains(r#"data-ws-comments="all""#) && !askama::Template::render(&sheet).unwrap().contains("data-ws-comments"));
+
+    // At most ALL_COMMENTS_AT_ONCE such reads at a time: one more is busy, before any request.
+    let held = workspace.all_comments.try_acquire_many(crate::actions::ALL_COMMENTS_AT_ONCE as u32).unwrap();
+    fizzy.requests.lock().unwrap().clear();
+    let busy = workspace.card_sheet_with(&fizzy, &karim(), 12, true).await.unwrap_err();
+    assert_eq!((busy.status(), busy.code()), (429, "busy"));
+    assert!(fizzy.paths().is_empty(), "{:?}", fizzy.paths());
+    assert_eq!(workspace.card_sheet(&fizzy, &karim(), 12).await.unwrap().comments.len(), 100, "the newest 100 still read");
+    drop(held);
+    assert!(workspace.card_sheet_with(&fizzy, &karim(), 12, true).await.is_ok(), "free again");
 
     // Without X-Total-Count, the pages are walked.
     *fizzy.no_total_count.lock().unwrap() = true;
@@ -1012,7 +1029,16 @@ async fn the_sheet_shows_the_newest_comments() {
     fizzy.comments.lock().unwrap().insert(12, (1..=40).map(comment).collect());
     let short = workspace.card_sheet(&fizzy, &karim(), 12).await.unwrap();
     assert_eq!((short.comments.len(), short.earlier_comments), (40, false));
-    assert!(!askama::Template::render(&short).unwrap().contains("Earlier comments"));
+    assert!(!askama::Template::render(&short).unwrap().contains("earlier comments"));
+    assert!(!short.comments_truncated);
+
+    // Without X-Total-Count, a thread longer than the page cap: flagged, and the sheet says so.
+    fizzy.comments.lock().unwrap().insert(12, (1..=2000).map(comment).collect());
+    let truncated = workspace.card_sheet(&fizzy, &karim(), 12).await.unwrap();
+    assert!(truncated.comments_truncated && truncated.earlier_comments);
+    assert!(askama::Template::render(&truncated).unwrap().contains("the newest comments may be missing"));
+    *fizzy.no_total_count.lock().unwrap() = false;
+    assert!(!workspace.card_sheet(&fizzy, &karim(), 12).await.unwrap().comments_truncated, "with the count, the newest are read");
 }
 
 #[tokio::test]

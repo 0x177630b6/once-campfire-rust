@@ -110,6 +110,9 @@ pub struct Workspace {
     /// Alerts detected and claimed, waiting for the app to deliver them.
     outbox: Mutex<Vec<alerts::Event>>,
     clock: Box<dyn Fn() -> Timestamp + Send + Sync>,
+    /// "Show earlier comments" reads at once ([`actions::ALL_COMMENTS_AT_ONCE`]): each walks up to a
+    /// dozen Fizzy pages, and the app is reachable from the internet.
+    pub(crate) all_comments: tokio::sync::Semaphore,
 }
 
 type CardLocks = Mutex<HashMap<u64, Arc<tokio::sync::Mutex<()>>>>;
@@ -163,6 +166,7 @@ impl Workspace {
             alerts_seen: Mutex::new(None),
             outbox: Mutex::new(Vec::new()),
             clock: Box::new(Timestamp::now),
+            all_comments: tokio::sync::Semaphore::new(actions::ALL_COMMENTS_AT_ONCE),
         }
     }
 
@@ -450,14 +454,11 @@ impl Workspace {
         let mut chips = BTreeMap::new();
         let mut unknown = Vec::new();
         for &number in numbers {
-            match (snapshot.card(number), chips::card_link(&self.config, &snapshot, number)) {
-                (Some(card), Some(link)) => {
-                    chips.insert(number, chips::chip(card, &link));
+            match snapshot.card(number) {
+                Some(card) => {
+                    chips.insert(number, chips::chip(card));
                 }
-                (Some(card), None) => {
-                    chips.insert(number, chips::chip(card, &card.url));
-                }
-                (None, _) => unknown.push(number),
+                None => unknown.push(number),
             }
         }
         self.want(unknown);

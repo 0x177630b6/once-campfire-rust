@@ -101,6 +101,8 @@ pub enum ActionError {
     Invalid { code: &'static str, message: String },
     /// Fizzy is unreachable, refused, or didn't apply the change; nothing more was written (502).
     Fizzy(String),
+    /// Too many heavy reads at once (`?comments=all`); nothing was asked of Fizzy (429).
+    Busy(String),
 }
 
 impl ActionError {
@@ -114,6 +116,7 @@ impl ActionError {
             Self::Forbidden(_) => 403,
             Self::Invalid { .. } => 422,
             Self::Fizzy(_) => 502,
+            Self::Busy(_) => 429,
         }
     }
 
@@ -123,13 +126,14 @@ impl ActionError {
             Self::Forbidden(_) => "forbidden",
             Self::Invalid { code, .. } => code,
             Self::Fizzy(_) => "fizzy_unavailable",
+            Self::Busy(_) => "busy",
         }
     }
 
     pub fn message(&self) -> String {
         match self {
             Self::NotFound => "No such card on the incident board.".into(),
-            Self::Forbidden(message) | Self::Invalid { message, .. } | Self::Fizzy(message) => message.clone(),
+            Self::Forbidden(message) | Self::Invalid { message, .. } | Self::Fizzy(message) | Self::Busy(message) => message.clone(),
         }
     }
 

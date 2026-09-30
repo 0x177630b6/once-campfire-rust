@@ -95,13 +95,12 @@ pub struct ListCard {
     pub assignees: String,
     pub closed: bool,
     pub sheet_url: String,
-    pub fizzy_url: String,
     pub last_active_at: Option<String>,
     /// Where it can move (not where it is).
     pub moves: Vec<Choice>,
 }
 
-fn list_card(config: &WorkspaceConfig, snapshot: &Snapshot, settings: &Settings, card: &Card) -> ListCard {
+fn list_card(snapshot: &Snapshot, settings: &Settings, card: &Card) -> ListCard {
     let state = card.state();
     ListCard {
         number: card.number,
@@ -113,7 +112,6 @@ fn list_card(config: &WorkspaceConfig, snapshot: &Snapshot, settings: &Settings,
         assignees: card.assignees.iter().map(|user| user.name.as_str()).collect::<Vec<_>>().join(", "),
         closed: card.closed,
         sheet_url: sheet_path(card.number),
-        fizzy_url: card_link(config, snapshot, card.number).unwrap_or_else(|| card.url.clone()),
         last_active_at: card.last_active_at.map(|at| at.to_string()),
         moves: move_choices(card, &snapshot.columns).into_iter().filter(|choice| !choice.selected).collect(),
     }
@@ -211,7 +209,7 @@ pub fn board(config: &WorkspaceConfig, snapshot: &Snapshot, settings: &Settings,
     let open = cards(&snapshot.open);
     let sorted = |mut cards: Vec<&Card>| {
         cards.sort_by_key(|card| (Reverse(card.severity()), card.created_at, card.number));
-        cards.into_iter().map(|card| list_card(config, snapshot, settings, card)).collect::<Vec<_>>()
+        cards.into_iter().map(|card| list_card(snapshot, settings, card)).collect::<Vec<_>>()
     };
     let mut columns = vec![BoardColumn {
         key: "new".into(),
@@ -263,7 +261,7 @@ pub fn board(config: &WorkspaceConfig, snapshot: &Snapshot, settings: &Settings,
         .into_iter()
         .filter(|card| card.closed)
         .take(MAX_CLOSED)
-        .map(|card| list_card(config, snapshot, settings, card))
+        .map(|card| list_card(snapshot, settings, card))
         .collect();
     columns.push(BoardColumn { key: "closed".into(), label: "Closed".into(), tone: "done", cards: closed, active: false });
     if let Some(first) = columns.iter().position(|column| !column.cards.is_empty()).or(Some(0)) {
@@ -340,7 +338,7 @@ pub fn room_panel(
         departments: departments.iter().map(|department| department.name.as_str()).collect::<Vec<_>>().join(", "),
         board_name: board_name(config, snapshot),
         board_url: format!("{BOARD_PATH}?dept={}", departments[0].tag),
-        cards: cards.into_iter().map(|card| list_card(config, snapshot, settings, card)).collect(),
+        cards: cards.into_iter().map(|card| list_card(snapshot, settings, card)).collect(),
         stale: snapshot.last_error.is_some(),
         can_create,
     })
@@ -390,6 +388,9 @@ pub struct CardSheet {
     pub earlier_comments: bool,
     /// The sheet was asked for with `?comments=all`.
     pub all_comments: bool,
+    /// Fizzy's pages ran out before the newest comments (no `X-Total-Count`, the page cap hit):
+    /// the thread shown isn't the newest; the sheet says so and the adapter logs it.
+    pub comments_truncated: bool,
     pub moves: Vec<Choice>,
     /// `POST <action_url>/<change>`.
     pub action_url: String,
@@ -402,6 +403,7 @@ pub struct SheetInput<'a> {
     /// The newest comments, oldest first.
     pub comments: &'a [Comment],
     pub earlier_comments: bool,
+    pub comments_truncated: bool,
     pub all_comments: bool,
     pub columns: &'a [Column],
     pub can_change: bool,
@@ -462,6 +464,7 @@ pub fn card_sheet(config: &WorkspaceConfig, snapshot: &Snapshot, settings: &Sett
             .collect(),
         earlier_comments: input.earlier_comments,
         all_comments: input.all_comments,
+        comments_truncated: input.comments_truncated,
         moves: move_choices(card, input.columns),
         action_url: sheet_path(card.number),
         can_change: input.can_change,

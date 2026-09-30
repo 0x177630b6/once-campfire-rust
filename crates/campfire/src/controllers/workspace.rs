@@ -410,12 +410,14 @@ async fn page(c: &mut Ctx, status: StatusCode, title: &str, content: String) -> 
 /// (`WorkspaceConfig::is_public_request`, over the `Host` header, each `X-Forwarded-Host` and the
 /// URI's authority): Fizzy links are for the LAN only, where Fizzy is reachable.
 fn on_lan(c: &Ctx, workspace: &Workspace) -> bool {
-    let headers = &c.request.headers;
+    request_on_lan(&c.request.headers, &c.request.uri, workspace.config())
+}
+
+fn request_on_lan(headers: &campfire_kit::HeaderMap, uri: &campfire_kit::http::Uri, config: &campfire_workspace::WorkspaceConfig) -> bool {
     let values = |name: &'static str| headers.get_all(name).into_iter().filter_map(|value| value.to_str().ok());
-    let hosts = values("host")
-        .chain(values("x-forwarded-host").flat_map(|value| value.split(',')))
-        .chain(c.request.uri.authority().map(|a| a.as_str()));
-    !workspace.config().is_public_request(hosts)
+    let hosts =
+        values("host").chain(values("x-forwarded-host").flat_map(|value| value.split(','))).chain(uri.authority().map(|a| a.as_str()));
+    !config.is_public_request(hosts)
 }
 
 fn viewer(user: &User) -> Viewer {
@@ -524,11 +526,11 @@ pub async fn card(c: &mut Ctx) -> Result {
         find_template(c, &format::HTML)?;
     }
     refresh_rooms(c, &workspace, &user).await?;
-    let all_comments = c.params.get("comments").and_then(Param::as_str).is_some_and(|value| value == "all");
     let viewer = viewer(&user);
-    let sheet = workspace.card_sheet_with(&FizzyHttp::new(), &viewer, number, all_comments).await;
+    let sheet = workspace.card_sheet_with(&FizzyHttp::new(), &viewer, number, wants_all_comments(c)).await;
     let (status, html) = match sheet {
         Ok(mut sheet) => {
+            log_truncated(&sheet);
             sheet.fizzy_links = workspace.fizzy_links(&viewer, on_lan(c, &workspace));
             (StatusCode::OK, sheet.render().map_err(Error::internal)?)
         }
@@ -634,9 +636,10 @@ pub async fn create_card(c: &mut Ctx) -> Result {
     )
 }
 
-/// `POST /workspace/cards/:number/:change` (`move`, `severity`, `departments`, `step`,
-/// `comment`; see `campfire_workspace::actions::Change`). `200 {"number", "sheet", "chip"}`: the
-/// card's fresh sheet and chip.
+/// `POST /workspace/cards/:number/:change[?comments=all]` (`move`, `severity`, `departments`,
+/// `step`, `comment`; see `campfire_workspace::actions::Change`). `200 {"number", "sheet", "chip"}`:
+/// the card's fresh sheet (every comment with `comments=all`, as the sheet was; the newest 100
+/// while those reads are busy) and chip.
 pub async fn change_card(c: &mut Ctx) -> Result {
     let workspace = feature(c)?;
     before_actions(c, Before::default()).await?;
@@ -653,8 +656,13 @@ pub async fn change_card(c: &mut Ctx) -> Result {
     if let Err(error) = workspace.change_card(&http, &viewer, number, change).await {
         return action_error(c, &error);
     }
-    let sheet = match workspace.card_sheet(&http, &viewer, number).await {
+    let sheet = match workspace.card_sheet_with(&http, &viewer, number, wants_all_comments(c)).await {
+        Err(ActionError::Busy(_)) => workspace.card_sheet(&http, &viewer, number).await,
+        sheet => sheet,
+    };
+    let sheet = match sheet {
         Ok(mut sheet) => {
+            log_truncated(&sheet);
             sheet.fizzy_links = workspace.fizzy_links(&viewer, on_lan(c, &workspace));
             Some(sheet.render().map_err(Error::internal)?)
         }
@@ -1228,6 +1236,22 @@ fn card_number(c: &Ctx) -> Result<u64> {
     c.params.get("number").and_then(Param::as_str).and_then(|number| number.parse().ok()).ok_or(Error::NotFound)
 }
 
+/// `?comments=all`: the sheet with its earlier comments ("Show earlier comments").
+fn wants_all_comments(c: &Ctx) -> bool {
+    c.params.get("comments").and_then(Param::as_str).is_some_and(|value| value == "all")
+}
+
+/// A sheet whose comment pages ran out before the newest ones (Fizzy sent no `X-Total-Count`).
+fn log_truncated(sheet: &pages::CardSheet) {
+    if sheet.comments_truncated {
+        tracing::warn!(
+            card = sheet.number,
+            shown = sheet.comments.len(),
+            "the card's comment pages hit the cap: the sheet may miss the newest comments"
+        );
+    }
+}
+
 fn wants_fragment(c: &Ctx) -> bool {
     c.params.get("fragment").and_then(Param::as_str).is_some_and(|value| value == "1")
 }
@@ -1394,6 +1418,32 @@ mod tests {
 
     /// On, with a Fizzy that never answers: everything that needs it says so.
     const ON: &[(&str, &str)] = &[("FIZZY_URL", "http://127.0.0.1:1"), ("FIZZY_TOKEN", "t0k3n")];
+
+    #[test]
+    fn fizzy_links_are_for_lan_requests_only() {
+        let vars = [
+            ("FIZZY_URL", "http://fizzy"),
+            ("FIZZY_TOKEN", "t"),
+            ("FIZZY_PUBLIC_URL", "https://192.168.0.114:8444"),
+            ("CAMPFIRE_PUBLIC_URL", "https://duty-manager.example.com"),
+        ];
+        let config = campfire_workspace::WorkspaceConfig::from_lookup(|name| {
+            vars.iter().find(|(key, _)| *key == name).map(|(_, value)| value.to_string())
+        })
+        .unwrap()
+        .unwrap();
+        let on_lan = |headers: &[(&'static str, &str)]| {
+            let mut map = campfire_kit::HeaderMap::new();
+            for (name, value) in headers {
+                map.append(*name, value.parse().unwrap());
+            }
+            request_on_lan(&map, &"/workspace".parse().unwrap(), &config)
+        };
+        assert!(on_lan(&[("host", "192.168.0.114:8443")]), "the LAN address");
+        assert!(!on_lan(&[("host", "duty-manager.example.com")]), "the public hostname");
+        assert!(!on_lan(&[("host", "duty-manager.example.com"), ("x-forwarded-host", "192.168.0.114:8443")]), "a forged X-Forwarded-Host");
+        assert!(!on_lan(&[("host", "192.168.0.114:8443"), ("x-forwarded-host", "10.0.0.1, duty-manager.example.com")]), "behind a proxy");
+    }
 
     fn json_post(path: &str, body: &Value) -> Req {
         Req::new(Method::POST, path)

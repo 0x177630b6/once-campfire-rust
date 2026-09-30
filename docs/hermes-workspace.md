@@ -13,7 +13,8 @@ after them.
 
 - **Card chips**: a Fizzy card URL (`…/<account>/cards/<n>`) of an incident-board card in a message
   renders as a small Fizzy-style card (number, title, severity, column), with the card's *current*
-  state. A link to a card on any other board stays a plain link.
+  state. A link to a card on any other board stays a plain link. The chip links to the card's
+  sheet in the app (`/workspace/cards/<n>`), not to Fizzy.
 - **Draft buttons**: a Hermes message that shows an incident draft and asks for a confirmation gets
   **File / Edit / Dismiss**. File and Dismiss post `confirm` / `cancel` in the room as the user;
   Edit puts "@Hermes change: " in the composer.
@@ -158,21 +159,27 @@ are never changed.
   on each card (New, a column, Monitoring, Closed). On phones one column at a time, with a column
   switcher; side by side on wide screens. The Boards tab of the tab bar.
 - **Card sheet** (`/workspace/cards/:n`, and the overlay a chip, a panel card, a board card, a
-  Home tile, a mention or a Hermes-log line opens; a modified click on a chip still opens Fizzy):
+  Home tile, a mention or a Hermes-log line opens; a modified click opens the sheet's page):
   read fresh from Fizzy. Title, severity
   (a single-choice select), column (select), owners (read-only), department tags (toggles),
   other tags, the description as text ("Report", collapsed), steps (tickable), the comment thread
   (the **newest 100** Fizzy comments, oldest first, newest last, under **"Show earlier comments"**
   when there are more), a comment box, and for duty managers on the LAN only a "⋯" menu with
   "Open in Fizzy (browser) ↗". "Show earlier comments" is a link to `?comments=all`, which the
-  script loads into the sheet in place (keeping what was typed in the comment box): the same
-  read, visibility check included, keeping up to 1,000 comments (`actions::SHEET_ALL_COMMENTS`;
-  beyond that the sheet says "Only the last 1000 comments are shown"). A change made afterwards
-  brings the sheet back to the newest 100. Fizzy lists comments
+  script loads into the sheet in place (keeping what was typed): the same read, visibility check
+  included, keeping up to 1,000 comments (`actions::SHEET_ALL_COMMENTS`; beyond that the sheet says
+  "Only the last 1000 comments are shown"). Such a read walks up to a dozen Fizzy pages and the app
+  is on the internet, so at most 3 run at once (`ALL_COMMENTS_AT_ONCE`, a semaphore in `Workspace`):
+  one more is refused before any Fizzy request, `429 busy` with "try again in a moment", shown as
+  the sheet's status. An expanded sheet stays expanded after a change (it carries
+  `data-ws-comments="all"`; the script posts to `…/<change>?comments=all`, and the reply falls back
+  to the newest 100 while those reads are busy). Fizzy lists comments
   oldest first in geared pages (15, 30, 50, then 100) with only a `rel="next"` link, so the sheet
   reads page 1, takes the total from its `X-Total-Count` header (set by `geared_pagination` on
   JSON lists), and jumps to the page holding the 100th newest comment and the ones after it: three
-  requests at most. Without that header it walks the pages (20 at most), keeping the last 100.
+  requests at most. Without that header it walks the pages (20 at most), keeping the last 100; when
+  pages are left after the cap, the comments shown aren't the newest: the sheet says "the newest
+  comments may be missing" and the adapter logs a warning (`LatestComments::truncated`).
   Each control saves at once;
   the sheet, the card's chips and the room panel are replaced from the reply. A change that fails
   shows its error and reloads the sheet (the card as it really is), keeping what was typed in the
@@ -716,12 +723,15 @@ So nothing on the workspace's pages sends people to Fizzy:
   public. Any match counts, so a forged `X-Forwarded-Host` can't make a tunnelled request (whose
   `Host` Cloudflare sets to the public hostname) look local; a LAN browser that forges one only
   loses the links. This is a convenience, not a control: Fizzy still asks for its own sign-in.
-- **Left as they are** (message content and Fizzy-side links): the chips' `href` (the card in Fizzy:
-  a plain tap opens the sheet, but a long-press "open in new tab", a modified click or a page
-  without the script goes to Fizzy; a chip the viewer may not see becomes a plain link to Fizzy),
-  the alerts' and direct messages' card links (`alerts::link_html`), the handover message's card
-  lines, "New card: <link>" posted in the room after "Create a card", and the card links in
-  Hermes's own messages. They render as chips where the viewer may see the card.
+- **Chips** link to the sheet (`/workspace/cards/<n>`), so a long-press "open in new tab", a
+  modified click or a page without the script stays in Campfire too; the sheet 404s for a card the
+  viewer may not see.
+- **Left as they are for now** (stored message content): the alerts' and direct messages' card
+  links (`alerts::link_html`), the handover message's card lines, "New card: <link>" posted in the
+  room after "Create a card", and the card links in Hermes's own messages all point to Fizzy. They
+  render as chips (to the sheet) where the viewer may see the card; where the viewer may not (a
+  chip `cards.json` leaves out, phase 2.7), or where the card isn't known yet, the plain Fizzy link
+  remains. Rewriting those messages' links is still to do.
 
 ## Routes and contract
 
@@ -737,10 +747,10 @@ redirects to the sign-in page (fetch follows it): the script says to sign in aga
 | `GET /workspace/cards.json?numbers=12,13` | `200 {"cards": {"12": "<a class=\"ws-chip\" …>…</a>"}, "visibility": "everyone" \| "by_department_room"}`: the chips of the incident-board cards the workspace knows **that the viewer may see** (at most 50 asked); unknown numbers are omitted and fetched at the next poll, cards on other boards and hidden cards are always omitted |
 | `POST /workspace/drafts/:message_id/reply` `{"decision": "confirm" \| "dismiss"}` | `201 {"message_id", "reply": "confirm" \| "cancel"}`; `404` when the message isn't in one of the user's rooms; `422 invalid_decision`; `422 not_a_draft` (not from an active bot, or not a draft); `403 forbidden` (policy) |
 | `GET /workspace/board?dept=&sev[]=` | The board (HTML) |
-| `GET /workspace/cards/:number[?fragment=1][&comments=all]` | The card's sheet (page, or fragment for the overlay; `comments=all`: up to 1,000 comments instead of 100); `404` not on the incident board or not visible to the viewer; `502` + a notice when Fizzy doesn't answer |
+| `GET /workspace/cards/:number[?fragment=1][&comments=all]` | The card's sheet (page, or fragment for the overlay; `comments=all`: up to 1,000 comments instead of 100); `404` not on the incident board or not visible to the viewer; `429` + a notice when 3 `comments=all` reads already run; `502` + a notice when Fizzy doesn't answer |
 | `GET /workspace/cards/new?message_id=…\|room_id=…[&fragment=1]` | The new-card form; `404` for a message or room that isn't the user's, then `403` (a notice) when the policy doesn't let them create cards |
 | `POST /workspace/cards` `{"title", "description", "severity", "department" \| "departments", "message_id" \| "room_id"}` | `201 {"number", "url", "chip", "message_id", "warning"}` (`message_id` = the room message with the link); `403`, `404`, `422`, `502` |
-| `POST /workspace/cards/:number/:change` — `move {"to": "new"\|"column:<id>"\|"not_now"\|"closed"}`, `severity {"severity": "high"\|""}`, `departments {"tags": […]}`, `step {"step_id", "completed"}`, `comment {"body"}` | `200 {"number", "sheet", "chip"}` (the fresh sheet and chip); unknown change `404`; `403`, `404`, `422`, `502` |
+| `POST /workspace/cards/:number/:change[?comments=all]` — `move {"to": "new"\|"column:<id>"\|"not_now"\|"closed"}`, `severity {"severity": "high"\|""}`, `departments {"tags": […]}`, `step {"step_id", "completed"}`, `comment {"body"}` | `200 {"number", "sheet", "chip"}` (the fresh sheet, with every comment for `comments=all`, and chip); unknown change `404`; `403`, `404`, `422`, `502` |
 | `GET /workspace/rooms/:room_id/panel` | The panel (fragment); `204` room not linked; `404` not the user's room |
 | `GET /workspace/settings` | The settings page; `403` unless administrator |
 | `POST /workspace/settings` (JSON above) | `200 {"ok": true}`; `422 invalid_settings` with the reason; `500 settings_not_saved` when the file can't be written (nothing changed); `403` unless administrator |
@@ -904,7 +914,8 @@ Not seams (fork-owned or new files): `crates/workspace/**`, `controllers/workspa
   once), creation with failing tags (created, with a warning), input validation, the sheet
   (fields, escaping, controls disabled by the policy; with 250 comments in geared pages the newest
   100, in three requests, under "Show earlier comments", also without `X-Total-Count`; with
-  `comments=all` all 250, and 1,000 of 1,030 with the note; no Fizzy link for staff, the "⋯" menu
+  `comments=all` all 250, and 1,000 of 1,030 with the note, `429 busy` with every permit held and no
+  Fizzy request, a thread past the page cap without `X-Total-Count` flagged as truncated; no Fizzy link for staff, the "⋯" menu
   with `fizzy_links`; `fizzy_links` only for duty managers and administrators on the LAN), the
   board (columns, filters, Move menus, settings link, the "⋯" menu only with `fizzy_links`), Home
   (every tile, mention and handover card opens the sheet; the board's Fizzy link only with

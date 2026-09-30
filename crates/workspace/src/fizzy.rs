@@ -343,6 +343,18 @@ const PAGE_SIZES: [u64; 4] = [15, 30, 50, 100];
 /// The largest reply read (the app's client enforces it).
 pub const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
 
+/// [`Client::latest_comments`]' answer.
+#[derive(Debug, Clone, Default)]
+pub struct LatestComments {
+    /// Oldest first.
+    pub comments: Vec<Comment>,
+    /// Earlier comments were left out.
+    pub earlier: bool,
+    /// The walk stopped at [`MAX_COMMENT_PAGES`] with pages left (Fizzy sent no `X-Total-Count`):
+    /// `comments` are the last of the pages read, not the newest. The adapter logs it.
+    pub truncated: bool,
+}
+
 pub struct Client<'a> {
     http: &'a dyn HttpClient,
     config: &'a WorkspaceConfig,
@@ -479,19 +491,20 @@ impl<'a> Client<'a> {
         self.get_json(&format!("/{account}/users/{id}.json")).await
     }
 
-    /// A card's newest `keep` comments, oldest first, and whether earlier ones were left out.
+    /// A card's newest `keep` comments, oldest first, whether earlier ones were left out, and
+    /// whether the walk hit its page cap (then they aren't the newest: [`LatestComments::truncated`]).
     ///
     /// Fizzy lists comments oldest first (`comments.chronologically`), in `geared_pagination`
     /// pages with a `Link: rel="next"` but no "last" link. Its `X-Total-Count` gives the page
     /// holding the `keep`-th newest comment, so the sheet reads page 1, then that page and the
     /// ones after it (three requests at most for 100 comments). Without that header the pages are
     /// walked (at most [`MAX_COMMENT_PAGES`]), keeping the last `keep`.
-    pub async fn latest_comments(&self, account: &str, number: u64, keep: usize) -> Result<(Vec<Comment>, bool), FizzyError> {
+    pub async fn latest_comments(&self, account: &str, number: u64, keep: usize) -> Result<LatestComments, FizzyError> {
         let path = format!("/{account}/cards/{number}/comments.json");
         let first = self.get(&path).await?;
         match first.status {
             200 => {}
-            404 => return Ok((Vec::new(), false)),
+            404 => return Ok(LatestComments::default()),
             status => return Err(FizzyError::Status(status)),
         }
         let mut items: Vec<Comment> = decode_list(&first.body)?;
@@ -525,7 +538,9 @@ impl<'a> Client<'a> {
         let extra = items.len().saturating_sub(keep);
         items.drain(..extra);
         skipped += extra as u64;
-        Ok((items, skipped > 0))
+        // Pages left after the cap: only without X-Total-Count (or a thread that grew a lot).
+        let truncated = has_next_page(link.as_deref());
+        Ok(LatestComments { comments: items, earlier: skipped > 0 || truncated, truncated })
     }
 
     /// A write (or any request) with `token`, and a JSON body. The reply is returned whatever its

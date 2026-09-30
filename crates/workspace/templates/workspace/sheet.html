@@ -2,13 +2,13 @@
     content. Changes POST to {{ action_url }}/<change> (hermes/workspace.js). Fizzy's HTML is never
     shown: the description and comments are their text. The Fizzy link is in the "⋯" menu, only with
     `fizzy_links` (duty managers and administrators, on the LAN). -#}
-<article class="ws-sheet ws-cc--{{ tone }}" data-ws-sheet="{{ number }}" data-ws-action-url="{{ action_url }}" aria-labelledby="ws-sheet-title-{{ number }}">
+<article class="ws-sheet ws-cc--{{ tone }}" data-ws-sheet="{{ number }}" data-ws-action-url="{{ action_url }}"{% if all_comments %} data-ws-comments="all"{% endif %} aria-labelledby="ws-sheet-title-{{ number }}">
   <header class="ws-sheet__head">
     <span class="ws-card__no">No. {{ number }} · {{ board_name }}</span>
     {%- if fizzy_links %}
     <details class="ws-more">
       <summary class="btn ws-btn ws-btn--small" title="More"><span aria-hidden="true">⋯</span><span class="for-screen-reader">More</span></summary>
-      <div class="ws-more__menu" role="menu"><a class="ws-link" role="menuitem" href="{{ fizzy_url }}" target="_blank" rel="noopener">Open in Fizzy (browser) ↗</a></div>
+      <div class="ws-more__menu"><a class="ws-link" href="{{ fizzy_url }}" target="_blank" rel="noopener">Open in Fizzy (browser) ↗</a></div>
     </details>
     {%- endif %}
     <button type="button" class="btn ws-btn ws-btn--small ws-sheet__close" data-ws-sheet-close><span aria-hidden="true">✕</span><span class="for-screen-reader">Close</span></button>
@@ -74,6 +74,7 @@
     {%- if all_comments %}<p class="ws-muted">Only the last {{ comments.len() }} comments are shown.</p>
     {%- else %}<p class="ws-muted"><a class="ws-link" href="{{ action_url }}?comments=all" data-ws-earlier-comments>Show earlier comments</a></p>{% endif %}
     {%- endif %}
+    {%- if comments_truncated %}<p class="ws-notice" role="status">This thread is too long to read in full: the newest comments may be missing.</p>{% endif %}
     <ol class="ws-thread">
       {%- for comment in comments %}
       <li class="ws-comment">

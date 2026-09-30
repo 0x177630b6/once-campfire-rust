@@ -35,6 +35,9 @@ pub const MAX_STEP_CHARS: usize = 255;
 pub const SHEET_COMMENTS: usize = 100;
 /// The most comments a sheet shows with `?comments=all` ("Show earlier comments").
 pub const SHEET_ALL_COMMENTS: usize = 1000;
+/// How many "Show earlier comments" reads may run at once (each up to a dozen Fizzy requests);
+/// one more is refused as busy (429), before anything is asked of Fizzy.
+pub const ALL_COMMENTS_AT_ONCE: usize = 3;
 
 /// Where a card goes.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -320,7 +323,8 @@ impl Workspace {
 
     /// [`Workspace::card_sheet`]; with `all_comments` ("Show earlier comments", `?comments=all`),
     /// up to [`SHEET_ALL_COMMENTS`] comments instead of [`SHEET_COMMENTS`], after the same checks:
-    /// whoever may see the sheet may see its comments.
+    /// whoever may see the sheet may see its comments. At most [`ALL_COMMENTS_AT_ONCE`] such reads
+    /// at a time: another is [`ActionError::Busy`].
     pub async fn card_sheet_with(
         &self,
         http: &dyn HttpClient,
@@ -328,6 +332,14 @@ impl Workspace {
         number: u64,
         all_comments: bool,
     ) -> Result<CardSheet, ActionError> {
+        let _permit = match all_comments {
+            true => Some(
+                self.all_comments
+                    .try_acquire()
+                    .map_err(|_| ActionError::Busy("Many people are loading long threads right now; try again in a moment.".into()))?,
+            ),
+            false => None,
+        };
         let (account, board) = self.target()?;
         let client = Client::new(http, &self.config);
         let unavailable = |_| ActionError::Fizzy("Fizzy can't be reached right now; try again in a moment.".into());
@@ -341,13 +353,14 @@ impl Workspace {
             return Err(ActionError::NotFound);
         }
         let keep = if all_comments { SHEET_ALL_COMMENTS } else { SHEET_COMMENTS };
-        let (comments, earlier_comments) = client.latest_comments(&account, number, keep).await.map_err(unavailable)?;
+        let latest = client.latest_comments(&account, number, keep).await.map_err(unavailable)?;
         self.remember(card.clone());
         let snapshot = self.snapshot();
         let input = SheetInput {
             card: &card,
-            comments: &comments,
-            earlier_comments,
+            comments: &latest.comments,
+            earlier_comments: latest.earlier,
+            comments_truncated: latest.truncated,
             all_comments,
             columns: &snapshot.columns,
             can_change: self.may(&Act::ChangeCard, viewer),

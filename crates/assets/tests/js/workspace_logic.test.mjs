@@ -53,6 +53,14 @@ test("a proposal's state replaces its buttons once it isn't pending", () => {
   assert.equal(logic.proposalStateText({ status: "expired" }), "expired")
 })
 
+test("sheet URLs keep the earlier comments shown", () => {
+  assert.equal(logic.sheetUrl("/workspace/cards/12"), "/workspace/cards/12")
+  assert.equal(logic.sheetUrl("/workspace/cards/12", { allComments: true }), "/workspace/cards/12?comments=all")
+  assert.equal(logic.sheetUrl("/workspace/cards/12", { change: "comment" }), "/workspace/cards/12/comment")
+  assert.equal(logic.sheetUrl("/workspace/cards/12", { change: "comment", allComments: true }), "/workspace/cards/12/comment?comments=all")
+  assert.equal(globalThis.HermesWorkspace.sheetUrl, logic.sheetUrl)
+})
+
 test("card sheet changes", () => {
   assert.deepEqual(logic.changeBody("severity", { value: "high" }), { severity: "high" })
   assert.deepEqual(logic.changeBody("move", { value: "column:c1" }), { to: "column:c1" })

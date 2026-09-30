@@ -1,6 +1,7 @@
 //! Card chips: a link to a Fizzy card (`…/<account>/cards/<n>`) in a message becomes a small
-//! Fizzy-style card showing its number, title, severity and column, at render time. The stored
-//! message is never changed. Only incident-board cards become chips ([`Snapshot::card`]). A card
+//! Fizzy-style card showing its number, title, severity and column, at render time, linking to the
+//! card's sheet in the app (`/workspace/cards/<n>`, which 404s for a card the viewer may not see),
+//! not to Fizzy. The stored message is never changed. Only incident-board cards become chips ([`Snapshot::card`]). A card
 //! the workspace doesn't know yet (or that is on another board) keeps its plain link, marked
 //! with `data-ws-card` so the page can swap in the chip once Fizzy has been asked
 //! (`hermes/workspace.js`, `GET /workspace/cards.json`), which is also how chips in cached message
@@ -87,32 +88,29 @@ pub fn decorate(html: &str, config: &WorkspaceConfig, snapshot: &Snapshot, fill:
         }
         changed = true;
         match snapshot.card(number).filter(|_| fill) {
-            Some(card) => {
-                let original = HREF.captures(attributes).map(|href| decode_entities(&href[1])).unwrap_or_default();
-                let link = card_link(config, snapshot, number).unwrap_or(original);
-                chip(card, &link)
-            }
+            Some(card) => chip(card),
             None => format!(r#"<a data-ws-card="{number}"{attributes}>{}</a>"#, &caps[2]),
         }
     });
     changed.then(|| decorated.into_owned())
 }
 
-/// The chip: the number in the column's colour, then the title, severity and column.
-pub fn chip(card: &Card, link: &str) -> String {
+/// The chip: the number in the column's colour, then the title, severity and column. It links to
+/// the card's sheet (the page opens it in the overlay; a modified click or no script, its page).
+pub fn chip(card: &Card) -> String {
     let state = card.state();
     let severity =
         card.severity().map(|severity| format!(r#"<span class="ws-sev ws-sev--{0}">{0}</span>"#, severity.as_str())).unwrap_or_default();
     let board = card.board.as_ref().map(|board| format!(" · {}", board.name)).unwrap_or_default();
     format!(
         concat!(
-            r#"<a class="ws-chip ws-cc--{tone}" href="{link}" target="_blank" rel="noopener" data-ws-card="{number}" title="No. {number}{board} · {state}">"#,
+            r#"<a class="ws-chip ws-cc--{tone}" href="{link}" data-ws-card="{number}" title="No. {number}{board} · {state}">"#,
             r#"<b class="ws-chip__no">#{number}</b>"#,
             r#"<span class="ws-chip__body"><span class="ws-chip__title">{title}</span>{severity}<span class="ws-chip__state">{state}</span></span>"#,
             r#"</a>"#
         ),
         tone = state.tone(),
-        link = escape(link),
+        link = crate::pages::sheet_path(card.number),
         number = card.number,
         board = escape(&board),
         state = escape(state.label()),
@@ -182,7 +180,7 @@ mod tests {
             r#" and <a href="http://fizzy/897/cards/99">#99</a>, see <a href="https://example.com">x</a></div>"#
         );
         let out = decorate(html, &config(), &snapshot(), true).unwrap();
-        assert!(out.contains(r#"<a class="ws-chip ws-cc--lime" href="https://192.168.0.114:8444/897/cards/12" target="_blank" rel="noopener" data-ws-card="12""#), "{out}");
+        assert!(out.contains(r#"<a class="ws-chip ws-cc--lime" href="/workspace/cards/12" data-ws-card="12""#), "{out}");
         assert!(out.contains(r#"<span class="ws-chip__title">Lift B &lt;out&gt; of service</span><span class="ws-sev ws-sev--high">high</span><span class="ws-chip__state">In progress</span>"#), "{out}");
         assert!(out.contains(r#"<a data-ws-card="99" href="http://fizzy/897/cards/99">#99</a>"#), "{out}");
         assert!(out.contains(r#"<a href="https://example.com">x</a>"#));

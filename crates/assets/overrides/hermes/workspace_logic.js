@@ -147,7 +147,14 @@ export function handoverProblem(text) {
   return null
 }
 
+// A card sheet's URL (its action URL, e.g. /workspace/cards/12), for a change (`/<change>`) or a
+// reload, keeping its earlier comments shown when they are (`data-ws-comments="all"`).
+export function sheetUrl(actionUrl, { change = "", allComments = false } = {}) {
+  return `${actionUrl}${change ? `/${change}` : ""}${allComments ? "?comments=all" : ""}`
+}
+
 globalThis.HermesWorkspace = {
   SIGNED_OUT, UNREACHABLE, MAX_CHIPS, hash, chipNumbers, proposalIds, replyProblem, draftBusyText, draftSentText,
-  proposalStateText, changeBody, settingsBody, settingsProblem, MAX_REMINDER_MINUTES, shiftEnds, chipsToHide, MAX_HANDOVER_CHARS, handoverProblem
+  proposalStateText, changeBody, settingsBody, settingsProblem, MAX_REMINDER_MINUTES, shiftEnds, chipsToHide, MAX_HANDOVER_CHARS, handoverProblem,
+  sheetUrl
 }

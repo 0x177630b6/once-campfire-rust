@@ -366,7 +366,7 @@ function reloadPage() {
   }
 }
 
-// A plain click (no modifier: those keep the link's own behaviour, e.g. Fizzy in a new tab).
+// A plain click (no modifier: those keep the link's own behaviour, e.g. the sheet's page in a new tab).
 function plainClick(event) {
   return event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey
 }
@@ -431,12 +431,15 @@ async function changeCard(sheet, kind, body) {
   sheet.setAttribute("aria-busy", "true")
   showStatus(sheet, "Saving…")
   try {
-    const data = await postJSON(`${sheet.dataset.wsActionUrl}/${kind}`, body)
+    const allComments = sheet.dataset.wsComments === "all"
+    const data = await postJSON(logic.sheetUrl(sheet.dataset.wsActionUrl, { change: kind, allComments }), body)
     overlayDirty = true
     if (data.chip) updateChips(data.number, data.chip)
     refreshPanel()
     const next = data.sheet && fragment(data.sheet)
     if (next) {
+      // A posted comment clears the box; any other change keeps what was being typed.
+      if (kind !== "comment") keepTyped(sheet, next)
       sheet.replaceWith(next)
       showStatus(next, "Saved.", "ok")
     } else {
@@ -447,12 +450,11 @@ async function changeCard(sheet, kind, body) {
     // Show the card as it really is now (a toggle may have half-applied), keeping what was typed
     // in the comment box: a failed comment (or any failed change) mustn't lose it.
     if (sheet.closest("dialog.ws-overlay")) {
-      const typed = sheet.querySelector("[data-ws-comment] textarea")?.value || ""
-      const { ok, html } = await getFragment(sheet.dataset.wsActionUrl).catch(() => ({ ok: false }))
+      const allComments = sheet.dataset.wsComments === "all"
+      const { ok, html } = await getFragment(logic.sheetUrl(sheet.dataset.wsActionUrl, { allComments })).catch(() => ({ ok: false }))
       const next = ok && fragment(html)
       if (next) {
-        const box = next.querySelector("[data-ws-comment] textarea")
-        if (box) box.value = typed
+        keepTyped(sheet, next)
         sheet.replaceWith(next)
         showStatus(next, error.message, "error")
       }
@@ -469,16 +471,25 @@ async function showEarlierComments(sheet, url) {
   showStatus(sheet, "Loading earlier comments…")
   try {
     const { ok, html } = await getFragment(url)
-    const next = ok && fragment(html)
-    if (!next) throw new Error("The earlier comments couldn’t be loaded; try again in a moment.")
-    const typed = sheet.querySelector("[data-ws-comment] textarea")?.value || ""
-    const box = next.querySelector("[data-ws-comment] textarea")
-    if (box) box.value = typed
+    const next = fragment(html)
+    // Not ok: a notice (busy, 429; Fizzy down, 502) to show as the sheet's status.
+    if (!ok || !next) throw new Error(next?.textContent?.trim() || "The earlier comments couldn’t be loaded; try again in a moment.")
+    keepTyped(sheet, next)
     sheet.replaceWith(next)
   } catch (error) {
     showStatus(sheet, error.message, "error")
   } finally {
     sheet.removeAttribute("aria-busy")
+  }
+}
+
+// What was typed in `sheet`'s text boxes (the comment box, any other), into the same boxes of
+// `next`, the sheet that replaces it.
+function keepTyped(sheet, next) {
+  for (const field of sheet.querySelectorAll("textarea[name], input[name]:not([type=checkbox]):not([type=radio]):not([type=hidden])")) {
+    if (!field.value) continue
+    const same = next.querySelector(`${field.localName}[name="${CSS.escape(field.name)}"]`)
+    if (same) same.value = field.value
   }
 }
 
