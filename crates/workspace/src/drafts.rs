@@ -4,9 +4,12 @@
 //! Dismiss post "confirm" or "cancel" in the room as the user, with a mention of the bot so its
 //! webhook fires in a shared room too. Edit puts a mention and "Change: " in the composer.
 //!
-//! Phase 0 recognizes drafts by their wording, in English or French. A structured marker in the
-//! bot's message would be more reliable (a later phase).
+//! Phase 0 recognizes drafts by their shape, in English or French: a card preview (a title, or the
+//! template's fields) followed by an invitation to confirm *in order to file it*. A question that
+//! merely ends with "reply yes" isn't one. A structured marker in the bot's message would be more
+//! reliable (a later phase).
 
+use std::collections::HashSet;
 use std::sync::LazyLock;
 
 use jiff::{SignedDuration, Timestamp};
@@ -26,7 +29,11 @@ pub struct Draft {
     pub severity: Option<Severity>,
 }
 
-/// The draft in a bot message's body, if it is one.
+/// The draft in a bot message's body, if it is one: the skill's step 4, a preview of the card
+/// ([`is_card_preview`]) followed, in the last 600 characters, by an invitation to reply with a
+/// confirmation word whose sentence says what it's for: filing, creating or logging it ("Reply
+/// **confirm** to file it in Fizzy", "Type yes and I'll log it", "Répondez « confirmer » pour créer
+/// la carte").
 pub fn detect(body_html: &str) -> Option<Draft> {
     // Asks to reply with a confirmation word...
     static INVITE: LazyLock<Regex> = LazyLock::new(|| {
@@ -37,17 +44,38 @@ pub fn detect(body_html: &str) -> Option<Draft> {
         ))
         .unwrap()
     });
-    // ...before filing something.
-    static FILING: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"(?i)\b(fizzy|card|carte|incident|report|rapport|file|log|enregistr\w*|cr[ée]er|ticket)\b").unwrap());
+    // ...to file something, in the rest of that sentence.
+    static PURPOSE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(concat!(
+            r"(?i)^[^\n.!?]{0,40}?\b(?:to|and\s+i['’]ll|and\s+i\s+will|pour|et\s+je)\b",
+            r"[^\n.!?]{0,40}?\b(?:file|create|log|record|submit|cr[ée]er|cr[ée]e|enregistr\w*|d[ée]pos\w*)\b",
+        ))
+        .unwrap()
+    });
     let text = html::to_text(body_html);
     let tail_start = text.char_indices().rev().nth(600).map_or(0, |(at, _)| at);
-    let invite = INVITE.find(&text[tail_start..])?;
-    if !FILING.is_match(&text) {
+    let invite = INVITE.find_iter(&text[tail_start..]).find(|invite| PURPOSE.is_match(&text[tail_start + invite.end()..]))?;
+    let body = &text[..tail_start + invite.start()];
+    if !is_card_preview(body) {
         return None;
     }
-    let body = &text[..tail_start + invite.start()];
     Some(Draft { title: title(body_html, body), severity: severity(&text) })
+}
+
+/// The text before the invitation shows a card: a title (a `Title:` line, or the skill's "<type> —
+/// <summary> — <location>"), or at least two of the report template's header fields.
+fn is_card_preview(text: &str) -> bool {
+    static TITLE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?im)^\W{0,3}(?:title|titre)\W{0,3}\s*[:：]\s*\S").unwrap());
+    static FIELD: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(concat!(
+            r"(?im)^\W{0,3}(type|severity|gravit[ée]|location|lieu|date\s*(?:&|and|et)\s*(?:time|heure)|date|what happened|que s['’]est-il pass[ée])",
+            r"\W{0,3}\s*[:：]"
+        ))
+        .unwrap()
+    });
+    let dashed = text.lines().any(|line| line.contains(" — ") && line.chars().count() <= 160);
+    let fields: HashSet<String> = FIELD.captures_iter(text).map(|caps| caps[1].to_lowercase()).collect();
+    TITLE.is_match(text) || dashed || fields.len() >= 2
 }
 
 /// A title line (`Title: …`), else the first heading, else the first line with an em dash (the
@@ -128,16 +156,26 @@ impl Decision {
     }
 }
 
-/// A short message that answers a draft (yes or no, in either language), whatever mention it
-/// starts with.
-pub fn is_decision_reply(body_html: &str) -> bool {
+/// A message that answers `bot`'s draft (yes or no, in either language): one that mentions the bot
+/// (the composer's mention, or a typed "@Name") in at most six words with a decision word, or
+/// exactly one decision word ("ok", "confirm"). "ok thanks" or "no worries" aren't answers.
+pub fn is_decision_reply(body_html: &str, bot_id: i64, bot_name: &str) -> bool {
     const WORDS: [&str; 17] = [
         "confirm", "confirmed", "confirme", "confirmer", "yes", "oui", "ok", "okay", "valide", "valider", "go", "cancel", "dismiss",
         "annule", "annuler", "no", "non",
     ];
-    let text = html::to_text(body_html).to_lowercase();
+    let mut text = html::to_text(body_html).to_lowercase();
+    let typed = format!("@{}", bot_name.trim().to_lowercase());
+    let mut mentioned = crate::fizzy::mentioned_user_ids(body_html).contains(&bot_id.to_string());
+    if typed.len() > 1 && text.contains(&typed) {
+        text = text.replace(&typed, " ");
+        mentioned = true;
+    }
     let words: Vec<&str> = text.split(|c: char| !c.is_alphanumeric()).filter(|word| !word.is_empty()).collect();
-    words.len() <= 6 && words.iter().any(|word| WORDS.contains(word))
+    match words.as_slice() {
+        [word] => WORDS.contains(word),
+        words => mentioned && words.len() <= 6 && words.iter().any(|word| WORDS.contains(word)),
+    }
 }
 
 /// A message as the workspace sees it (the app fills these in from its database).
@@ -174,10 +212,10 @@ pub fn pending(messages: &[ChatMessage], now: Timestamp) -> Vec<PendingDraft> {
             continue;
         }
         let Some(draft) = detect(&message.body_html) else { continue };
-        let answered = sorted[at + 1..]
-            .iter()
-            .filter(|later| later.room_id == message.room_id)
-            .any(|later| later.creator_id == message.creator_id || (!later.creator_is_bot && is_decision_reply(&later.body_html)));
+        let answered = sorted[at + 1..].iter().filter(|later| later.room_id == message.room_id).any(|later| {
+            later.creator_id == message.creator_id
+                || (!later.creator_is_bot && is_decision_reply(&later.body_html, message.creator_id, &message.creator_name))
+        });
         if !answered {
             pending.push(PendingDraft { message: (*message).clone(), draft });
         }
@@ -263,9 +301,21 @@ mod tests {
             "<p>Reply confirm to subscribe to the newsletter.</p>",
             "<p>Hello! How can I help?</p>",
             "<p>The incident was confirmed by security yesterday.</p>",
+            // Invitations that aren't the skill's draft: nothing to file, or no card shown.
+            "<p>Card #12 filed in Fizzy … Reply ok if you also want me to notify maintenance.</p>",
+            "<p>Card #12 filed in Fizzy: <a href=\"http://fizzy/1/cards/12\">Lift B — out of service</a>.</p><p>Reply ok if you also want me to notify maintenance.</p>",
+            "<p>I can log that for you. Say yes and I'll create it.</p>",
+            "<p>Here is the weekly report… just reply yes.</p>",
+            "<p>Here is the weekly report — 12 incidents, 3 open.</p><p>Anything to add? Just reply yes.</p>",
         ] {
             assert_eq!(detect(other), None, "{other}");
         }
+    }
+
+    #[test]
+    fn a_draft_of_template_fields_without_a_title() {
+        let fields = "<p>Type: incident<br>Severity: medium<br>Location: car park</p><p>Reply confirm to file it in Fizzy, or tell me what to change.</p>";
+        assert_eq!(detect(fields).unwrap().severity, Some(Severity::Medium));
     }
 
     #[test]
@@ -277,9 +327,31 @@ mod tests {
             Decision::Confirm.reply_html("sg\"id"),
             r#"<p><action-text-attachment sgid="sg&quot;id" content-type="application/vnd.campfire.mention"></action-text-attachment> confirm</p>"#
         );
-        assert!(is_decision_reply(r#"<p><action-text-attachment sgid="x"></action-text-attachment> confirm</p>"#));
-        assert!(is_decision_reply("<p>@Hermes oui, valide</p>"));
-        assert!(!is_decision_reply("<p>change the location to room 107 please, not 117, ok</p>"));
+        let reply = |body: &str| is_decision_reply(body, 9, "Hermes");
+        assert!(reply(r#"<p><action-text-attachment sgid="x"></action-text-attachment> confirm</p>"#));
+        assert!(reply("<p>@Hermes oui, valide</p>"));
+        assert!(reply("<p>OK</p>") && reply("<p>no.</p>"));
+        assert!(reply(&Decision::Dismiss.reply_html(&mention_sgid(9))), "the File / Dismiss reply");
+        assert!(reply(&format!(
+            r#"<p><action-text-attachment sgid="{}" content-type="application/vnd.campfire.mention"></action-text-attachment> yes go ahead</p>"#,
+            mention_sgid(9)
+        )));
+        assert!(!reply("<p>change the location to room 107 please, not 117, ok</p>"));
+        for chatter in ["<p>no worries</p>", "<p>ok thanks</p>", "<p>go ahead with lunch</p>", "<p>@Sophie ok thanks</p>"] {
+            assert!(!reply(chatter), "{chatter}");
+        }
+        let other_user = format!(
+            r#"<p><action-text-attachment sgid="{}" content-type="application/vnd.campfire.mention"></action-text-attachment> ok thanks</p>"#,
+            mention_sgid(5)
+        );
+        assert!(!reply(&other_user), "a mention of someone else");
+    }
+
+    /// A Campfire mention sgid's payload (not signed here: only read).
+    fn mention_sgid(user_id: i64) -> String {
+        use base64::Engine;
+        let payload = format!(r#"{{"_rails":{{"data":"gid://campfire/User/{user_id}","pur":"attachable"}}}}"#);
+        format!("{}--digest", base64::engine::general_purpose::STANDARD.encode(payload))
     }
 
     fn message(id: i64, room_id: i64, creator_id: i64, bot: bool, minutes_ago: i64, body: &str) -> ChatMessage {
@@ -315,9 +387,12 @@ mod tests {
             message(7, 3, 6, false, 29, "<p>Anyone seen the keys to the plant room?</p>"),
             // Room 4: too old.
             message(8, 4, 9, true, 25 * 60, SKILL_DRAFT),
+            // Room 5: a draft, then chatter that isn't an answer: pending.
+            message(9, 5, 9, true, 20, SKILL_DRAFT),
+            message(10, 5, 6, false, 19, "<p>ok thanks</p>"),
         ];
         let ids: Vec<i64> = pending(&messages, now()).iter().map(|p| p.message.id).collect();
-        assert_eq!(ids, vec![6, 5]);
+        assert_eq!(ids, vec![9, 6, 5]);
     }
 
     #[test]
