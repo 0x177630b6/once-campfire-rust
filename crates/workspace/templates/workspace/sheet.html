@@ -1,10 +1,16 @@
 {#- Hermes fork: a card's sheet (campfire_workspace::pages::card_sheet), a page or the overlay's
     content. Changes POST to {{ action_url }}/<change> (hermes/workspace.js). Fizzy's HTML is never
-    shown: the description and comments are their text. -#}
+    shown: the description and comments are their text. The Fizzy link is in the "⋯" menu, only with
+    `fizzy_links` (duty managers and administrators, on the LAN). -#}
 <article class="ws-sheet ws-cc--{{ tone }}" data-ws-sheet="{{ number }}" data-ws-action-url="{{ action_url }}" aria-labelledby="ws-sheet-title-{{ number }}">
   <header class="ws-sheet__head">
     <span class="ws-card__no">No. {{ number }} · {{ board_name }}</span>
-    <a class="ws-link" href="{{ fizzy_url }}" target="_blank" rel="noopener">Open in Fizzy ↗</a>
+    {%- if fizzy_links %}
+    <details class="ws-more">
+      <summary class="btn ws-btn ws-btn--small" title="More"><span aria-hidden="true">⋯</span><span class="for-screen-reader">More</span></summary>
+      <div class="ws-more__menu" role="menu"><a class="ws-link" role="menuitem" href="{{ fizzy_url }}" target="_blank" rel="noopener">Open in Fizzy (browser) ↗</a></div>
+    </details>
+    {%- endif %}
     <button type="button" class="btn ws-btn ws-btn--small ws-sheet__close" data-ws-sheet-close><span aria-hidden="true">✕</span><span class="for-screen-reader">Close</span></button>
   </header>
   <h2 id="ws-sheet-title-{{ number }}" class="ws-sheet__title">{{ title }}</h2>
@@ -64,7 +70,10 @@
     {%- if comments.is_empty() %}
     <p class="ws-empty">No comments yet.</p>
     {%- else %}
-    {%- if earlier_comments %}<p class="ws-muted" data-ws-earlier-comments>Earlier comments are <a class="ws-link" href="{{ fizzy_url }}" target="_blank" rel="noopener">in Fizzy</a>.</p>{% endif %}
+    {%- if earlier_comments %}
+    {%- if all_comments %}<p class="ws-muted">Only the last {{ comments.len() }} comments are shown.</p>
+    {%- else %}<p class="ws-muted"><a class="ws-link" href="{{ action_url }}?comments=all" data-ws-earlier-comments>Show earlier comments</a></p>{% endif %}
+    {%- endif %}
     <ol class="ws-thread">
       {%- for comment in comments %}
       <li class="ws-comment">

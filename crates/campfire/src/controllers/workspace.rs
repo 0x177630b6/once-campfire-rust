@@ -10,8 +10,9 @@
 //! - `POST /workspace/drafts/:message_id/reply` (`{"decision": "confirm" | "dismiss"}`): answers a
 //!   Hermes draft in its room as the current user, through `MessagesController#create`'s path;
 //! - `GET /workspace/board`, `GET /workspace/cards/:number`, `GET /workspace/cards/new`,
-//!   `GET /workspace/rooms/:room_id/panel`: the board, a card's sheet, the new-card form, a room's
-//!   cards panel (the last three as fragments with `?fragment=1`, for the page's overlays);
+//!   `GET /workspace/rooms/:room_id/panel`: the board, a card's sheet (`?comments=all`: its earlier
+//!   comments too), the new-card form, a room's cards panel (the last three as fragments with
+//!   `?fragment=1`, for the page's overlays);
 //! - `POST /workspace/cards` and `POST /workspace/cards/:number/:change`: create and change cards;
 //! - `GET`/`POST /workspace/settings`: the settings (administrators);
 //! - `GET /hermes/:bot_key/workspace/settings.json`: the settings, for Hermes (bots only);
@@ -22,6 +23,9 @@
 //! - phase 2.5–2.7: the alerts (Hermes's direct messages and room notices, posted from the poll task,
 //!   [`deliver_alerts`]), `GET`/`POST /workspace/handover` (the end-of-shift handover), and the
 //!   people, rooms and memberships the visibility and the alerts need ([`load_directory`]).
+//!
+//! The pages link to Fizzy only for duty managers and administrators, and only on the LAN: not for a
+//! request that came through Campfire's public address ([`on_lan`]).
 //!
 //! All answer 404 while the workspace is off (no `FIZZY_URL`/`FIZZY_TOKEN`), and run
 //! `ApplicationController`'s chain (session only and no bots, except the bot route;
@@ -373,7 +377,8 @@ pub async fn show(c: &mut Ctx) -> Result {
     let user = require_current_user(c)?.clone();
     let viewer = viewer(&user);
     let source = RoomMessages { app: c.app().clone(), user };
-    let home = workspace.home(&viewer, &source, c.now()).await.map_err(|error| Error::internal(anyhow::anyhow!(error)))?;
+    let mut home = workspace.home(&viewer, &source, c.now()).await.map_err(|error| Error::internal(anyhow::anyhow!(error)))?;
+    home.fizzy_links = workspace.fizzy_links(&viewer, on_lan(c, &workspace));
     let content = home.render().map_err(Error::internal)?;
     page(c, StatusCode::OK, "Home", content).await
 }
@@ -399,6 +404,18 @@ async fn page(c: &mut Ctx, status: StatusCode, title: &str, content: String) -> 
         .render()
     })
     .await
+}
+
+/// Whether the request came in on the LAN rather than through Campfire's public address
+/// (`WorkspaceConfig::is_public_request`, over the `Host` header, each `X-Forwarded-Host` and the
+/// URI's authority): Fizzy links are for the LAN only, where Fizzy is reachable.
+fn on_lan(c: &Ctx, workspace: &Workspace) -> bool {
+    let headers = &c.request.headers;
+    let values = |name: &'static str| headers.get_all(name).into_iter().filter_map(|value| value.to_str().ok());
+    let hosts = values("host")
+        .chain(values("x-forwarded-host").flat_map(|value| value.split(',')))
+        .chain(c.request.uri.authority().map(|a| a.as_str()));
+    !workspace.config().is_public_request(hosts)
 }
 
 fn viewer(user: &User) -> Viewer {
@@ -487,12 +504,16 @@ pub async fn board(c: &mut Ctx) -> Result {
     };
     let filter = BoardFilter::parse(c.params.get("dept").and_then(Param::as_str), &severities, &workspace.settings());
     refresh_rooms(c, &workspace, &user).await?;
-    let content = workspace.board(&viewer(&user), &filter).render().map_err(Error::internal)?;
+    let viewer = viewer(&user);
+    let mut board = workspace.board(&viewer, &filter);
+    board.fizzy_links = workspace.fizzy_links(&viewer, on_lan(c, &workspace));
+    let content = board.render().map_err(Error::internal)?;
     page(c, StatusCode::OK, "Board", content).await
 }
 
 /// `GET /workspace/cards/:number`: the card's sheet, read from Fizzy (a page, or the overlay's
-/// fragment with `?fragment=1`).
+/// fragment with `?fragment=1`); `?comments=all` ("Show earlier comments") reads up to
+/// `SHEET_ALL_COMMENTS` comments, after the same visibility check.
 pub async fn card(c: &mut Ctx) -> Result {
     let workspace = feature(c)?;
     before_actions(c, Before::default()).await?;
@@ -503,9 +524,14 @@ pub async fn card(c: &mut Ctx) -> Result {
         find_template(c, &format::HTML)?;
     }
     refresh_rooms(c, &workspace, &user).await?;
-    let sheet = workspace.card_sheet(&FizzyHttp::new(), &viewer(&user), number).await;
+    let all_comments = c.params.get("comments").and_then(Param::as_str).is_some_and(|value| value == "all");
+    let viewer = viewer(&user);
+    let sheet = workspace.card_sheet_with(&FizzyHttp::new(), &viewer, number, all_comments).await;
     let (status, html) = match sheet {
-        Ok(sheet) => (StatusCode::OK, sheet.render().map_err(Error::internal)?),
+        Ok(mut sheet) => {
+            sheet.fizzy_links = workspace.fizzy_links(&viewer, on_lan(c, &workspace));
+            (StatusCode::OK, sheet.render().map_err(Error::internal)?)
+        }
         Err(ActionError::NotFound) if !fragment => return Err(Error::NotFound),
         Err(error) => (status_of(&error), notice(&error.message())),
     };
@@ -628,7 +654,10 @@ pub async fn change_card(c: &mut Ctx) -> Result {
         return action_error(c, &error);
     }
     let sheet = match workspace.card_sheet(&http, &viewer, number).await {
-        Ok(sheet) => Some(sheet.render().map_err(Error::internal)?),
+        Ok(mut sheet) => {
+            sheet.fizzy_links = workspace.fizzy_links(&viewer, on_lan(c, &workspace));
+            Some(sheet.render().map_err(Error::internal)?)
+        }
         Err(_) => None,
     };
     c.json(StatusCode::OK, &json!({ "number": number, "sheet": sheet, "chip": workspace.chip_for(&viewer, number) }))
@@ -821,7 +850,8 @@ pub async fn hermes(c: &mut Ctx) -> Result {
     let filter = c.params.get("filter").and_then(Param::as_str).unwrap_or("all").to_string();
     let viewer = viewer(&user);
     let source = RoomMessages { app: c.app().clone(), user };
-    let view = workspace.hermes_page(&viewer, &filter, &source).await.map_err(|error| Error::internal(anyhow::anyhow!(error)))?;
+    let mut view = workspace.hermes_page(&viewer, &filter, &source).await.map_err(|error| Error::internal(anyhow::anyhow!(error)))?;
+    view.fizzy_links = workspace.fizzy_links(&viewer, on_lan(c, &workspace));
     let content = view.render().map_err(Error::internal)?;
     page(c, StatusCode::OK, "Hermes", content).await
 }

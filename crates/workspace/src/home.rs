@@ -7,8 +7,10 @@
 //!   address), last 7 days.
 //! - **Handover**: incident cards that changed in the last 12 hours, closed ones included.
 //!
-//! Every card links to Fizzy. The page renders from the last poll; while Fizzy is unreachable it
-//! says so and shows what it last saw.
+//! Every card opens its sheet in the app (a tap, or the sheet's page without JavaScript); only duty
+//! managers and administrators on the LAN get the link to the board in Fizzy (`fizzy_links`). The
+//! page renders from the last poll; while Fizzy is unreachable it says so and shows what it last
+//! saw.
 
 use std::cmp::Reverse;
 use std::collections::HashSet;
@@ -17,7 +19,6 @@ use askama::Template;
 use jiff::{SignedDuration, Timestamp};
 
 use crate::cache::Snapshot;
-use crate::chips::card_link;
 use crate::config::WorkspaceConfig;
 use crate::drafts::{self, Bot, ChatMessage, PendingDraft};
 use crate::fizzy::{Card, CardState};
@@ -40,7 +41,8 @@ pub struct Viewer {
 pub struct CardItem {
     pub number: u64,
     pub title: String,
-    pub url: String,
+    /// The card's sheet (`/workspace/cards/<n>`), opened in the overlay.
+    pub sheet_url: String,
     pub tone: &'static str,
     pub state: String,
     pub severity: Option<&'static str>,
@@ -74,7 +76,8 @@ pub struct DraftItem {
 pub struct MentionItem {
     pub card_number: u64,
     pub card_title: String,
-    pub card_url: String,
+    /// The card's sheet.
+    pub sheet_url: String,
     pub author_name: String,
     pub board_name: String,
     pub excerpt: String,
@@ -107,7 +110,11 @@ pub struct HomeView {
     pub mentions: Vec<MentionItem>,
     pub handover: Vec<CardItem>,
     pub board_name: String,
+    /// The board in Fizzy, shown only with `fizzy_links`.
     pub board_url: Option<String>,
+    /// Links to Fizzy: duty managers and administrators on the LAN only
+    /// ([`crate::Workspace::fizzy_links`]; the adapter sets it).
+    pub fizzy_links: bool,
     pub fizzy: FizzyStatus,
     pub retry_seconds: u64,
     /// `/workspace/board`
@@ -154,14 +161,15 @@ pub fn build(
         to_confirm: drafts::pending(messages, now).into_iter().filter_map(|pending| draft_item(pending, bots)).collect(),
         proposals: Vec::new(),
         open_count: incident_cards.len(),
-        open: groups(config, snapshot, &incident_cards),
-        mentions: mentions(config, snapshot, viewer, now),
-        handover: handover(config, snapshot, now),
+        open: groups(snapshot, &incident_cards),
+        mentions: mentions(snapshot, viewer, now),
+        handover: handover(snapshot, now),
         board_name: board.map(|board| board.name.clone()).unwrap_or_else(|| config.incident_board.clone()),
         board_url: board.and_then(|board| {
             let account = snapshot.account.as_deref()?;
             Some(format!("{}/{account}/boards/{}", config.link_base(), board.id))
         }),
+        fizzy_links: false,
         fizzy,
         retry_seconds: config.poll_interval.as_secs(),
         board_page: crate::pages::BOARD_PATH.into(),
@@ -185,12 +193,12 @@ fn draft_item(pending: PendingDraft, bots: &[Bot]) -> Option<DraftItem> {
     })
 }
 
-pub fn card_item(config: &WorkspaceConfig, snapshot: &Snapshot, card: &Card) -> CardItem {
+pub fn card_item(card: &Card) -> CardItem {
     let state = card.state();
     CardItem {
         number: card.number,
         title: if card.title.trim().is_empty() { "Untitled".into() } else { card.title.trim().to_string() },
-        url: card_link(config, snapshot, card.number).unwrap_or_else(|| card.url.clone()),
+        sheet_url: crate::pages::sheet_path(card.number),
         tone: state.tone(),
         state: state.label().to_string(),
         severity: card.severity().map(|severity| severity.as_str()),
@@ -202,7 +210,7 @@ pub fn card_item(config: &WorkspaceConfig, snapshot: &Snapshot, card: &Card) -> 
 }
 
 /// "New", then the board's columns in order, then any other column, then "Monitoring".
-fn groups(config: &WorkspaceConfig, snapshot: &Snapshot, cards: &[&Card]) -> Vec<CardGroup> {
+fn groups(snapshot: &Snapshot, cards: &[&Card]) -> Vec<CardGroup> {
     let rank = |state: &CardState| match state {
         CardState::New => (0, 0),
         CardState::Column(name, _) => (1, snapshot.columns.iter().position(|column| &column.name == name).unwrap_or(usize::MAX)),
@@ -216,7 +224,7 @@ fn groups(config: &WorkspaceConfig, snapshot: &Snapshot, cards: &[&Card]) -> Vec
     });
     let mut groups: Vec<CardGroup> = Vec::new();
     for card in sorted {
-        let item = card_item(config, snapshot, card);
+        let item = card_item(card);
         match groups.last_mut() {
             Some(group) if group.label == item.state => group.cards.push(item),
             _ => groups.push(CardGroup { label: item.state.clone(), tone: item.tone, cards: vec![item] }),
@@ -228,7 +236,7 @@ fn groups(config: &WorkspaceConfig, snapshot: &Snapshot, cards: &[&Card]) -> Vec
 /// Matched by email address, which Campfire users can change without verification: someone who
 /// takes a colleague's address sees their mentions. Hence incident-board cards only, whose content
 /// the workspace shows every signed-in user anyway (docs/hermes-workspace.md).
-fn mentions(config: &WorkspaceConfig, snapshot: &Snapshot, viewer: &Viewer, now: Timestamp) -> Vec<MentionItem> {
+fn mentions(snapshot: &Snapshot, viewer: &Viewer, now: Timestamp) -> Vec<MentionItem> {
     let Some(board) = snapshot.board.as_ref() else { return Vec::new() };
     let Some(email) = viewer.email.as_deref().map(|email| email.trim().to_lowercase()).filter(|email| !email.is_empty()) else {
         return Vec::new();
@@ -244,7 +252,7 @@ fn mentions(config: &WorkspaceConfig, snapshot: &Snapshot, viewer: &Viewer, now:
         .map(|mention| MentionItem {
             card_number: mention.card_number,
             card_title: snapshot.card(mention.card_number).map(|card| card.title.clone()).unwrap_or_default(),
-            card_url: card_link(config, snapshot, mention.card_number).unwrap_or_default(),
+            sheet_url: crate::pages::sheet_path(mention.card_number),
             author_name: mention.author_name.clone(),
             board_name: mention.board_name.clone(),
             excerpt: mention.excerpt.clone(),
@@ -253,7 +261,7 @@ fn mentions(config: &WorkspaceConfig, snapshot: &Snapshot, viewer: &Viewer, now:
         .collect()
 }
 
-fn handover(config: &WorkspaceConfig, snapshot: &Snapshot, now: Timestamp) -> Vec<CardItem> {
+fn handover(snapshot: &Snapshot, now: Timestamp) -> Vec<CardItem> {
     let mut cards: Vec<&Card> = snapshot
         .open
         .iter()
@@ -264,7 +272,7 @@ fn handover(config: &WorkspaceConfig, snapshot: &Snapshot, now: Timestamp) -> Ve
         .filter(|card| card.last_active_at.is_some_and(|at| now.duration_since(at) <= HANDOVER_WINDOW))
         .collect();
     cards.sort_by_key(|card| Reverse(card.last_active_at));
-    cards.into_iter().map(|card| card_item(config, snapshot, card)).collect()
+    cards.into_iter().map(card_item).collect()
 }
 
 #[cfg(test)]
@@ -370,7 +378,7 @@ mod tests {
             home.open.iter().map(|group| (group.label.as_str(), group.cards.iter().map(|card| card.number).collect())).collect();
         assert_eq!(groups, vec![("New", vec![13, 12]), ("In progress", vec![9, 11]), ("Monitoring", vec![7])]);
         assert_eq!(home.open_count, 5);
-        assert_eq!(home.open[0].cards[0].url, "https://fizzy.example/897/cards/13");
+        assert_eq!(home.open[0].cards[0].sheet_url, "/workspace/cards/13");
         assert_eq!(home.open[1].cards[0].assignees, "Maya");
         assert_eq!(home.board_url.as_deref(), Some("https://fizzy.example/897/boards/b1"));
     }
@@ -429,10 +437,35 @@ mod tests {
         let mut snapshot = snapshot();
         snapshot.cards.get_mut(&13).unwrap().title = "<script>alert(1)</script>".into();
         let html = build(&config(), &snapshot, &maya(), &[], &[], now()).render().unwrap();
-        for expected in ["To confirm", "Open tickets", "Mentions", "Handover", "ws-card ws-cc--new", "https://fizzy.example/897/cards/12"] {
+        for expected in [
+            "To confirm",
+            "Open tickets",
+            "Mentions",
+            "Handover",
+            "ws-card ws-cc--new",
+            "href=\"/workspace/cards/12\" data-ws-open-sheet=\"12\"",
+        ] {
             assert!(html.contains(expected), "{expected}");
         }
         assert!(html.contains("alert(1)") && !html.contains("<script>alert"));
+    }
+
+    #[test]
+    fn every_tile_opens_the_sheet_and_fizzy_only_with_fizzy_links() {
+        let mut home = build(&config(), &snapshot(), &maya(), &[], &[], now());
+        home.no_department = vec![card_item(snapshot().card(12).unwrap())];
+        let html = home.render().unwrap();
+        // Open tickets (12, 13…), no department (12), mentions (11), handover (5, 13, 11).
+        for number in [5, 11, 12, 13] {
+            assert!(html.contains(&format!(r#"href="/workspace/cards/{number}" data-ws-open-sheet="{number}""#)), "{number} {html}");
+        }
+        assert_eq!(html.matches(r#"href="/workspace/cards/12" data-ws-open-sheet="12""#).count(), 2, "open tickets and no department");
+        assert!(!html.contains("fizzy.example") && !html.contains("_blank"), "staff see no Fizzy link: {html}");
+
+        home.fizzy_links = true;
+        let html = home.render().unwrap();
+        assert!(html.contains(r#"href="https://fizzy.example/897/boards/b1" target="_blank" rel="noopener""#), "{html}");
+        assert!(!html.contains("fizzy.example/897/cards"), "the tiles still open the sheet");
     }
 
     #[test]

@@ -9,7 +9,7 @@
 //! | `FIZZY_ACCOUNT` | the token's first account | The account slug (digits), e.g. `897362094` |
 //! | `FIZZY_POLL_S` | `30` | Seconds between polls (at least 5) |
 //! | `WORKSPACE_INCIDENT_BOARD` | `Incident Log` | The incident board, by name or id |
-//! | `CAMPFIRE_PUBLIC_URL` | unset | Campfire as browsers reach it, for the link to the message a card was created from (unset: the message's path, as text) |
+//! | `CAMPFIRE_PUBLIC_URL` | unset | Campfire as browsers reach it, for the link to the message a card was created from (unset: the message's path, as text). When its host isn't Fizzy's (`FIZZY_PUBLIC_URL`), requests on that host are "public": no Fizzy links on the pages ([`WorkspaceConfig::is_public_request`]) |
 //! | `HERMES_BOT` | unset | Hermes's Campfire bot, by user id or exact name: the only bot whose proposals Campfire takes (`POST /hermes/:bot_key/workspace/proposals`). Unset: `GEMINI_LIVE_VOICE_BOT` when set, else the instance's only active bot; with several bots and neither set, proposals are refused (403) |
 //! | `HERMES_FIZZY_TOKEN` | unset | Hermes's own Fizzy token (`write`): what Campfire runs for Hermes (its proposals, the undo of its comments) is written under Hermes's name, and the Hermes log learns Hermes's Fizzy user from it. Unset: those writes use `FIZZY_TOKEN` |
 //!
@@ -124,6 +124,39 @@ impl WorkspaceConfig {
     pub fn link_base(&self) -> &str {
         self.public_url.as_deref().unwrap_or(&self.fizzy_url)
     }
+
+    /// Whether a request came through Campfire's public address (e.g. a Cloudflare Tunnel's
+    /// hostname) rather than the LAN, where Fizzy isn't reachable: `CAMPFIRE_PUBLIC_URL` is set, its
+    /// host isn't Fizzy's (on the LAN-only setup both are the LAN host: nothing is public), and one of
+    /// `hosts` (the request's `Host`, each `X-Forwarded-Host`, with or without a port) is it. Any
+    /// match counts, so a forged `X-Forwarded-Host` can't make a public request look local.
+    pub fn is_public_request<'a>(&self, hosts: impl IntoIterator<Item = &'a str>) -> bool {
+        let Some(public) = self.campfire_url.as_deref().map(url_host) else { return false };
+        if public.is_empty() || url_host(self.link_base()) == public {
+            return false;
+        }
+        hosts.into_iter().any(|host| host_only(host) == public)
+    }
+}
+
+/// The host of an http(s) URL, lowercase, without its port.
+fn url_host(url: &str) -> String {
+    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
+    host_only(rest.split(['/', '?', '#']).next().unwrap_or(""))
+}
+
+/// A `Host` value without its port (`[::1]:8443` → `[::1]`), trimmed and lowercase.
+fn host_only(host: &str) -> String {
+    let host = host.trim();
+    let host = match host.rsplit_once(':') {
+        Some((name, port))
+            if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) && (!name.contains(':') || name.ends_with(']')) =>
+        {
+            name
+        }
+        _ => host,
+    };
+    host.trim_end_matches('.').to_ascii_lowercase()
 }
 
 /// An absolute http(s) URL with a host, without its trailing slashes.
@@ -192,6 +225,28 @@ mod tests {
         assert_eq!(config.account.as_deref(), Some("897362094"));
         assert_eq!(config.poll_interval, Duration::from_secs(5));
         assert_eq!(config.incident_board, "Incidents");
+    }
+
+    #[test]
+    fn public_requests_are_those_on_campfires_public_host() {
+        let with = |campfire: Option<&str>| {
+            let mut vars = vec![("FIZZY_URL", "http://fizzy"), ("FIZZY_TOKEN", "t"), ("FIZZY_PUBLIC_URL", "https://192.168.0.114:8444")];
+            vars.extend(campfire.map(|url| ("CAMPFIRE_PUBLIC_URL", url)));
+            config(&vars).unwrap().unwrap()
+        };
+        // The LAN-only setup: CAMPFIRE_PUBLIC_URL unset, or the LAN address like Fizzy's.
+        assert!(!with(None).is_public_request(["chat.example.com"]));
+        assert!(!with(Some("https://192.168.0.114:8443")).is_public_request(["192.168.0.114:8443"]));
+        // Published through a tunnel: its host is public, the LAN address isn't.
+        let tunnel = with(Some("https://Chat.Example.com/"));
+        assert!(tunnel.is_public_request(["chat.example.com"]));
+        assert!(tunnel.is_public_request(["CHAT.example.com:443"]));
+        assert!(!tunnel.is_public_request(["192.168.0.114:8443"]));
+        assert!(!tunnel.is_public_request(["chat.example.com.evil", "example.com"]));
+        assert!(!tunnel.is_public_request([]));
+        // A forged X-Forwarded-Host next to the public Host doesn't make it local.
+        assert!(tunnel.is_public_request(["chat.example.com", "192.168.0.114:8443"]));
+        assert_eq!((host_only("[::1]:8443"), host_only("[::1]"), host_only("Host.")), ("[::1]".into(), "[::1]".into(), "host".into()));
     }
 
     #[test]

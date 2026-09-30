@@ -489,11 +489,19 @@ impl Workspace {
                     .iter()
                     .filter_map(|number| snapshot.card(*number))
                     .filter(|card| !card.closed && settings.departments_of(&card.tags).is_empty())
-                    .map(|card| home::card_item(&self.config, &snapshot, card))
+                    .map(home::card_item)
                     .collect();
             }
         }
         Ok(view)
+    }
+
+    /// Whether `viewer` gets links to Fizzy on the pages (`fizzy_links`): duty managers and
+    /// administrators, and only when `lan` (the adapter's call: the request didn't come through
+    /// Campfire's public address, [`WorkspaceConfig::is_public_request`]). Everyone else stays in
+    /// the app: most people have no Fizzy account, and Fizzy isn't reachable from outside.
+    pub fn fizzy_links(&self, viewer: &Viewer, lan: bool) -> bool {
+        lan && (viewer.administrator || self.settings().is_duty_manager(viewer))
     }
 
     /// The board page, from the last poll.

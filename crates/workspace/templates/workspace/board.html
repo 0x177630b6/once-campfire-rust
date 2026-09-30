@@ -23,8 +23,13 @@
     </form>
     <span class="ws-board__links">
       {%- if can_create %}<button type="button" class="btn btn--reversed ws-btn" data-ws-new-card>New card</button>{% endif %}
-      {%- if let Some(board_url) = board_url %} <a class="ws-link" href="{{ board_url }}" target="_blank" rel="noopener">Fizzy ↗</a>{% endif %}
       {%- if let Some(settings_url) = settings_url %} <a class="ws-link" href="{{ settings_url }}">Settings</a>{% endif %}
+      {%- if fizzy_links %}{% if let Some(board_url) = board_url %}
+      <details class="ws-more">
+        <summary class="btn ws-btn ws-btn--small" title="More"><span aria-hidden="true">⋯</span><span class="for-screen-reader">More</span></summary>
+        <div class="ws-more__menu" role="menu"><a class="ws-link" role="menuitem" href="{{ board_url }}" target="_blank" rel="noopener">Open in Fizzy (browser) ↗</a></div>
+      </details>
+      {%- endif %}{% endif %}
     </span>
   </header>
 

@@ -1,6 +1,7 @@
 {#- Hermes fork: the Duty Manager Workspace's Home (campfire_workspace::home). Styles:
     hermes/workspace.css, linked by the tab bar in the layout. Times are <time> elements the
-    layout's local-time controller formats. -#}
+    layout's local-time controller formats. Cards open their sheet (hermes/workspace.js); Fizzy
+    links only with `fizzy_links` (duty managers and administrators, on the LAN). -#}
 <section class="ws-home" aria-labelledby="ws-home-title">
   <h1 id="ws-home-title" class="for-screen-reader">Home</h1>
 
@@ -46,7 +47,7 @@
   <section class="ws-section" aria-labelledby="ws-open">
     <h2 id="ws-open" class="ws-section__title">Open tickets <span class="ws-count">{{ open_count }}</span>
       <a class="ws-section__link" href="{{ board_page }}">Board</a>
-      {%- if let Some(board_url) = board_url %} <a class="ws-section__link ws-section__link--next" href="{{ board_url }}" target="_blank" rel="noopener">{{ board_name }} ↗</a>{% endif %}</h2>
+      {%- if fizzy_links %}{% if let Some(board_url) = board_url %} <a class="ws-section__link ws-section__link--next" href="{{ board_url }}" target="_blank" rel="noopener" title="Opens Fizzy in the browser">{{ board_name }} in Fizzy ↗</a>{% endif %}{% endif %}</h2>
     {%- if open.is_empty() %}
     <p class="ws-empty">No open tickets on {{ board_name }}.</p>
     {%- endif %}
@@ -79,7 +80,7 @@
     <ul class="ws-list">
       {%- for mention in mentions %}
       <li class="ws-item">
-        <p class="ws-item__meta"><strong>{{ mention.author_name }}</strong> on <a href="{{ mention.card_url }}" target="_blank" rel="noopener">No. {{ mention.card_number }}{% if !mention.card_title.is_empty() %} · {{ mention.card_title }}{% endif %}</a> · <time datetime="{{ mention.created_at }}" data-local-time-target="datetime"></time></p>
+        <p class="ws-item__meta"><strong>{{ mention.author_name }}</strong> on <a href="{{ mention.sheet_url }}" data-ws-open-sheet="{{ mention.card_number }}">No. {{ mention.card_number }}{% if !mention.card_title.is_empty() %} · {{ mention.card_title }}{% endif %}</a> · <time datetime="{{ mention.created_at }}" data-local-time-target="datetime"></time></p>
         <p class="ws-item__text">{{ mention.excerpt }}</p>
       </li>
       {%- endfor %}

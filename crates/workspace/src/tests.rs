@@ -934,17 +934,27 @@ async fn the_card_sheet() {
     assert_eq!(sheet.moves.iter().find(|m| m.selected).unwrap().value, "new");
     assert_eq!((sheet.steps.len(), sheet.steps_done), (1, 0));
     let html = askama::Template::render(&sheet).unwrap();
-    for expected in [
-        "Lift B out of service",
-        "Call the lift company",
-        "Called them &#60;script&#62;",
-        "Stuck on 6.",
-        "data-ws-change=\"severity\"",
-        "https://fizzy.example/897/cards/12",
-    ] {
+    for expected in
+        ["Lift B out of service", "Call the lift company", "Called them &#60;script&#62;", "Stuck on 6.", "data-ws-change=\"severity\""]
+    {
         assert!(html.contains(expected), "{expected} {html}");
     }
     assert!(!html.contains("<script>"));
+
+    // Fizzy links: duty managers and administrators, on the LAN only; staff never.
+    assert!(!sheet.fizzy_links && !html.contains("fizzy.example") && !html.contains("ws-more"), "{html}");
+    assert!(!workspace.fizzy_links(&karim(), true), "not a duty manager");
+    assert!(!workspace.fizzy_links(&manager(), false), "a duty manager, through the public address");
+    assert!(workspace.fizzy_links(&manager(), true));
+    let listed = Settings { duty_managers: Some(vec![karim().id]), ..departments() };
+    workspace.settings_store().save(listed).unwrap();
+    assert!(workspace.fizzy_links(&karim(), true) && workspace.fizzy_links(&manager(), true), "listed, and administrators");
+    workspace.settings_store().save(departments()).unwrap();
+    let managers = askama::Template::render(&CardSheet { fizzy_links: true, ..sheet.clone() }).unwrap();
+    assert!(
+        managers.contains(r#"<a class="ws-link" role="menuitem" href="https://fizzy.example/897/cards/12" target="_blank" rel="noopener">Open in Fizzy (browser) ↗</a>"#),
+        "{managers}"
+    );
 
     let settings = Settings { confirm_policy: Policy::DutyManagersOnly, ..departments() };
     workspace.settings_store().save(settings).unwrap();
@@ -969,9 +979,28 @@ async fn the_sheet_shows_the_newest_comments() {
     let pages: Vec<String> = fizzy.paths().into_iter().filter(|path| path.contains("/comments.json")).collect();
     assert_eq!(pages, ["/897/cards/12/comments.json", "/897/cards/12/comments.json?page=4", "/897/cards/12/comments.json?page=5"]);
     let html = askama::Template::render(&sheet).unwrap();
-    assert!(html.contains("Earlier comments are <a class=\"ws-link\" href=\"https://fizzy.example/897/cards/12\""), "{html}");
+    assert!(
+        html.contains(r#"<a class="ws-link" href="/workspace/cards/12?comments=all" data-ws-earlier-comments>Show earlier comments</a>"#),
+        "{html}"
+    );
     assert!(html.find("data-ws-earlier-comments").unwrap() < html.find("Comment number 151.").unwrap(), "above the thread");
     assert!(html.contains("Comment number 250.") && !html.contains("Comment number 150."));
+    assert!(!html.contains("fizzy.example"), "no way out to Fizzy for staff");
+
+    // "Show earlier comments": all of them, through the workspace's own client.
+    let all = workspace.card_sheet_with(&fizzy, &karim(), 12, true).await.unwrap();
+    assert_eq!(texts(&all), (1..=250).map(|n| format!("Comment number {n}.")).collect::<Vec<_>>());
+    assert!(!all.earlier_comments && all.all_comments);
+    let html = askama::Template::render(&all).unwrap();
+    assert!(!html.contains("data-ws-earlier-comments") && html.contains("Comment number 1."), "{html}");
+    // Capped: a longer thread says only the last ones are shown.
+    fizzy.comments.lock().unwrap().insert(12, (1..=1030).map(comment).collect());
+    let capped = workspace.card_sheet_with(&fizzy, &karim(), 12, true).await.unwrap();
+    assert_eq!((capped.comments.len(), capped.earlier_comments), (crate::actions::SHEET_ALL_COMMENTS, true));
+    assert_eq!(capped.comments[0].text, "Comment number 31.");
+    let html = askama::Template::render(&capped).unwrap();
+    assert!(html.contains("Only the last 1000 comments are shown.") && !html.contains("data-ws-earlier-comments"), "{html}");
+    fizzy.comments.lock().unwrap().insert(12, (1..=250).map(comment).collect());
 
     // Without X-Total-Count, the pages are walked.
     *fizzy.no_total_count.lock().unwrap() = true;
@@ -1012,6 +1041,15 @@ async fn the_board_page() {
     let html = askama::Template::render(&workspace.board(&admin, &security)).unwrap();
     assert!(html.contains("Guest slip in lobby") && !html.contains("Lift B out of service"));
     assert!(html.contains(r#"data-ws-move="closed" data-ws-number="13""#) && html.contains(r#"href="/workspace/settings""#));
+    // Fizzy: the header's "⋯" menu, with `fizzy_links` only (an administrator on the LAN).
+    assert!(!html.contains("fizzy.example") && !html.contains("ws-more"), "{html}");
+    let mut board = workspace.board(&admin, &security);
+    board.fizzy_links = workspace.fizzy_links(&admin, true);
+    let html = askama::Template::render(&board).unwrap();
+    assert!(
+        html.contains(r#"href="https://fizzy.example/897/boards/b1" target="_blank" rel="noopener">Open in Fizzy (browser) ↗</a>"#),
+        "{html}"
+    );
 }
 
 #[tokio::test]
@@ -1550,6 +1588,11 @@ async fn the_hermes_log_reads_hermes_s_direct_actions() {
     assert!(html.contains(r#"data-ws-undo="/workspace/hermes/actions/a-d2/undo""#), "its comment: deleted with its token");
     assert!(!html.contains("actions/a-d3/undo"), "a move: Fizzy doesn't say from where");
     assert!(!html.contains("isn't known, so what it does directly"));
+    // A line about a card opens its sheet; Fizzy only with `fizzy_links`.
+    assert!(html.contains(r#"<a href="/workspace/cards/13" data-ws-open-sheet="13">Created #13 Guest slip in lobby</a>"#), "{html}");
+    assert!(!html.contains("fizzy.example"), "{html}");
+    let managers = askama::Template::render(&crate::hermes::HermesPage { fizzy_links: true, ..page.clone() }).unwrap();
+    assert!(managers.contains(r#"href="https://fizzy.example/897/cards/13" target="_blank" rel="noopener""#), "{managers}");
     let for_karim = askama::Template::render(&workspace.hermes_page(&karim(), "all", &Messages(Vec::new())).await.unwrap()).unwrap();
     assert!(!for_karim.contains("data-ws-undo") && for_karim.contains("Duty managers and the person it was for can undo this."));
 

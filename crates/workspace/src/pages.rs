@@ -178,7 +178,11 @@ pub struct BoardColumn {
 #[template(path = "workspace/board.html")]
 pub struct BoardView {
     pub board_name: String,
+    /// The board in Fizzy, in the header's "⋯" menu with `fizzy_links`.
     pub board_url: Option<String>,
+    /// Links to Fizzy: duty managers and administrators on the LAN only
+    /// ([`crate::Workspace::fizzy_links`]; the adapter sets it).
+    pub fizzy_links: bool,
     pub columns: Vec<BoardColumn>,
     pub departments: Vec<Choice>,
     pub severities: Vec<Choice>,
@@ -272,6 +276,7 @@ pub fn board(config: &WorkspaceConfig, snapshot: &Snapshot, settings: &Settings,
             let account = snapshot.account.as_deref()?;
             Some(format!("{}/{account}/boards/{}", config.link_base(), board.id))
         }),
+        fizzy_links: false,
         columns,
         departments: settings
             .departments
@@ -363,7 +368,11 @@ pub struct CardSheet {
     pub number: u64,
     pub title: String,
     pub board_name: String,
+    /// The card in Fizzy, in the header's "⋯" menu with `fizzy_links`.
     pub fizzy_url: String,
+    /// Links to Fizzy: duty managers and administrators on the LAN only
+    /// ([`crate::Workspace::fizzy_links`]; the adapter sets it).
+    pub fizzy_links: bool,
     pub tone: &'static str,
     pub state: String,
     pub severity: Option<&'static str>,
@@ -376,8 +385,11 @@ pub struct CardSheet {
     pub steps: Vec<StepItem>,
     pub steps_done: usize,
     pub comments: Vec<CommentItem>,
-    /// Earlier comments than those shown exist (they're in Fizzy).
+    /// Earlier comments than those shown exist: "Show earlier comments" (`?comments=all`), or,
+    /// with `all_comments`, a note that only the last [`crate::actions::SHEET_ALL_COMMENTS`] are.
     pub earlier_comments: bool,
+    /// The sheet was asked for with `?comments=all`.
+    pub all_comments: bool,
     pub moves: Vec<Choice>,
     /// `POST <action_url>/<change>`.
     pub action_url: String,
@@ -390,6 +402,7 @@ pub struct SheetInput<'a> {
     /// The newest comments, oldest first.
     pub comments: &'a [Comment],
     pub earlier_comments: bool,
+    pub all_comments: bool,
     pub columns: &'a [Column],
     pub can_change: bool,
     pub can_comment: bool,
@@ -407,6 +420,7 @@ pub fn card_sheet(config: &WorkspaceConfig, snapshot: &Snapshot, settings: &Sett
         title: if card.title.trim().is_empty() { "Untitled".into() } else { card.title.trim().to_string() },
         board_name: card.board.as_ref().map(|board| board.name.clone()).unwrap_or_else(|| board_name(config, snapshot)),
         fizzy_url: card_link(config, snapshot, card.number).unwrap_or_else(|| card.url.clone()),
+        fizzy_links: false,
         tone: state.tone(),
         state: state.label().to_string(),
         severity: severity.map(Severity::as_str),
@@ -447,6 +461,7 @@ pub fn card_sheet(config: &WorkspaceConfig, snapshot: &Snapshot, settings: &Sett
             })
             .collect(),
         earlier_comments: input.earlier_comments,
+        all_comments: input.all_comments,
         moves: move_choices(card, input.columns),
         action_url: sheet_path(card.number),
         can_change: input.can_change,

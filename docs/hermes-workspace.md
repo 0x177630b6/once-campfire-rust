@@ -23,7 +23,8 @@ after them.
 - **Home** (`/workspace`): *To confirm* (Hermes drafts nobody answered), *Open tickets* (the
   incident board's cards that aren't closed — any ticket: requests, faults, complaints, incidents — by column, most severe first), *Mentions* (Fizzy comments
   on incident-board cards that @mention you), *Handover* (incident cards changed in the last 12 h).
-  Every card links to Fizzy.
+  Every card, mention and Hermes-log line opens the card's sheet in the app (see "Tickets stay in
+  Campfire" below).
 
 This is a fork-only feature. **It is entirely off unless `FIZZY_URL` and `FIZZY_TOKEN` are set**:
 no routes (404), no hooks installed, so every page renders byte for byte what upstream renders.
@@ -38,7 +39,7 @@ no routes (404), no hooks installed, so every page renders byte for byte what up
 | `FIZZY_ACCOUNT` | the token's first account | The account slug (digits), e.g. `897362094` |
 | `FIZZY_POLL_S` | `30` | Seconds between polls (minimum 5) |
 | `WORKSPACE_INCIDENT_BOARD` | `Incident Log` | The incident board, by name (case-insensitive) or id |
-| `CAMPFIRE_PUBLIC_URL` | unset | Campfire as *browsers* reach it, e.g. `https://192.168.0.114:8443`, for the link from a card created from a message back to that message. Unset: the comment gives the message's path as text (see below) |
+| `CAMPFIRE_PUBLIC_URL` | unset | Campfire as *browsers* reach it, e.g. `https://192.168.0.114:8443`, for the link from a card created from a message back to that message. Unset: the comment gives the message's path as text (see below). When its host isn't `FIZZY_PUBLIC_URL`'s (Campfire published on a public hostname, e.g. through the `public` profile's Cloudflare Tunnel), requests on that host are **public**: no Fizzy links on the pages, even for duty managers (see "Tickets stay in Campfire") |
 | `HERMES_BOT` | unset | Phase 2: Hermes's Campfire bot, by user id or exact name: the **only** bot whose proposals Campfire takes (the two `/hermes/:bot_key/workspace/proposals` routes; any other bot gets `403 {"status": "refused", "error": "not_hermes_bot"}`, logged). Unset: `GEMINI_LIVE_VOICE_BOT` (the bot live voice reports go to) when set, else the instance's only active bot; with several active bots and neither set, every proposal is refused until it's set. Compose passes `HERMES_BOT` from `deploy/.env` |
 | `HERMES_FIZZY_TOKEN` | unset | Phase 2: Hermes's **own** Fizzy token (`write`; compose passes `FIZZY_AGENT_TOKEN`). What Campfire runs for Hermes (its proposals, the undo of its comments) is written with it, so Fizzy shows Hermes as the author, and the Hermes log learns Hermes's Fizzy user from it (`GET /my/identity`). Unset: those writes use `FIZZY_TOKEN`, their comments start with "Hermes: ", Hermes's comments can't be deleted by undo, and Hermes's Fizzy user must be set in the settings for its direct actions to be logged. Never logged or shown |
 
@@ -156,12 +157,18 @@ are never changed.
   department tag and any severities (`?dept=engineering&sev[]=critical&sev[]=high`). A Move menu
   on each card (New, a column, Monitoring, Closed). On phones one column at a time, with a column
   switcher; side by side on wide screens. The Boards tab of the tab bar.
-- **Card sheet** (`/workspace/cards/:n`, and the overlay a chip, a panel card or a board card
-  opens; a modified click on a chip still opens Fizzy): read fresh from Fizzy. Title, severity
+- **Card sheet** (`/workspace/cards/:n`, and the overlay a chip, a panel card, a board card, a
+  Home tile, a mention or a Hermes-log line opens; a modified click on a chip still opens Fizzy):
+  read fresh from Fizzy. Title, severity
   (a single-choice select), column (select), owners (read-only), department tags (toggles),
   other tags, the description as text ("Report", collapsed), steps (tickable), the comment thread
-  (the **newest 100** Fizzy comments, oldest first, newest last, under "Earlier comments are in
-  Fizzy" with a link when there are more), a comment box, "Open in Fizzy". Fizzy lists comments
+  (the **newest 100** Fizzy comments, oldest first, newest last, under **"Show earlier comments"**
+  when there are more), a comment box, and for duty managers on the LAN only a "⋯" menu with
+  "Open in Fizzy (browser) ↗". "Show earlier comments" is a link to `?comments=all`, which the
+  script loads into the sheet in place (keeping what was typed in the comment box): the same
+  read, visibility check included, keeping up to 1,000 comments (`actions::SHEET_ALL_COMMENTS`;
+  beyond that the sheet says "Only the last 1000 comments are shown"). A change made afterwards
+  brings the sheet back to the newest 100. Fizzy lists comments
   oldest first in geared pages (15, 30, 50, then 100) with only a `rel="next"` link, so the sheet
   reads page 1, takes the total from its `X-Total-Count` header (set by `geared_pagination` on
   JSON lists), and jumps to the page holding the 100th newest comment and the ones after it: three
@@ -686,6 +693,36 @@ ambiguity it avoids. Drafts' typed answers (`drafts::is_decision_reply`) also co
 confirm / cancel words in Spanish, Portuguese, Italian, German, Arabic, Tagalog and Hindi (whole
 words; « si », « hindi » and « لا » only on their own). The live voice page (`docs/hermes-gemini-live.md`) takes tickets in any language.
 
+## Tickets stay in Campfire
+
+Most staff have no Fizzy account (Fizzy's sign-in is a dead end for them, its email codes can't be
+delivered), and Fizzy isn't reachable from outside once Campfire is published on a public hostname.
+So nothing on the workspace's pages sends people to Fizzy:
+
+- **Everyone**: Home's tiles (Open tickets, No department, Handover), its Mentions and the Hermes
+  log's card lines open the card's sheet, like the chips, the room panel and the board: an `href`
+  to `/workspace/cards/<n>` (the sheet's page, without the script) and `data-ws-open-sheet`
+  (the overlay; a modified click keeps the link's own behaviour, the sheet's page in a new tab).
+  Older comments load in the sheet ("Show earlier comments").
+- **Duty managers and administrators, on the LAN only** (`Workspace::fizzy_links(viewer, lan)`,
+  one `fizzy_links: bool` on each of `HomeView`, `BoardView`, `CardSheet` and `HermesPage`, set by
+  the adapter): "Open in Fizzy (browser) ↗" in a "⋯" menu in the sheet's and the board's headers,
+  "<board> in Fizzy ↗" in Home's Open tickets header, and "Fizzy ↗" after a Hermes-log line about a
+  card. All `target="_blank" rel="noopener"`.
+- **LAN or public** is the adapter's call (`on_lan`), from `WorkspaceConfig::is_public_request`: a
+  request is public when `CAMPFIRE_PUBLIC_URL` is set, its host differs from `FIZZY_PUBLIC_URL`'s,
+  and the request's `Host`, one of its `X-Forwarded-Host` values or its URI's authority is that host
+  (case-insensitive, ports ignored). On the LAN-only setup both URLs are the LAN host: nothing is
+  public. Any match counts, so a forged `X-Forwarded-Host` can't make a tunnelled request (whose
+  `Host` Cloudflare sets to the public hostname) look local; a LAN browser that forges one only
+  loses the links. This is a convenience, not a control: Fizzy still asks for its own sign-in.
+- **Left as they are** (message content and Fizzy-side links): the chips' `href` (the card in Fizzy:
+  a plain tap opens the sheet, but a long-press "open in new tab", a modified click or a page
+  without the script goes to Fizzy; a chip the viewer may not see becomes a plain link to Fizzy),
+  the alerts' and direct messages' card links (`alerts::link_html`), the handover message's card
+  lines, "New card: <link>" posted in the room after "Create a card", and the card links in
+  Hermes's own messages. They render as chips where the viewer may see the card.
+
 ## Routes and contract
 
 All answer **404 while the workspace is off**, run `ApplicationController`'s chain (session cookie
@@ -700,7 +737,7 @@ redirects to the sign-in page (fetch follows it): the script says to sign in aga
 | `GET /workspace/cards.json?numbers=12,13` | `200 {"cards": {"12": "<a class=\"ws-chip\" …>…</a>"}, "visibility": "everyone" \| "by_department_room"}`: the chips of the incident-board cards the workspace knows **that the viewer may see** (at most 50 asked); unknown numbers are omitted and fetched at the next poll, cards on other boards and hidden cards are always omitted |
 | `POST /workspace/drafts/:message_id/reply` `{"decision": "confirm" \| "dismiss"}` | `201 {"message_id", "reply": "confirm" \| "cancel"}`; `404` when the message isn't in one of the user's rooms; `422 invalid_decision`; `422 not_a_draft` (not from an active bot, or not a draft); `403 forbidden` (policy) |
 | `GET /workspace/board?dept=&sev[]=` | The board (HTML) |
-| `GET /workspace/cards/:number[?fragment=1]` | The card's sheet (page, or fragment for the overlay); `404` not on the incident board; `502` + a notice when Fizzy doesn't answer |
+| `GET /workspace/cards/:number[?fragment=1][&comments=all]` | The card's sheet (page, or fragment for the overlay; `comments=all`: up to 1,000 comments instead of 100); `404` not on the incident board or not visible to the viewer; `502` + a notice when Fizzy doesn't answer |
 | `GET /workspace/cards/new?message_id=…\|room_id=…[&fragment=1]` | The new-card form; `404` for a message or room that isn't the user's, then `403` (a notice) when the policy doesn't let them create cards |
 | `POST /workspace/cards` `{"title", "description", "severity", "department" \| "departments", "message_id" \| "room_id"}` | `201 {"number", "url", "chip", "message_id", "warning"}` (`message_id` = the room message with the link); `403`, `404`, `422`, `502` |
 | `POST /workspace/cards/:number/:change` — `move {"to": "new"\|"column:<id>"\|"not_now"\|"closed"}`, `severity {"severity": "high"\|""}`, `departments {"tags": […]}`, `step {"step_id", "completed"}`, `comment {"body"}` | `200 {"number", "sheet", "chip"}` (the fresh sheet and chip); unknown change `404`; `403`, `404`, `422`, `502` |
@@ -722,7 +759,7 @@ redirects to the sign-in page (fetch follows it): the script says to sign in aga
 | Path | What |
 |---|---|
 | `crates/workspace` (`campfire_workspace`) | The feature. Depends on no `campfire_*` crate (askama, base64, jiff, regex, serde, serde_json, and tokio for its `sync::Mutex` only), so `cargo test -p campfire_workspace --offline` runs anywhere, without libvips or the parity seed |
-| `…/src/config.rs` | `WorkspaceConfig::from_lookup`, `Secret` |
+| `…/src/config.rs` | `WorkspaceConfig::from_lookup`, `is_public_request`, `Secret` |
 | `…/src/fizzy.rs` | Fizzy types (lenient decoding), `HttpClient` trait (the app implements it), `Client` (paths, pagination), `@mention` reading from rich text |
 | `…/src/cache.rs` | `Snapshot` and the poll |
 | `…/src/chips.rs` | Card URL matching, chip HTML, message decoration |
@@ -866,8 +903,14 @@ Not seams (fork-owned or new files): `crates/workspace/**`, `controllers/workspa
   known, card creation (tags, the comment linking back, the cache and the room panel updated at
   once), creation with failing tags (created, with a warning), input validation, the sheet
   (fields, escaping, controls disabled by the policy; with 250 comments in geared pages the newest
-  100, in three requests, under "Earlier comments are in Fizzy", also without `X-Total-Count`), the board (columns, filters, Move menus,
-  settings link), room panels, the prefilled form, the settings page and the bot JSON; settings
+  100, in three requests, under "Show earlier comments", also without `X-Total-Count`; with
+  `comments=all` all 250, and 1,000 of 1,030 with the note; no Fizzy link for staff, the "⋯" menu
+  with `fizzy_links`; `fizzy_links` only for duty managers and administrators on the LAN), the
+  board (columns, filters, Move menus, settings link, the "⋯" menu only with `fizzy_links`), Home
+  (every tile, mention and handover card opens the sheet; the board's Fizzy link only with
+  `fizzy_links`), the Hermes log's card lines (the sheet; Fizzy only with `fizzy_links`), public
+  requests (`is_public_request`: unset, LAN-only, tunnel host, ports, case, a forged
+  `X-Forwarded-Host`), the earlier comments of a hidden card (404, no comment read), room panels, the prefilled form, the settings page and the bot JSON; settings
   (validation, normalization, atomic save and reload, a broken, invalid or unreadable file failing
   closed while a missing one is the defaults, the settings page's warning, a failed write being an
   I/O error that changes nothing, concurrent saves ending with file and memory agreeing), the
@@ -953,8 +996,9 @@ the tab bar on a phone (composer not covered, hidden while typing), Home; for ph
 settings page (add a department linked to a room), the room's "N cards" button and panel (wide:
 a column between the conversation and the sidebar; phone: a sheet), the message menu's card
 entry and the form, the board (phone: one column and the switcher; wide: columns side by side),
-Move, the sheet (severity twice, a department, a step, a comment, "Open in Fizzy"), light and
-dark.
+Move, the sheet (severity twice, a department, a step, a comment, "Show earlier comments", the
+"⋯" menu as a duty manager on the LAN and its absence through the public hostname), Home's tiles
+opening the sheet, light and dark.
 
 ## Deliberately deferred or different from the mockup
 

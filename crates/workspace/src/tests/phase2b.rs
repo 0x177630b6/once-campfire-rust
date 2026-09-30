@@ -148,8 +148,13 @@ async fn restricted_departments_are_hidden_on_every_surface() {
     assert_eq!(panel(&sam()), [13, 14]);
 
     // The card sheet and changes: as good as missing, nothing written.
+    fizzy.requests.lock().unwrap().clear();
     assert_eq!(workspace.card_sheet(&fizzy, &karim(), 12).await.unwrap_err(), ActionError::NotFound);
+    // "Show earlier comments" (`?comments=all`): the same check, and no comment is read.
+    assert_eq!(workspace.card_sheet_with(&fizzy, &karim(), 12, true).await.unwrap_err(), ActionError::NotFound);
+    assert!(!fizzy.paths().iter().any(|path| path.contains("/comments.json")), "{:?}", fizzy.paths());
     assert!(workspace.card_sheet(&fizzy, &sam(), 12).await.is_ok());
+    assert!(workspace.card_sheet_with(&fizzy, &sam(), 12, true).await.unwrap().all_comments);
     let refused = workspace.change_card(&fizzy, &karim(), 12, Change::Comment("seen".into())).await.unwrap_err();
     assert_eq!(refused, ActionError::NotFound);
     assert!(fizzy.writes().is_empty(), "nothing written for a hidden card");

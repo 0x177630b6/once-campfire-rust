@@ -849,6 +849,8 @@ impl Workspace {
                 },
                 failed: matches!(entry.kind, Kind::Failed | Kind::Refused),
                 text: entry.text.clone(),
+                card_number: entry.card,
+                sheet_url: entry.card.map(crate::pages::sheet_path),
                 card_url: entry.card.and_then(card_url),
                 for_label: for_label(entry),
                 source: entry.source.clone().unwrap_or_else(|| "source unknown".into()),
@@ -879,6 +881,8 @@ impl Workspace {
                 tone: "chat",
                 failed: kind == "failures",
                 text,
+                card_number: None,
+                sheet_url: None,
                 card_url: None,
                 for_label: None,
                 source: format!("in {}", message.room_name),
@@ -914,6 +918,7 @@ impl Workspace {
             },
             retry_seconds: self.config.poll_interval.as_secs(),
             settings_url: viewer.administrator.then(|| crate::pages::SETTINGS_PATH.to_string()),
+            fizzy_links: false,
         }
     }
 
@@ -1091,6 +1096,10 @@ pub struct LogItem {
     pub tone: &'static str,
     pub failed: bool,
     pub text: String,
+    /// The card it's about: its number, its sheet (what the text opens) and, for `fizzy_links`,
+    /// the card in Fizzy.
+    pub card_number: Option<u64>,
+    pub sheet_url: Option<String>,
     pub card_url: Option<String>,
     pub for_label: Option<String>,
     pub source: String,
@@ -1115,6 +1124,9 @@ pub struct HermesPage {
     pub fizzy: FizzyStatus,
     pub retry_seconds: u64,
     pub settings_url: Option<String>,
+    /// Links to Fizzy next to the log's cards: duty managers and administrators on the LAN only
+    /// ([`crate::Workspace::fizzy_links`]; the adapter sets it).
+    pub fizzy_links: bool,
 }
 
 /// The proposals' JSON for `GET /workspace/hermes/proposals.json`.

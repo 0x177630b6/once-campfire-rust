@@ -1,6 +1,7 @@
 {#- Hermes fork: the Hermes tab (campfire_workspace::hermes::HermesPage): pending proposals, then
     Hermes's log. Styles: hermes/workspace.css; hermes/workspace.js handles Confirm / Dismiss and
-    Undo. -#}
+    Undo. A log line about a card opens its sheet; Fizzy links only with `fizzy_links` (duty managers
+    and administrators, on the LAN). -#}
 <section class="ws-home ws-hermes" aria-labelledby="ws-hermes-title" data-ws-hermes>
   <h1 id="ws-hermes-title" class="for-screen-reader">Hermes</h1>
 
@@ -64,7 +65,8 @@
         <p class="ws-item__meta"><span class="ws-via ws-via--{{ item.tone }}">{{ item.via }}</span> · <time datetime="{{ item.at }}" data-local-time-target="datetime"></time>
           {%- if let Some(label) = item.for_label %} · {{ label }}{% endif %} · {{ item.source }}
           {%- if let Some(by) = item.by_label %} · {{ by }}{% endif %}</p>
-        <p class="ws-item__title">{% if let Some(url) = item.card_url %}<a href="{{ url }}" target="_blank" rel="noopener">{{ item.text }}</a>{% else %}{{ item.text }}{% endif %}</p>
+        <p class="ws-item__title">{% if let (Some(url), Some(number)) = (item.sheet_url.as_deref(), item.card_number) %}<a href="{{ url }}" data-ws-open-sheet="{{ number }}">{{ item.text }}</a>{% else %}{{ item.text }}{% endif %}
+          {%- if fizzy_links %}{% if let Some(url) = item.card_url %} <a class="ws-link ws-log__fizzy" href="{{ url }}" target="_blank" rel="noopener" title="Opens Fizzy in the browser">Fizzy ↗</a>{% endif %}{% endif %}</p>
         {%- if let Some(error) = item.error %}
         <p class="ws-item__text ws-log__error">{{ error }}</p>
         {%- endif %}

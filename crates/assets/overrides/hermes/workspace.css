@@ -919,6 +919,40 @@ dialog.ws-overlay {
   .ws-sheet__close {
     margin-inline-start: auto;
   }
+
+  .ws-more {
+    margin-inline-start: auto;
+  }
+
+  .ws-more + .ws-sheet__close {
+    margin-inline-start: 0;
+  }
+}
+
+/* The "⋯" menu (sheet and board headers): the duty managers' links to Fizzy, on the LAN. */
+.ws-more {
+  position: relative;
+
+  summary {
+    list-style: none;
+
+    &::-webkit-details-marker {
+      display: none;
+    }
+  }
+}
+
+.ws-more__menu {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border-dark);
+  border-radius: 0.5em;
+  box-shadow: var(--ws-shadow);
+  inset-block-start: calc(100% + 0.3em);
+  inset-inline-end: 0;
+  padding: 0.6em 0.9em;
+  position: absolute;
+  white-space: nowrap;
+  z-index: 5;
 }
 
 .ws-sheet-page .ws-sheet__close {

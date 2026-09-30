@@ -13,6 +13,8 @@
 // - Card sheet (phase 1): a chip, a card in a room's panel or on the board opens the card's sheet
 //   in an overlay (GET /workspace/cards/:n?fragment=1); its controls POST JSON to
 //   /workspace/cards/:n/<change> and the sheet, the chips and the panel are refreshed from the reply.
+//   Home's tiles, its mentions and the Hermes log's cards open it too. "Show earlier comments"
+//   reloads the sheet in place with ?comments=all (a plain link to that page without the script).
 // - Board: one column at a time on phones (the column switcher), Move menus on cards.
 // - Room panel: the cards of the departments linked to the room, behind a "N cards" button the
 //   script adds to the room's nav; open or closed is remembered per browser.
@@ -371,6 +373,13 @@ function plainClick(event) {
 
 onEvent("click", event => {
   if (!plainClick(event)) return
+  const earlier = event.target.closest?.(".ws-sheet a[data-ws-earlier-comments]")
+  if (earlier) {
+    event.preventDefault()
+    showEarlierComments(earlier.closest(".ws-sheet"), earlier.getAttribute("href"))
+    return
+  }
+
   const opener = event.target.closest?.("a.ws-chip[data-ws-card], [data-ws-open-sheet]")
   if (opener) {
     const number = opener.dataset.wsOpenSheet || opener.dataset.wsCard
@@ -448,6 +457,26 @@ async function changeCard(sheet, kind, body) {
         showStatus(next, error.message, "error")
       }
     }
+  } finally {
+    sheet.removeAttribute("aria-busy")
+  }
+}
+
+// The sheet again with every comment (up to the server's cap), keeping what was typed.
+async function showEarlierComments(sheet, url) {
+  if (sheet.getAttribute("aria-busy") === "true") return
+  sheet.setAttribute("aria-busy", "true")
+  showStatus(sheet, "Loading earlier comments…")
+  try {
+    const { ok, html } = await getFragment(url)
+    const next = ok && fragment(html)
+    if (!next) throw new Error("The earlier comments couldn’t be loaded; try again in a moment.")
+    const typed = sheet.querySelector("[data-ws-comment] textarea")?.value || ""
+    const box = next.querySelector("[data-ws-comment] textarea")
+    if (box) box.value = typed
+    sheet.replaceWith(next)
+  } catch (error) {
+    showStatus(sheet, error.message, "error")
   } finally {
     sheet.removeAttribute("aria-busy")
   }

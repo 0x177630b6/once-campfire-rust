@@ -1,5 +1,5 @@
       <li class="ws-card ws-cc--{{ card.tone }}{% if card.closed %} ws-card--closed{% endif %}">
-        <a class="ws-card__link" href="{{ card.url }}" target="_blank" rel="noopener">
+        <a class="ws-card__link" href="{{ card.sheet_url }}" data-ws-open-sheet="{{ card.number }}">
           <span class="ws-card__head"><span class="ws-card__no">No. {{ card.number }} · {{ card.state }}</span>{% if let Some(severity) = card.severity %}<span class="ws-sev ws-sev--{{ severity }}">{{ severity }}</span>{% endif %}</span>
           <span class="ws-card__title">{{ card.title }}</span>
           <span class="ws-card__meta">
