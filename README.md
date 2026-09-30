@@ -25,7 +25,7 @@ protocol recordings all come from running the real Rails app.
 | `rails_compat` | Rails' signed and encrypted cookies, signed IDs, signed global IDs, Turbo stream names and bcrypt, byte-compatible with Rails so sessions carry over |
 | `kit` | Rack, Action Dispatch and Thruster, on Axum: Rails-style nested params, sessions, flash, format negotiation, forgery protection by `Sec-Fetch-Site`, ETags and gzip built from a page's cached parts, plus an in-process front server with TLS and ACME, HTTP/2 and Thruster's response cache |
 | `db` | Active Record over the existing schema (rusqlite), with the same callbacks, timestamps and STI values, and a Rails-compatible fixture loader |
-| `richtext` | The Action Text pipeline: sanitizing, mentions, opengraph embeds and autolinking, byte-identical to Rails on a 647-case corpus apart from the deliberate differences below |
+| `richtext` | The Action Text pipeline: sanitizing, mentions, opengraph embeds and autolinking, byte-identical to Rails on a 658-case corpus apart from the deliberate differences below |
 | `storage` | Active Storage: the same blob keys, disk layout, variants (libvips) and video previews (ffmpeg), with byte-identical thumbnails |
 | `cable` | The Action Cable protocol server and pub/sub, frame-for-frame with Rails, on a WebSocket implementation of its own that shares and compresses broadcasts |
 | `assets` | Propshaft and importmap-rails, with identical fingerprinted filenames and tags |
@@ -398,9 +398,17 @@ Deliberate:
 - **The front server is stricter than Thruster.** The app's own listener on `TARGET_PORT` binds
   loopback only (Puma bound every interface) and has the front's timeouts and `MAX_REQUEST_BODY`
   (see [Running it](#running-it)). The response cache counts its keys toward `CACHE_SIZE`, skips
-  URIs longer than 2 KB, keys on the raw path (Thruster decoded it, so `/a%2Fb` and `/a/b` shared
-  an entry), and lets range requests through to the app instead of answering them with a whole
-  cached body.
+  URIs longer than 2 KB, keys on the raw path and query, and lets range requests through to the app
+  instead of answering them with a whole cached body. Thruster decoded the path, so `/a%2Fb` and
+  `/a/b` shared an entry. It also sorted and re-escaped the query and dropped any pair containing
+  `;`, so `?disposition=attachment;`, which the app reads, shared the entry of no query at all.
+  Between requests, an HTTP/1 keep-alive connection closes once the shorter of `HTTP_IDLE_TIMEOUT`
+  and `HTTP_READ_TIMEOUT` has passed since the previous response, unless the next request's headers
+  have arrived, because hyper's header timer runs while the connection waits. Thruster waited the
+  idle timeout for the next request's first bytes and then gave it the whole read timeout. With the
+  image's settings (60 and 300 seconds) idle connections close after 60 seconds either way; without
+  them the defaults are 60 and 30, so an idle HTTP/1 connection closes after 30 seconds. HTTP/2
+  connections get the idle timeout.
 - **Media is processed off the database writer.** Rails saves a blob's row and then uploads its
   file after commit; here the upload is copied into storage first, straight from the request's
   tempfile, and deleted again if the save fails. Variants, video posters and analysis run on
@@ -459,7 +467,7 @@ Not fully covered:
 
 - HTTP-01 ACME validation is only unit-tested. TLS-ALPN-01 was tested end to end against a local
   ACME server.
-- Rich text is checked against Rails on a 647-case corpus, 400 of them fuzzed, which matches
+- Rich text is checked against Rails on a 658-case corpus, 400 of them fuzzed, which matches
   exactly apart from the deliberate differences above. Active Storage attachments embedded in a
   message body, which Campfire's composer can't create, render as ☒.
 

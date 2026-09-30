@@ -74,7 +74,7 @@ type ChannelFactory<U> = Arc<dyn Fn() -> Box<dyn Channel<U>> + Send + Sync>;
 pub struct ServerBuilder<U: Send + Sync + 'static> {
     config: Config,
     authenticator: Arc<dyn Authenticate<U>>,
-    channels: HashMap<String, ChannelFactory<U>>,
+    channels: HashMap<Arc<str>, ChannelFactory<U>>,
 }
 
 impl<U: Identified + Send + Sync + 'static> ServerBuilder<U> {
@@ -85,7 +85,7 @@ impl<U: Identified + Send + Sync + 'static> ServerBuilder<U> {
         C: Channel<U>,
         F: Fn() -> C + Send + Sync + 'static,
     {
-        self.channels.insert(class_name.to_string(), Arc::new(move || Box::new(factory()) as Box<dyn Channel<U>>));
+        self.channels.insert(class_name.into(), Arc::new(move || Box::new(factory()) as Box<dyn Channel<U>>));
         self
     }
 
@@ -118,7 +118,7 @@ struct Inner<U: Send + Sync + 'static> {
     config: Config,
     hub: Arc<Hub>,
     authenticator: Arc<dyn Authenticate<U>>,
-    channels: HashMap<String, ChannelFactory<U>>,
+    channels: HashMap<Arc<str>, ChannelFactory<U>>,
     heartbeat: OnceLock<watch::Receiver<Frame>>,
     restart: broadcast::Sender<()>,
 }
@@ -181,9 +181,10 @@ impl<U: Send + Sync + 'static> Server<U> {
         &self.inner.authenticator
     }
 
-    pub(crate) fn channel_factory(&self, class_name: &str) -> Option<&ChannelFactory<U>> {
-        // `safe_constantize` resolves "::RoomChannel" too.
-        self.inner.channels.get(class_name.strip_prefix("::").unwrap_or(class_name))
+    /// The channel a client's `channel` names, with its class name: `safe_constantize` resolves
+    /// "::RoomChannel" too, but the class (and so every broadcasting it names) is "RoomChannel".
+    pub(crate) fn channel(&self, requested: &str) -> Option<(&Arc<str>, &ChannelFactory<U>)> {
+        self.inner.channels.get_key_value(requested.strip_prefix("::").unwrap_or(requested))
     }
 
     pub(crate) fn heartbeat(&self) -> watch::Receiver<Frame> {

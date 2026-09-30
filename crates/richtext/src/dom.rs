@@ -6,11 +6,13 @@
 //! and Loofah's `to_html` produce for HTML5 documents.
 
 use std::borrow::Cow;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
-use html5ever::interface::{ElemName, ElementFlags, NodeOrText, QuirksMode, TreeSink};
-use html5ever::tendril::{StrTendril, TendrilSink};
-use html5ever::{Attribute, LocalName, Namespace, ParseOpts, QualName, local_name, ns};
+use html5ever::interface::{ElemName, ElementFlags, NodeOrText, QuirksMode, TreeSink, create_element};
+use html5ever::tendril::StrTendril;
+use html5ever::tokenizer::{BufferQueue, Token, TokenSink, TokenSinkResult, Tokenizer, TokenizerOpts};
+use html5ever::tree_builder::{TreeBuilder, TreeBuilderOpts};
+use html5ever::{Attribute, LocalName, Namespace, QualName, TokenizerResult, local_name, ns};
 
 pub type NodeId = usize;
 
@@ -308,8 +310,7 @@ impl Dom {
 
     /// Parses `html` in the given context and returns the resulting top-level nodes, detached.
     pub fn parse_nodes(&mut self, html: &str, context: &Context) -> Result<Vec<NodeId>, ParseError> {
-        let parsed = parse_with_html5ever(html, context);
-        check_limits(&parsed)?;
+        let parsed = parse_with_html5ever(html, context)?;
         let root = parsed.fragment_root();
         let children = parsed.nodes[root].children.clone();
         let offset = self.nodes.len();
@@ -505,23 +506,6 @@ fn escape_text(value: &str, out: &mut String) {
 
 // --- html5ever glue ------------------------------------------------------------------------------
 
-fn check_limits(parsed: &ParsedTree) -> Result<(), ParseError> {
-    let root = parsed.fragment_root();
-    let mut stack: Vec<(NodeId, usize)> = parsed.nodes[root].children.iter().map(|&c| (c, 1)).collect();
-    while let Some((n, depth)) = stack.pop() {
-        if let NodeData::Element(e) = &parsed.nodes[n].data {
-            if depth > MAX_TREE_DEPTH {
-                return Err(ParseError::TreeDepthExceeded);
-            }
-            if e.attrs.len() > MAX_ATTRIBUTES {
-                return Err(ParseError::TooManyAttributes);
-            }
-            stack.extend(parsed.nodes[n].children.iter().map(|&c| (c, depth + 1)));
-        }
-    }
-    Ok(())
-}
-
 struct ParsedTree {
     nodes: Vec<Node>,
 }
@@ -538,14 +522,95 @@ impl ParsedTree {
     }
 }
 
-fn parse_with_html5ever(html: &str, context: &Context) -> ParsedTree {
-    let mut opts = ParseOpts::default();
-    // Gumbo parses without scripting, so <noscript> content is markup rather than raw text
-    opts.tree_builder.scripting_enabled = false;
-    opts.tree_builder.quirks_mode = QuirksMode::NoQuirks;
+/// `html5ever::driver::parse_fragment`, held to Gumbo's limits as it goes, the way Gumbo is,
+/// rather than checked once the tree is built: html5ever's scope checks walk the stack of open
+/// elements, so building a deeply nested tree in full takes quadratic time.
+fn parse_with_html5ever(html: &str, context: &Context) -> Result<ParsedTree, ParseError> {
     let sink = Sink { nodes: RefCell::new(vec![Node { data: NodeData::Document, parent: None, children: vec![] }]) };
-    let parser = html5ever::driver::parse_fragment(sink, opts, context.name.clone(), Vec::new(), false);
-    parser.one(StrTendril::from(html))
+    let context_element = create_element(&sink, context.name.clone(), Vec::new());
+    let tree_builder = TreeBuilder::new_for_fragment(sink, context_element, None, tree_builder_opts());
+    let tokenizer_opts = TokenizerOpts {
+        initial_state: Some(tree_builder.tokenizer_state_for_context_elem(false)),
+        max_attributes: Some(MAX_ATTRIBUTES),
+        // Gumbo drops a byte order mark only at the start. html5ever drops one at the start of
+        // every feed, and input is fed again after each </script>.
+        discard_bom: false,
+        ..TokenizerOpts::default()
+    };
+    let input = BufferQueue::default();
+    input.push_back(StrTendril::from(html.strip_prefix('\u{feff}').unwrap_or(html)));
+    let tokenizer = Tokenizer::new(DepthLimit::new(tree_builder, &input), tokenizer_opts);
+    while let TokenizerResult::Script(_) = tokenizer.feed(&input) {}
+    tokenizer.end();
+
+    if tokenizer.sink.exceeded.get() {
+        Err(ParseError::TreeDepthExceeded)
+    } else if tokenizer.too_many_attributes() {
+        Err(ParseError::TooManyAttributes)
+    } else {
+        Ok(tokenizer.sink.tree_builder.sink.finish())
+    }
+}
+
+fn tree_builder_opts() -> TreeBuilderOpts {
+    TreeBuilderOpts {
+        // Gumbo parses without scripting, so <noscript> content is markup rather than raw text
+        scripting_enabled: false,
+        quirks_mode: QuirksMode::NoQuirks,
+        ..TreeBuilderOpts::default()
+    }
+}
+
+/// Gumbo's tree depth limit. Before it reads each token, Gumbo stops, as if the input had ended
+/// there, once the stack of open elements holds more than `max_tree_depth` elements, and Nokogiri
+/// adds one to the limit for a fragment's `html` element (nokogiri's ext/nokogiri/gumbo.c).
+///
+/// So the stack is checked as soon as a token has been handled, before the tokenizer reads on:
+/// the next token can be all the rest of the input. Gumbo doesn't check after the end of the
+/// input, though, when text left pending in a table can reopen formatting elements past the limit.
+struct DepthLimit<'input> {
+    tree_builder: TreeBuilder<NodeId, Sink>,
+    input: &'input BufferQueue,
+    exceeded: Cell<bool>,
+}
+
+impl<'input> DepthLimit<'input> {
+    const MAX_OPEN_ELEMENTS: usize = MAX_TREE_DEPTH + 1;
+
+    fn new(tree_builder: TreeBuilder<NodeId, Sink>, input: &'input BufferQueue) -> Self {
+        DepthLimit { tree_builder, input, exceeded: Cell::new(false) }
+    }
+
+    /// Stops the tokenizer by taking away the rest of the input. The few tokens it can still make
+    /// from what it has already read are ignored.
+    fn stop(&self) {
+        self.exceeded.set(true);
+        self.input.replace_with(BufferQueue::default());
+    }
+}
+
+impl TokenSink for DepthLimit<'_> {
+    type Handle = NodeId;
+
+    fn process_token(&self, token: Token, line_number: u64) -> TokenSinkResult<NodeId> {
+        if self.exceeded.get() {
+            return TokenSinkResult::Continue;
+        }
+        let reads_on = !matches!(token, Token::EOFToken);
+        let result = self.tree_builder.process_token(token, line_number);
+        if reads_on && self.tree_builder.open_elements_len() > Self::MAX_OPEN_ELEMENTS {
+            self.stop();
+        }
+        result
+    }
+
+    fn end(&self) {
+        self.tree_builder.end();
+    }
+
+    fn adjusted_current_node_present_but_not_in_html_namespace(&self) -> bool {
+        self.tree_builder.adjusted_current_node_present_but_not_in_html_namespace()
+    }
 }
 
 struct Sink {
@@ -570,6 +635,11 @@ impl Sink {
         let mut nodes = self.nodes.borrow_mut();
         nodes.push(Node { data, parent: None, children: vec![] });
         nodes.len() - 1
+    }
+
+    /// The `html` element html5ever puts the fragment's nodes under (see `ParsedTree::fragment_root`).
+    fn is_fragment_root(&self, id: NodeId) -> bool {
+        self.nodes.borrow()[id].parent == Some(self.get_document())
     }
 
     fn detach(&self, id: NodeId) {
@@ -627,13 +697,9 @@ impl TreeSink for Sink {
     }
 
     fn create_element(&self, name: QualName, attrs: Vec<Attribute>, _flags: ElementFlags) -> NodeId {
-        let mut seen: Vec<Attr> = Vec::with_capacity(attrs.len());
-        for a in attrs {
-            if !seen.iter().any(|s| s.name == a.name) {
-                seen.push(Attr { name: a.name, value: a.value.to_string() });
-            }
-        }
-        self.new_node(NodeData::Element(ElementData { name, attrs: seen }))
+        // The tokenizer has already dropped duplicate attributes
+        let attrs = attrs.into_iter().map(|a| Attr { name: a.name, value: a.value.to_string() }).collect();
+        self.new_node(NodeData::Element(ElementData { name, attrs }))
     }
 
     fn create_comment(&self, text: StrTendril) -> NodeId {
@@ -675,11 +741,19 @@ impl TreeSink for Sink {
 
     fn append_before_sibling(&self, sibling: &NodeId, new_node: NodeOrText<NodeId>) {
         let parent = self.nodes.borrow()[*sibling].parent.expect("sibling has a parent");
-        let index = self.nodes.borrow()[parent].children.iter().position(|c| c == sibling).unwrap();
+        // From the end: foster parenting inserts before an open table, which is its parent's last
+        // child, so a body of thousands of misplaced elements in a table stays linear.
+        let index = self.nodes.borrow()[parent].children.iter().rposition(|c| c == sibling).unwrap();
         self.insert_at(parent, index, new_node);
     }
 
     fn add_attrs_if_missing(&self, target: &NodeId, attrs: Vec<Attribute>) {
+        // An <html> tag in the body gives its attributes to the fragment's root <html> element,
+        // which parse_nodes never reads. Merging them there would compare each one with all the
+        // root had collected, so a body of <html> tags would take quadratic time.
+        if self.is_fragment_root(*target) {
+            return;
+        }
         if let NodeData::Element(e) = &mut self.nodes.borrow_mut()[*target].data {
             for a in attrs {
                 if !e.attrs.iter().any(|existing| existing.name == a.name) {
@@ -730,9 +804,79 @@ mod tests {
     }
 
     #[test]
-    fn enforces_gumbo_limits() {
-        let mut dom = Dom::new();
-        assert!(dom.parse_fragment(&"<b>".repeat(400)).is_ok());
-        assert_eq!(dom.parse_fragment(&"<b>".repeat(401)), Err(ParseError::TreeDepthExceeded));
+    fn drops_only_a_leading_byte_order_mark() {
+        assert_eq!(roundtrip("\u{feff}\u{feff}x"), "\u{feff}x");
+        assert_eq!(roundtrip("<script></script>\u{feff}x"), "<script></script>\u{feff}x");
+    }
+
+    fn parse(html: &str) -> Result<(), ParseError> {
+        Dom::new().parse_fragment(html).map(|_| ())
+    }
+
+    fn numbered_attributes(range: std::ops::RangeInclusive<usize>) -> String {
+        range.map(|i| format!("a{i}={i}")).collect::<Vec<_>>().join(" ")
+    }
+
+    // Gumbo's answers here come from Nokogiri 1.19.4 in the reference image.
+
+    #[test]
+    fn enforces_gumbo_tree_depth_limit() {
+        use ParseError::TreeDepthExceeded;
+        let b = |n| "<b>".repeat(n);
+        assert_eq!(parse(&b(400)), Ok(()));
+        assert_eq!(parse(&b(401)), Err(TreeDepthExceeded));
+        assert_eq!(parse(&format!("{}x", b(401))), Err(TreeDepthExceeded));
+        assert_eq!(parse(&format!("{}<p>", b(400))), Err(TreeDepthExceeded));
+        assert_eq!(parse(&format!("{}<table><td>", b(397))), Err(TreeDepthExceeded));
+    }
+
+    #[test]
+    fn counts_open_elements_as_gumbo_does_rather_than_the_final_trees_depth() {
+        use ParseError::TreeDepthExceeded;
+        let b = |n| "<b>".repeat(n);
+        let s = |n| "<span>".repeat(n);
+        let div = |n| "<div>".repeat(n);
+        // A void element never goes on the stack of open elements
+        assert_eq!(parse(&format!("{}<br>", b(400))), Ok(()));
+        assert_eq!(parse(&format!("{}</p>", b(400))), Ok(()));
+        // Closing everything again doesn't undo having been too deep
+        assert_eq!(parse(&format!("{}{}", b(401), "</b>".repeat(401))), Err(TreeDepthExceeded));
+        // The adoption agency moves blocks back up, and what counts is how deep they were
+        assert_eq!(parse(&format!("<b>{}{}</b>", s(300), div(10)).repeat(3)), Ok(()));
+        assert_eq!(parse(&format!("<b>{}{}</b>{}", s(390), div(10), div(300))), Err(TreeDepthExceeded));
+        // Text pending in a table reopens the <b>s past the limit when the input ends, and Gumbo
+        // doesn't check after that
+        let bs: String = (1..=399).map(|i| format!("<b id={i}>")).collect();
+        let reopened = format!("<p>{bs}</p><div><div><table>x");
+        assert_eq!(parse(&reopened), Ok(()));
+        assert_eq!(parse(&format!("{reopened}<!---->")), Err(TreeDepthExceeded));
+    }
+
+    #[test]
+    fn enforces_gumbo_attribute_limit() {
+        use ParseError::TooManyAttributes;
+        assert_eq!(parse(&format!("<p {}>x</p>", numbered_attributes(1..=400))), Ok(()));
+        assert_eq!(parse(&format!("<p {}>x</p>", numbered_attributes(1..=401))), Err(TooManyAttributes));
+        assert_eq!(parse(&format!("<p {}>x</p>", ["a=1"; 1000].join(" "))), Ok(()));
+        assert_eq!(parse(&format!("<textarea><p {}>", numbered_attributes(1..=401))), Ok(()));
+    }
+
+    #[test]
+    fn counts_attributes_as_gumbos_tokenizer_does() {
+        use ParseError::TooManyAttributes;
+        let attributes = numbered_attributes(1..=400);
+        // Before dropping a duplicate, on end tags, and on a tag the input ends inside
+        assert_eq!(parse(&format!("<p {attributes} a1=again>x</p>")), Err(TooManyAttributes));
+        assert_eq!(parse(&format!("<p>x</p {attributes} a401>")), Err(TooManyAttributes));
+        assert_eq!(parse(&format!("<p {attributes} a401")), Err(TooManyAttributes));
+    }
+
+    #[test]
+    fn keeps_what_the_tokenizer_already_deduplicated() {
+        assert_eq!(roundtrip("<p title=a TITLE=b id=c title=d>x</p>"), "<p title=\"a\" id=\"c\">x</p>");
+        assert_eq!(
+            roundtrip("<svg xlink:href=a href=b viewbox=c><a xlink:href=d>x</a></svg>"),
+            "<svg xlink:href=\"a\" href=\"b\" viewBox=\"c\"><a xlink:href=\"d\">x</a></svg>"
+        );
     }
 }

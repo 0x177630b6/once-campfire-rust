@@ -273,15 +273,15 @@ impl<U: Send + Sync + 'static> Connection<U> {
         if self.subscriptions.len() >= MAX_SUBSCRIPTIONS || identifier.len() > MAX_IDENTIFIER_BYTES {
             return tracing::error!(subscriptions = self.subscriptions.len(), "Could not execute command: subscription limit reached");
         }
-        let class_name = params.get("channel").and_then(Value::as_str).unwrap_or_default().to_string();
-        let Some(factory) = self.server.channel_factory(&class_name) else {
-            return tracing::error!(channel = class_name, "Subscription class not found");
+        let requested = params.get("channel").and_then(Value::as_str).unwrap_or_default();
+        let Some((class_name, factory)) = self.server.channel(requested) else {
+            return tracing::error!(channel = requested, "Subscription class not found");
         };
 
         let channel = factory();
         let sub = Subscription {
             server: self.server.clone(),
-            class_name,
+            class_name: class_name.clone(),
             identifier: identifier.into(),
             encoded_identifier: json::encode(identifier).into(),
             current_user: self.user.clone(),

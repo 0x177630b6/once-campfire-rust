@@ -399,9 +399,10 @@ async fn limits_request_bodies() {
 #[tokio::test]
 async fn closes_idle_and_slow_connections() {
     let (app, _) = test_app();
-    let server = Server::start(&[("HTTP_IDLE_TIMEOUT", "1"), ("HTTP_READ_TIMEOUT", "1"), ("HTTP_WRITE_TIMEOUT", "2")], app).await;
+    let server = Server::start(&[("HTTP_IDLE_TIMEOUT", "3"), ("HTTP_READ_TIMEOUT", "1"), ("HTTP_WRITE_TIMEOUT", "2")], app).await;
 
-    // Idle keep-alive connection.
+    // Idle keep-alive connection: over HTTP/1 it closes after the read timeout, the shorter of the
+    // two (see "The front server is stricter than Thruster" in README.md).
     let mut stream = TcpStream::connect(("127.0.0.1", server.http)).await.unwrap();
     stream.write_all(b"GET /private HTTP/1.1\r\nHost: x\r\n\r\n").await.unwrap();
     let mut buffer = vec![0; 4096];
@@ -410,7 +411,8 @@ async fn closes_idle_and_slow_connections() {
     let started = std::time::Instant::now();
     let n = tokio::time::timeout(Duration::from_secs(5), stream.read(&mut buffer)).await.unwrap().unwrap_or(0);
     assert_eq!(n, 0, "closed");
-    assert!(started.elapsed() >= Duration::from_millis(800));
+    let idle = started.elapsed();
+    assert!(idle >= Duration::from_millis(800) && idle < Duration::from_millis(2500), "closed after {idle:?}");
 
     // A request that never finishes its headers.
     let mut stream = TcpStream::connect(("127.0.0.1", server.http)).await.unwrap();
@@ -423,6 +425,24 @@ async fn closes_idle_and_slow_connections() {
     stream.write_all(b"GET /slow HTTP/1.1\r\nHost: x\r\n\r\n").await.unwrap();
     let n = tokio::time::timeout(Duration::from_secs(5), stream.read(&mut buffer)).await.unwrap().unwrap_or(0);
     assert_eq!(n, 0, "dropped without a response");
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn http2_connections_close_after_the_idle_timeout() {
+    let (app, _) = test_app();
+    let server = Server::start(&[("H2C_ENABLED", "true"), ("HTTP_IDLE_TIMEOUT", "2"), ("HTTP_READ_TIMEOUT", "1")], app).await;
+    let stream = TcpStream::connect(("127.0.0.1", server.http)).await.unwrap();
+    let (mut sender, connection) =
+        hyper::client::conn::http2::handshake(hyper_util::rt::TokioExecutor::new(), hyper_util::rt::TokioIo::new(stream)).await.unwrap();
+    let connection = tokio::spawn(connection);
+    let request = axum::http::Request::get(format!("http://127.0.0.1:{}/private", server.http)).body(Body::empty()).unwrap();
+    let reply = sender.send_request(request).await.unwrap();
+    http_body_util::BodyExt::collect(reply.into_body()).await.unwrap();
+    let started = std::time::Instant::now();
+    tokio::time::timeout(Duration::from_secs(5), connection).await.unwrap().unwrap().unwrap();
+    let idle = started.elapsed();
+    assert!(idle >= Duration::from_millis(1800) && idle < Duration::from_millis(3500), "closed after {idle:?}");
     server.stop().await;
 }
 

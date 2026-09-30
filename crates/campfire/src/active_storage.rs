@@ -285,15 +285,22 @@ fn send_blob_stream(c: &mut Ctx, blob: &Blob, disposition: Option<&str>) -> Resu
         return Ok(c.head(StatusCode::NOT_FOUND));
     }
     let disposition = content_types::forced_disposition(blob.content_type()).or(disposition).unwrap_or("inline");
-    c.send_file(
+    let response = c.send_file(
         &path,
         SendOptions {
-            filename: Some(blob.filename.sanitized()),
             content_type: Some(content_types::for_serving(blob.content_type()).to_string()),
-            disposition: Some(disposition.to_string()),
+            disposition: None,
             ..SendOptions::default()
         },
-    )
+    )?;
+    Ok(with_disposition(response, disposition, blob))
+}
+
+/// `send_data`/`send_stream`'s `Content-Disposition` for the blob's sanitized filename, built by
+/// campfire_storage, whose `I18n.transliterate` has the whole approximations table (kit's own
+/// covers Latin-1 only).
+fn with_disposition(response: Response, disposition: &str, blob: &Blob) -> Response {
+    response.header(header::CONTENT_DISPOSITION, &campfire_storage::disposition::format(disposition, &blob.filename.sanitized()))
 }
 
 /// `send_blob_byte_range_data(blob, range_header)`
@@ -323,16 +330,11 @@ fn send_blob_byte_range_data(c: &mut Ctx, blob: &Blob, range: &str) -> Result {
         (format!("multipart/byteranges; boundary={boundary}"), parts, None)
     };
     let disposition = content_types::forced_disposition(blob.content_type()).unwrap_or("inline");
-    let mut response = c.send_data(
+    let response = c.send_data(
         bytes::Bytes::new(),
-        SendOptions {
-            filename: Some(blob.filename.sanitized()),
-            content_type: Some(content_type),
-            disposition: Some(disposition.to_string()),
-            status: StatusCode::PARTIAL_CONTENT,
-            ..SendOptions::default()
-        },
+        SendOptions { content_type: Some(content_type), disposition: None, status: StatusCode::PARTIAL_CONTENT, ..SendOptions::default() },
     );
+    let mut response = with_disposition(response, disposition, blob);
     let length = parts_len(&parts);
     response.body = parts_body(parts);
     if matches!(response.body, campfire_kit::Body::Stream(_)) {

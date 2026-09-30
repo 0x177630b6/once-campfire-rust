@@ -391,3 +391,22 @@ async fn the_pool_drops_deliveries_past_its_queue() {
     }
     assert_eq!(pool.pending(), 10_050);
 }
+
+/// A delivery that panics still gives its place in the queue back, so panics can't fill it up.
+#[tokio::test]
+async fn a_panicking_delivery_frees_its_slot() {
+    let service = push_service(201, "Created").await;
+    let panicking = Network { resolver: Arc::new(PanickingResolver), ..service.net.clone() };
+    let pool = Pool::new(panicking, vapid(), |_| -> Result<(), String> { Ok(()) });
+    pool.deliver_later(notification(Receiver::new().subscription(1, "https://fcm.googleapis.com/fcm/send/abc")));
+    pool.shutdown().await;
+    assert_eq!(pool.pending(), 0);
+}
+
+struct PanickingResolver;
+
+impl crate::integrations::net::Resolver for PanickingResolver {
+    fn lookup<'a>(&'a self, host: &'a str) -> crate::integrations::net::BoxFuture<'a, std::io::Result<Vec<std::net::IpAddr>>> {
+        panic!("resolving {host} panicked");
+    }
+}

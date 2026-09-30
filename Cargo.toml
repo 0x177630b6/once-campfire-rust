@@ -47,8 +47,9 @@ pbkdf2       = "0.12"
 aes-gcm      = "0.10"
 rand         = "0.9"
 hex          = "0.4"
-# 0.35 with a parsing fix backported (see crates/richtext/vendor/html5ever/Cargo.toml), which the
-# differential corpus caught diverging from Gumbo. The views parity tests use its tokenizer too.
+# The vendored 0.35 (crates/richtext/vendor/html5ever): a parsing fix backported, which the
+# differential corpus caught diverging from Gumbo, and hooks for enforcing Gumbo's limits while
+# parsing. The views parity tests use its tokenizer too.
 html5ever    = { path = "crates/richtext/vendor/html5ever" }
 bcrypt       = "0.17"
 uuid         = { version = "1", features = ["v4"] }
