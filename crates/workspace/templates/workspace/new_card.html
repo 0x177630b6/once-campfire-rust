@@ -1,0 +1,44 @@
+{#- Hermes fork: "Create a card from this message" (campfire_workspace::pages::new_card_form).
+    hermes/workspace.js posts it as JSON to {{ action }}. -#}
+<form class="ws-form ws-new-card" data-ws-new-card-form action="{{ action }}" method="post">
+  <header class="ws-sheet__head">
+    <h2 class="ws-sheet__title">New card on {{ board_name }}</h2>
+    <button type="button" class="btn ws-btn ws-btn--small ws-sheet__close" data-ws-sheet-close><span aria-hidden="true">✕</span><span class="for-screen-reader">Close</span></button>
+  </header>
+  {%- if let Some(source) = source %}
+  <p class="ws-muted">From {{ source.author_name }}’s message in {{ source.room_name }}. The card will link back to it, and a link to the card will be posted in the room.</p>
+  <input type="hidden" name="message_id" value="{{ source.message_id }}">
+  {%- endif %}
+  {%- if let Some(room_id) = room_id %}
+  <input type="hidden" name="room_id" value="{{ room_id }}">
+  {%- endif %}
+  <label class="ws-field ws-field--wide"><span class="ws-field__label">Title</span>
+    <input class="input" type="text" name="title" value="{{ title }}" maxlength="255" required autocomplete="off">
+  </label>
+  <div class="ws-sheet__fields">
+    <label class="ws-field"><span class="ws-field__label">Severity</span>
+      <select class="input ws-select" name="severity">
+        {%- for severity in severities %}
+        <option value="{{ severity.value }}"{% if severity.selected %} selected{% endif %}>{{ severity.label }}</option>
+        {%- endfor %}
+      </select>
+    </label>
+    {%- if departments.len() > 1 %}
+    <label class="ws-field"><span class="ws-field__label">Department</span>
+      <select class="input ws-select" name="department">
+        {%- for department in departments %}
+        <option value="{{ department.value }}"{% if department.selected %} selected{% endif %}>{{ department.label }}</option>
+        {%- endfor %}
+      </select>
+    </label>
+    {%- endif %}
+  </div>
+  <label class="ws-field ws-field--wide"><span class="ws-field__label">Details</span>
+    <textarea class="input ws-textarea" name="description" rows="5" maxlength="10000">{{ description }}</textarea>
+  </label>
+  <div class="ws-form__actions">
+    <button type="submit" class="btn btn--reversed ws-btn">Create card</button>
+    <button type="button" class="btn ws-btn" data-ws-sheet-close>Cancel</button>
+  </div>
+  <p class="ws-sheet__status" role="status" data-ws-status></p>
+</form>

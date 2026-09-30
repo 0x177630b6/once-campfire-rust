@@ -330,6 +330,16 @@ static HERMES_ROUTES: LazyLock<Vec<Route>> = LazyLock::new(|| {
         get("/workspace(.:format)", "hermes/workspace#show", workspace::show),
         get("/workspace/cards(.:format)", "hermes/workspace#cards", workspace::cards),
         post("/workspace/drafts/:message_id/reply(.:format)", "hermes/workspace#reply", workspace::reply),
+        get("/workspace/board(.:format)", "hermes/workspace#board", workspace::board),
+        get("/workspace/cards/new(.:format)", "hermes/workspace#new_card", workspace::new_card),
+        post("/workspace/cards(.:format)", "hermes/workspace#create_card", workspace::create_card),
+        get("/workspace/cards/:number(.:format)", "hermes/workspace#card", workspace::card),
+        post("/workspace/cards/:number/:change(.:format)", "hermes/workspace#change_card", workspace::change_card),
+        get("/workspace/rooms/:room_id/panel(.:format)", "hermes/workspace#panel", workspace::panel),
+        get("/workspace/settings(.:format)", "hermes/workspace#settings", workspace::settings),
+        post("/workspace/settings(.:format)", "hermes/workspace#update_settings", workspace::update_settings),
+        get("/hermes/:bot_key/workspace/settings(.:format)", "hermes/workspace#bot_settings", workspace::bot_settings)
+            .defaults(BOT_DEFAULTS),
     ]
 });
 

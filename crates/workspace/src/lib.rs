@@ -1,10 +1,15 @@
-//! Hermes fork: the Duty Manager Workspace, phase 0 (docs/hermes-workspace.md). Fizzy's incident
-//! cards made visible inside Campfire, read-only:
+//! Hermes fork: the Duty Manager Workspace, phases 0 and 1 (docs/hermes-workspace.md). Fizzy's
+//! incident cards inside Campfire:
 //!
 //! - [`chips`]: a Fizzy card URL in a message renders as a live card chip;
 //! - [`drafts`]: Hermes's incident drafts get File / Edit / Dismiss buttons;
-//! - [`overlay`]: the phone tab bar (Home · Report · Chats) on every signed-in page;
+//! - [`overlay`]: the phone tab bar (Home · Report · Boards · Chats) on every signed-in page, and a
+//!   linked room's cards panel;
 //! - [`home`]: the Home page (to confirm, open incidents, mentions, handover);
+//! - [`pages`]: the board, the card sheet, the room panel, the new-card form, the settings page;
+//! - [`actions`] and [`writes`]: working cards (move, close, severity, departments, steps,
+//!   comments, create), through an acting identity, audited, policy-checked;
+//! - [`settings`]: departments, duty managers and the policy, in a JSON file;
 //! - [`cache`] and [`fizzy`]: the in-memory picture of Fizzy, refreshed by polling its JSON API.
 //!
 //! This crate knows nothing of Campfire's own crates, so upstream merges can't break it and its
@@ -13,6 +18,7 @@
 //! Campfire: an [`HttpClient`](fizzy::HttpClient) for Fizzy, a [`ChatSource`] for the user's recent
 //! messages, the bots ([`drafts::Bot`]), and the rendering hooks.
 
+pub mod actions;
 pub mod cache;
 pub mod chips;
 pub mod config;
@@ -21,6 +27,9 @@ pub mod fizzy;
 pub mod home;
 mod html;
 pub mod overlay;
+pub mod pages;
+pub mod settings;
+pub mod writes;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
@@ -29,10 +38,14 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use jiff::{SignedDuration, Timestamp};
 
+use fizzy::Card;
+
 pub use cache::Snapshot;
 pub use config::{ConfigError, WorkspaceConfig};
 pub use drafts::{Bot, ChatMessage};
 pub use home::{HomeView, Viewer};
+pub use settings::{Act, Policy, Settings, SettingsStore};
+pub use writes::{ActionError, TokenSource, WriteRecord};
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -50,21 +63,81 @@ pub struct Workspace {
     wanted: Mutex<BTreeSet<u64>>,
     poll_state: Mutex<Option<cache::PollState>>,
     bots: RwLock<Arc<Vec<Bot>>>,
+    settings: SettingsStore,
+    /// Who writes to Fizzy for whom.
+    tokens: Box<dyn TokenSource>,
+    /// Every write, for the log.
+    audit: Box<writes::Audit>,
 }
 
 impl Workspace {
+    /// Reads the settings file (`config.settings_path`); writes go through `FIZZY_TOKEN`.
     pub fn new(config: WorkspaceConfig) -> Self {
+        let settings = SettingsStore::open(&config.settings_path);
+        let tokens = Box::new(writes::SharedToken(config.token.clone()));
         Self {
             config,
             snapshot: RwLock::new(Arc::new(Snapshot::default())),
             wanted: Mutex::new(BTreeSet::new()),
             poll_state: Mutex::new(Some(cache::PollState::default())),
             bots: RwLock::new(Arc::new(Vec::new())),
+            settings,
+            tokens,
+            audit: Box::new(|_| {}),
         }
+    }
+
+    /// Where every write's [`WriteRecord`] goes (the app logs them).
+    pub fn with_audit(mut self, audit: impl Fn(&WriteRecord) + Send + Sync + 'static) -> Self {
+        self.audit = Box::new(audit);
+        self
+    }
+
+    /// Another source of write tokens (per-person tokens, later).
+    pub fn with_tokens(mut self, tokens: impl TokenSource + 'static) -> Self {
+        self.tokens = Box::new(tokens);
+        self
+    }
+
+    pub fn with_settings(mut self, settings: SettingsStore) -> Self {
+        self.settings = settings;
+        self
     }
 
     pub fn config(&self) -> &WorkspaceConfig {
         &self.config
+    }
+
+    pub fn settings(&self) -> Arc<Settings> {
+        self.settings.get()
+    }
+
+    pub fn settings_store(&self) -> &SettingsStore {
+        &self.settings
+    }
+
+    /// A card as Fizzy just returned it (after a write, or read for a sheet): into the picture at
+    /// once, in the right list. A card on another board is dropped.
+    pub fn remember(&self, card: Card) {
+        let mut snapshot = self.snapshot.write().unwrap_or_else(|e| e.into_inner());
+        let mut next = (**snapshot).clone();
+        let number = card.number;
+        next.open.retain(|open| *open != number);
+        next.recently_closed.retain(|closed| *closed != number);
+        match next.board.clone() {
+            Some(board) if card.board.as_ref().is_some_and(|on| on.id == board.id) => {
+                if card.closed {
+                    next.recently_closed.insert(0, number);
+                } else {
+                    next.open.push(number);
+                }
+                next.cards.insert(number, card);
+            }
+            _ => {
+                next.cards.remove(&number);
+            }
+        }
+        *snapshot = Arc::new(next);
     }
 
     /// The latest picture of Fizzy.
@@ -159,6 +232,32 @@ impl Workspace {
         let messages = source.recent_messages(now - drafts::DRAFT_TTL - SignedDuration::from_mins(5)).await?;
         Ok(home::build(&self.config, &self.snapshot(), viewer, &messages, &self.bots(), now))
     }
+
+    /// The board page, from the last poll.
+    pub fn board(&self, viewer: &Viewer, filter: &pages::BoardFilter) -> pages::BoardView {
+        let (can_change, can_create) = (self.may(&Act::ChangeCard, viewer), self.may(&Act::CreateCard, viewer));
+        pages::board(&self.config, &self.snapshot(), &self.settings(), filter, viewer.administrator, can_change, can_create)
+    }
+
+    /// A room's cards panel; `None` when the room isn't linked to a department.
+    pub fn room_panel(&self, viewer: &Viewer, room_id: i64) -> Option<pages::RoomPanel> {
+        pages::room_panel(&self.config, &self.snapshot(), &self.settings(), room_id, self.may(&Act::CreateCard, viewer))
+    }
+
+    /// The new-card form, prefilled from a message's text and its room's department.
+    pub fn new_card_form(&self, room_id: Option<i64>, message_text: Option<&str>, source: Option<pages::FormSource>) -> pages::NewCardForm {
+        pages::new_card_form(&self.config, &self.snapshot(), &self.settings(), room_id, message_text, source)
+    }
+
+    /// A card's chip, for the page to swap in after a change.
+    pub fn chip(&self, number: u64) -> Option<String> {
+        self.chips(&[number]).remove(&number)
+    }
+}
+
+/// The text a reader sees in a message body (for prefilling a card from it).
+pub fn text_of(body_html: &str) -> String {
+    html::to_text(body_html)
 }
 
 /// Card numbers of the links [`chips::decorate`] marked but couldn't fill.

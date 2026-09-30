@@ -25,12 +25,15 @@ use crate::fizzy::{Card, CardState};
 pub const HANDOVER_WINDOW: SignedDuration = SignedDuration::from_hours(12);
 const MAX_MENTIONS: usize = 20;
 
-/// Who's looking.
+/// Who's looking (or acting): a signed-in Campfire user.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Viewer {
     pub id: i64,
     pub name: String,
     pub email: Option<String>,
+    /// A Campfire administrator (`Role::Administrator`): edits the settings, and is a duty manager
+    /// while none are listed.
+    pub administrator: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -105,6 +108,10 @@ pub struct HomeView {
     pub board_url: Option<String>,
     pub fizzy: FizzyStatus,
     pub retry_seconds: u64,
+    /// `/workspace/board`
+    pub board_page: String,
+    /// Administrators only.
+    pub settings_url: Option<String>,
 }
 
 pub fn build(
@@ -136,6 +143,8 @@ pub fn build(
         }),
         fizzy,
         retry_seconds: config.poll_interval.as_secs(),
+        board_page: crate::pages::BOARD_PATH.into(),
+        settings_url: viewer.administrator.then(|| crate::pages::SETTINGS_PATH.into()),
     }
 }
 
@@ -328,7 +337,7 @@ mod tests {
     }
 
     fn maya() -> Viewer {
-        Viewer { id: 5, name: "Maya".into(), email: Some("Maya@Hotel.test".into()) }
+        Viewer { id: 5, name: "Maya".into(), email: Some("Maya@Hotel.test".into()), administrator: false }
     }
 
     #[test]

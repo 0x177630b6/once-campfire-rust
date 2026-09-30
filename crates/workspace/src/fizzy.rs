@@ -1,7 +1,8 @@
-//! A read-only client for Fizzy's JSON API (docs/api/fizzy-rest-api.md in the Hermes repo), over
-//! whatever [`HttpClient`] the app provides. Every request carries `Accept: application/json` (Fizzy
-//! only accepts a bearer token on JSON requests) and `Authorization: Bearer <FIZZY_TOKEN>`; paths
-//! are `/<account>/…json`. Lists are paginated with `?page=N` and a `Link: …; rel="next"` header;
+//! A client for Fizzy's JSON API (docs/api/fizzy-rest-api.md in the Hermes repo), over whatever
+//! [`HttpClient`] the app provides. Every request carries `Accept: application/json` (Fizzy only
+//! accepts a bearer token on JSON requests) and `Authorization: Bearer <token>`; paths are
+//! `/<account>/…json`. Reads use `FIZZY_TOKEN`; writes ([`Client::send_json`], used by
+//! [`crate::writes`]) take the acting identity's token. Lists are paginated with `?page=N` and a `Link: …; rel="next"` header;
 //! the header's URL carries Fizzy's own `BASE_URL`, which may not be reachable from here, so the
 //! client only reads whether there's a next page and asks for it on its own base URL.
 
@@ -15,9 +16,9 @@ use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 
 use crate::BoxFuture;
-use crate::config::WorkspaceConfig;
+use crate::config::{Secret, WorkspaceConfig};
 
-/// What the app's HTTP client returns for a GET.
+/// What the app's HTTP client returns.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HttpResponse {
     pub status: u16,
@@ -26,10 +27,21 @@ pub struct HttpResponse {
     pub link: Option<String>,
 }
 
-/// One HTTP GET. The app implements it over its own client (`integrations::net`); tests fake it.
-/// Errors are plain descriptions and must never contain the request's headers.
+/// One HTTP request. The app implements it over its own client (`integrations::net`); tests fake
+/// it. Errors are plain descriptions and must never contain the request's headers.
 pub trait HttpClient: Send + Sync {
-    fn get<'a>(&'a self, url: &'a str, headers: &'a [(&'static str, String)]) -> BoxFuture<'a, Result<HttpResponse, String>>;
+    /// `method` is `GET`, `POST`, `PUT` or `DELETE`; `body`, when present, is JSON.
+    fn send<'a>(
+        &'a self,
+        method: &'a str,
+        url: &'a str,
+        headers: &'a [(&'static str, String)],
+        body: Option<&'a [u8]>,
+    ) -> BoxFuture<'a, Result<HttpResponse, String>>;
+
+    fn get<'a>(&'a self, url: &'a str, headers: &'a [(&'static str, String)]) -> BoxFuture<'a, Result<HttpResponse, String>> {
+        self.send("GET", url, headers, None)
+    }
 }
 
 /// Never carries the token.
@@ -118,11 +130,61 @@ pub struct Card {
     pub assignees: Vec<UserRef>,
     #[serde(default)]
     pub creator: Option<UserRef>,
+    /// Plain text (`description_html` isn't shown: it's Fizzy's HTML).
+    #[serde(default, deserialize_with = "lenient_string")]
+    pub description: String,
+    /// Only in `GET /cards/:n` (`show.json.jbuilder`).
+    #[serde(default)]
+    pub steps: Vec<Step>,
+}
+
+/// A card's checklist item.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+pub struct Step {
+    #[serde(default, deserialize_with = "id_string")]
+    pub id: String,
+    #[serde(default)]
+    pub content: String,
+    #[serde(default)]
+    pub completed: bool,
+}
+
+/// A comment (`cards/comments/_comment.json.jbuilder`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+pub struct Comment {
+    #[serde(default, deserialize_with = "id_string")]
+    pub id: String,
+    #[serde(default, deserialize_with = "lenient_timestamp")]
+    pub created_at: Option<Timestamp>,
+    #[serde(default)]
+    pub body: CommentBody,
+    #[serde(default)]
+    pub creator: Option<UserRef>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+pub struct CommentBody {
+    #[serde(default, deserialize_with = "lenient_string")]
+    pub plain_text: String,
+    #[serde(default, deserialize_with = "lenient_string")]
+    pub html: String,
+}
+
+impl Comment {
+    /// What the comment says, as text (the plain text Fizzy renders, else the HTML's text).
+    pub fn text(&self) -> String {
+        if self.body.plain_text.trim().is_empty() { crate::html::to_text(&self.body.html) } else { self.body.plain_text.trim().to_string() }
+    }
 }
 
 impl Card {
+    /// The most severe `sev-*` tag (a card should have one; a hand-tagged card may have several).
     pub fn severity(&self) -> Option<Severity> {
-        self.tags.iter().find_map(|tag| Severity::from_tag(tag))
+        self.tags.iter().filter_map(|tag| Severity::from_tag(tag)).max()
+    }
+
+    pub fn has_tag(&self, tag: &str) -> bool {
+        self.tags.iter().any(|mine| mine.trim_start_matches('#').eq_ignore_ascii_case(tag))
     }
 
     /// Where the card is, in the workspace's words: Fizzy's "Maybe?" is "New", "Not Now" is
@@ -208,6 +270,14 @@ impl Severity {
             Self::Critical => "critical",
         }
     }
+
+    /// The Fizzy tag: `sev-high`.
+    pub fn tag(self) -> String {
+        format!("sev-{}", self.as_str())
+    }
+
+    /// Most severe first.
+    pub const ALL: [Severity; 4] = [Self::Critical, Self::High, Self::Medium, Self::Low];
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
@@ -272,11 +342,11 @@ impl<'a> Client<'a> {
     }
 
     fn headers(&self) -> Vec<(&'static str, String)> {
-        vec![
-            ("Accept", "application/json".into()),
-            ("Authorization", format!("Bearer {}", self.config.token.expose())),
-            ("User-Agent", "campfire-workspace".into()),
-        ]
+        headers(&self.config.token)
+    }
+
+    pub fn config(&self) -> &WorkspaceConfig {
+        self.config
     }
 
     async fn get(&self, path: &str) -> Result<HttpResponse, FizzyError> {
@@ -358,6 +428,47 @@ impl<'a> Client<'a> {
     pub async fn user(&self, account: &str, id: &str) -> Result<Option<UserRef>, FizzyError> {
         self.get_json(&format!("/{account}/users/{id}.json")).await
     }
+
+    /// A card's comments, oldest first; `true` when there are more than `max_pages` pages.
+    pub async fn comments(&self, account: &str, number: u64, max_pages: u32) -> Result<(Vec<Comment>, bool), FizzyError> {
+        let path = format!("/{account}/cards/{number}/comments.json");
+        let mut items = Vec::new();
+        for page in 1..=max_pages.max(1) {
+            let paged = if page == 1 { path.clone() } else { format!("{path}?page={page}") };
+            let response = self.get(&paged).await?;
+            match response.status {
+                200 => {}
+                404 if page == 1 => return Ok((Vec::new(), false)),
+                status => return Err(FizzyError::Status(status)),
+            }
+            let values: Vec<Value> = serde_json::from_slice(&response.body).map_err(|e| FizzyError::Decode(e.to_string()))?;
+            items.extend(values.into_iter().filter_map(|value| serde_json::from_value(value).ok()));
+            if !has_next_page(response.link.as_deref()) {
+                return Ok((items, false));
+            }
+        }
+        Ok((items, true))
+    }
+
+    /// A write (or any request) with `token`, and a JSON body. The reply is returned whatever its
+    /// status; only a transport failure is an error.
+    pub async fn send_json(&self, method: &str, path: &str, body: Option<&Value>, token: &Secret) -> Result<HttpResponse, FizzyError> {
+        let url = format!("{}{path}", self.config.fizzy_url);
+        let mut headers = headers(token);
+        let body = body.map(|body| body.to_string().into_bytes());
+        if body.is_some() {
+            headers.push(("Content-Type", "application/json".into()));
+        }
+        self.http.send(method, &url, &headers, body.as_deref()).await.map_err(FizzyError::Transport)
+    }
+}
+
+fn headers(token: &Secret) -> Vec<(&'static str, String)> {
+    vec![
+        ("Accept", "application/json".into()),
+        ("Authorization", format!("Bearer {}", token.expose())),
+        ("User-Agent", "campfire-workspace".into()),
+    ]
 }
 
 /// `Link: <…?page=2>; rel="next"`.
@@ -462,6 +573,13 @@ fn id_string<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Er
     Ok(match Value::deserialize(deserializer)? {
         Value::String(id) => id,
         Value::Number(id) => id.to_string(),
+        _ => String::new(),
+    })
+}
+
+fn lenient_string<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    Ok(match Value::deserialize(deserializer)? {
+        Value::String(text) => text,
         _ => String::new(),
     })
 }

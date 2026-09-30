@@ -1,0 +1,71 @@
+{#- Hermes fork: the workspace's settings (campfire_workspace::pages::settings_page), administrators
+    only. hermes/workspace.js posts them as JSON to {{ action }}. -#}
+<section class="ws-home ws-settings" aria-labelledby="ws-settings-title">
+  <h1 id="ws-settings-title" class="ws-board__title">Workspace settings</h1>
+  {%- if let Some(error) = load_error %}
+  <p class="ws-notice" role="alert"><strong>The settings file couldn't be read</strong> ({{ error }}). The defaults are in use; saving replaces the file.</p>
+  {%- endif %}
+
+  <form class="ws-form" data-ws-settings-form action="{{ action }}" method="post">
+    <section class="ws-section" aria-labelledby="ws-settings-departments">
+      <h2 id="ws-settings-departments" class="ws-section__title">Departments</h2>
+      <p class="ws-muted">Each department is a Fizzy tag on the cards of {{ board_name }}. Rooms linked to a department show its open cards in a side panel, and new cards created there get its tag.</p>
+      <ol class="ws-list" data-ws-departments>
+        {%- for department in departments %}
+        <li class="ws-item ws-dept" data-ws-department>
+          <div class="ws-sheet__fields">
+            <label class="ws-field"><span class="ws-field__label">Name</span><input class="input" type="text" name="name" value="{{ department.name }}" maxlength="60" required></label>
+            <label class="ws-field"><span class="ws-field__label">Fizzy tag</span><input class="input" type="text" name="tag" value="{{ department.tag }}" maxlength="40" pattern="#?[^\s]+" placeholder="from the name"></label>
+          </div>
+          <fieldset class="ws-dept__rooms"><legend class="ws-field__label">Linked rooms</legend>
+            {%- for room in department.rooms %}
+            <label class="ws-tag-toggle"><input type="checkbox" name="rooms" value="{{ room.value }}"{% if room.selected %} checked{% endif %}><span>{{ room.label }}</span></label>
+            {%- endfor %}
+          </fieldset>
+          <button type="button" class="btn ws-btn ws-btn--small" data-ws-remove-department>Remove</button>
+        </li>
+        {%- endfor %}
+      </ol>
+      <template data-ws-department-template>
+        <li class="ws-item ws-dept" data-ws-department>
+          <div class="ws-sheet__fields">
+            <label class="ws-field"><span class="ws-field__label">Name</span><input class="input" type="text" name="name" maxlength="60" required></label>
+            <label class="ws-field"><span class="ws-field__label">Fizzy tag</span><input class="input" type="text" name="tag" maxlength="40" pattern="#?[^\s]+" placeholder="from the name"></label>
+          </div>
+          <fieldset class="ws-dept__rooms"><legend class="ws-field__label">Linked rooms</legend>
+            {%- for room in blank_rooms %}
+            <label class="ws-tag-toggle"><input type="checkbox" name="rooms" value="{{ room.value }}"><span>{{ room.label }}</span></label>
+            {%- endfor %}
+          </fieldset>
+          <button type="button" class="btn ws-btn ws-btn--small" data-ws-remove-department>Remove</button>
+        </li>
+      </template>
+      <p><button type="button" class="btn ws-btn" data-ws-add-department>Add a department</button></p>
+      <p class="ws-muted">Renaming a tag here doesn't rename it in Fizzy (there's no API for that): cards keep their old tag.</p>
+    </section>
+
+    <section class="ws-section" aria-labelledby="ws-settings-managers">
+      <h2 id="ws-settings-managers" class="ws-section__title">Duty managers</h2>
+      <label class="ws-radio"><input type="radio" name="managers" value="admins"{% if managers_are_admins %} checked{% endif %}> Campfire administrators{% if !administrators.is_empty() %} ({{ administrators }}){% endif %}</label>
+      <label class="ws-radio"><input type="radio" name="managers" value="listed"{% if !managers_are_admins %} checked{% endif %}> These people:</label>
+      <fieldset class="ws-dept__rooms" data-ws-managers>
+        <legend class="for-screen-reader">Duty managers</legend>
+        {%- for person in people %}
+        <label class="ws-tag-toggle"><input type="checkbox" name="duty_managers" value="{{ person.value }}"{% if person.selected %} checked{% endif %}><span>{{ person.label }}</span></label>
+        {%- endfor %}
+      </fieldset>
+    </section>
+
+    <section class="ws-section" aria-labelledby="ws-settings-policy">
+      <h2 id="ws-settings-policy" class="ws-section__title">Who can confirm Hermes drafts and change cards</h2>
+      {%- for policy in policies %}
+      <label class="ws-radio"><input type="radio" name="confirm_policy" value="{{ policy.value }}"{% if policy.selected %} checked{% endif %}> {{ policy.label }}</label>
+      {%- endfor %}
+    </section>
+
+    <div class="ws-form__actions">
+      <button type="submit" class="btn btn--reversed ws-btn">Save settings</button>
+    </div>
+    <p class="ws-sheet__status" role="status" data-ws-status></p>
+  </form>
+</section>

@@ -1,0 +1,86 @@
+{#- Hermes fork: a card's sheet (campfire_workspace::pages::card_sheet), a page or the overlay's
+    content. Changes POST to {{ action_url }}/<change> (hermes/workspace.js). Fizzy's HTML is never
+    shown: the description and comments are their text. -#}
+<article class="ws-sheet ws-cc--{{ tone }}" data-ws-sheet="{{ number }}" data-ws-action-url="{{ action_url }}" aria-labelledby="ws-sheet-title-{{ number }}">
+  <header class="ws-sheet__head">
+    <span class="ws-card__no">No. {{ number }} · {{ board_name }}</span>
+    <a class="ws-link" href="{{ fizzy_url }}" target="_blank" rel="noopener">Open in Fizzy ↗</a>
+    <button type="button" class="btn ws-btn ws-btn--small ws-sheet__close" data-ws-sheet-close><span aria-hidden="true">✕</span><span class="for-screen-reader">Close</span></button>
+  </header>
+  <h2 id="ws-sheet-title-{{ number }}" class="ws-sheet__title">{{ title }}</h2>
+
+  <div class="ws-sheet__fields">
+    <label class="ws-field">
+      <span class="ws-field__label">Severity</span>
+      <select class="input ws-select" name="severity" data-ws-change="severity"{% if !can_change %} disabled{% endif %}>
+        {%- for severity in severities %}
+        <option value="{{ severity.value }}"{% if severity.selected %} selected{% endif %}>{{ severity.label }}</option>
+        {%- endfor %}
+      </select>
+    </label>
+    <label class="ws-field">
+      <span class="ws-field__label">Column</span>
+      <select class="input ws-select" name="to" data-ws-change="move"{% if !can_change %} disabled{% endif %}>
+        {%- for target in moves %}
+        <option value="{{ target.value }}"{% if target.selected %} selected{% endif %}>{{ target.label }}</option>
+        {%- endfor %}
+      </select>
+    </label>
+    <p class="ws-field"><span class="ws-field__label">Owner</span> {% if assignees.is_empty() %}<span class="ws-muted">no owner</span>{% else %}{{ assignees }}{% endif %}</p>
+  </div>
+
+  {%- if !departments.is_empty() %}
+  <fieldset class="ws-sheet__departments" data-ws-change="departments"{% if !can_change %} disabled{% endif %}>
+    <legend class="ws-field__label">Departments</legend>
+    {%- for department in departments %}
+    <label class="ws-tag-toggle"><input type="checkbox" name="tags[]" value="{{ department.value }}"{% if department.selected %} checked{% endif %}><span>{{ department.label }}</span></label>
+    {%- endfor %}
+  </fieldset>
+  {%- endif %}
+  {%- if !other_tags.is_empty() %}
+  <p class="ws-sheet__tags">{% for tag in other_tags %}<span class="ws-tag">#{{ tag }}</span> {% endfor %}</p>
+  {%- endif %}
+
+  {%- if !description.is_empty() %}
+  <details class="ws-sheet__report">
+    <summary>Report</summary>
+    <p class="ws-text">{{ description }}</p>
+  </details>
+  {%- endif %}
+
+  {%- if !steps.is_empty() %}
+  <section class="ws-sheet__section">
+    <h3 class="ws-sheet__subtitle">Steps <span class="ws-count">{{ steps_done }}/{{ steps.len() }}</span></h3>
+    <ul class="ws-steps">
+      {%- for step in steps %}
+      <li><label class="ws-step{% if step.completed %} ws-step--done{% endif %}"><input type="checkbox" data-ws-change="step" data-ws-step="{{ step.id }}"{% if step.completed %} checked{% endif %}{% if !can_change %} disabled{% endif %}><span>{{ step.content }}</span></label></li>
+      {%- endfor %}
+    </ul>
+  </section>
+  {%- endif %}
+
+  <section class="ws-sheet__section">
+    <h3 class="ws-sheet__subtitle">Thread <span class="ws-count">{{ comments.len() }}{% if more_comments %}+{% endif %}</span></h3>
+    {%- if comments.is_empty() %}
+    <p class="ws-empty">No comments yet.</p>
+    {%- else %}
+    <ol class="ws-thread">
+      {%- for comment in comments %}
+      <li class="ws-comment">
+        <p class="ws-comment__meta"><strong>{{ comment.author }}</strong>{% if let Some(at) = comment.created_at %} · <time datetime="{{ at }}" data-local-time-target="datetime"></time>{% endif %}</p>
+        <p class="ws-comment__text ws-text">{{ comment.text }}</p>
+      </li>
+      {%- endfor %}
+    </ol>
+    {%- if more_comments %}<p class="ws-muted">Older comments are <a class="ws-link" href="{{ fizzy_url }}" target="_blank" rel="noopener">in Fizzy</a>.</p>{% endif %}
+    {%- endif %}
+    {%- if can_comment %}
+    <form class="ws-comment-form" data-ws-comment>
+      <label class="for-screen-reader" for="ws-comment-{{ number }}">Comment</label>
+      <textarea id="ws-comment-{{ number }}" class="input ws-textarea" name="body" rows="2" maxlength="5000" placeholder="Comment…" required></textarea>
+      <button type="submit" class="btn btn--reversed ws-btn">Comment</button>
+    </form>
+    {%- endif %}
+  </section>
+  <p class="ws-sheet__status" role="status" data-ws-status></p>
+</article>

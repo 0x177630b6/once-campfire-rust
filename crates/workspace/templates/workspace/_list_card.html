@@ -1,0 +1,10 @@
+      <li class="ws-card ws-cc--{{ card.tone }}{% if card.closed %} ws-card--closed{% endif %}" data-ws-card-item="{{ card.number }}">
+        <a class="ws-card__link" href="{{ card.sheet_url }}" data-ws-open-sheet="{{ card.number }}" data-turbo-frame="_top">
+          <span class="ws-card__head"><span class="ws-card__no">No. {{ card.number }}</span>{% if let Some(severity) = card.severity %}<span class="ws-sev ws-sev--{{ severity }}">{{ severity }}</span>{% endif %}</span>
+          <span class="ws-card__title">{{ card.title }}</span>
+          <span class="ws-card__meta">
+            {%- if !card.departments.is_empty() %}{{ card.departments }} · {% endif %}
+            {%- if card.assignees.is_empty() %}no owner{% else %}{{ card.assignees }}{% endif %}
+            {%- if let Some(at) = card.last_active_at %} · <time datetime="{{ at }}" data-local-time-target="datetime"></time>{% endif %}</span>
+        </a>
+      </li>

@@ -1,0 +1,25 @@
+<div class="ws-panel-root" data-ws-panel-root data-ws-panel-url="{{ url }}" data-ws-panel-count="{{ cards.len() }}" data-ws-room="{{ room_id }}">
+  <aside id="ws-panel" class="ws-panel" aria-labelledby="ws-panel-title" hidden>
+    <header class="ws-panel__head">
+      <h2 id="ws-panel-title" class="ws-panel__title">Channel cards <span class="ws-count">{{ cards.len() }}</span></h2>
+      <button type="button" class="btn ws-btn ws-btn--small" data-ws-panel-close><span aria-hidden="true">✕</span><span class="for-screen-reader">Close</span></button>
+    </header>
+    <p class="ws-panel__linked">Linked to {{ departments }} on {{ board_name }}</p>
+    {%- if stale %}
+    <p class="ws-notice" role="status"><strong>Boards unavailable.</strong> Showing the last known cards.</p>
+    {%- endif %}
+    {%- if cards.is_empty() %}
+    <p class="ws-empty">No open cards for {{ departments }}.</p>
+    {%- else %}
+    <ul class="ws-cards">
+      {%- for card in cards %}
+      {% include "workspace/_list_card.html" %}
+      {%- endfor %}
+    </ul>
+    {%- endif %}
+    <footer class="ws-panel__foot">
+      {%- if can_create %}<button type="button" class="btn btn--reversed ws-btn" data-ws-new-card data-ws-room="{{ room_id }}">New card</button>{% endif %}
+      <a class="ws-link" href="{{ board_url }}">Open on the board</a>
+    </footer>
+  </aside>
+</div>

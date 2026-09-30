@@ -9,7 +9,11 @@
 //! | `FIZZY_ACCOUNT` | the token's first account | The account slug (digits), e.g. `897362094` |
 //! | `FIZZY_POLL_S` | `30` | Seconds between polls (at least 5) |
 //! | `WORKSPACE_INCIDENT_BOARD` | `Incident Log` | The incident board, by name or id |
+//!
+//! The settings administrators edit in the app ([`crate::settings`]) are in
+//! `<CAMPFIRE_STORAGE_PATH>/hermes/workspace.json` (`storage/hermes/workspace.json` by default).
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 pub const DEFAULT_POLL_SECONDS: u64 = 30;
@@ -48,6 +52,8 @@ pub struct WorkspaceConfig {
     pub poll_interval: Duration,
     /// `WORKSPACE_INCIDENT_BOARD`: a board name (case-insensitive) or id.
     pub incident_board: String,
+    /// `<CAMPFIRE_STORAGE_PATH>/hermes/workspace.json`.
+    pub settings_path: PathBuf,
 }
 
 /// A configuration error. It never quotes `FIZZY_TOKEN`.
@@ -88,6 +94,9 @@ impl WorkspaceConfig {
             token: Secret::new(token),
             poll_interval: Duration::from_secs(poll_seconds.max(MIN_POLL_SECONDS)),
             incident_board: present("WORKSPACE_INCIDENT_BOARD").unwrap_or_else(|| DEFAULT_INCIDENT_BOARD.into()),
+            settings_path: PathBuf::from(present("CAMPFIRE_STORAGE_PATH").unwrap_or_else(|| "storage".into()))
+                .join("hermes")
+                .join("workspace.json"),
         }))
     }
 
@@ -133,6 +142,7 @@ mod tests {
         assert_eq!(config.poll_interval, Duration::from_secs(30));
         assert_eq!(config.incident_board, "Incident Log");
         assert_eq!(config.link_base(), "http://fizzy");
+        assert_eq!(config.settings_path, PathBuf::from("storage/hermes/workspace.json"));
         assert!(!format!("{config:?}").contains("s3cret"));
     }
 
@@ -145,9 +155,11 @@ mod tests {
             ("FIZZY_ACCOUNT", "/897362094"),
             ("FIZZY_POLL_S", "2"),
             ("WORKSPACE_INCIDENT_BOARD", "Incidents"),
+            ("CAMPFIRE_STORAGE_PATH", "/rails/storage"),
         ])
         .unwrap()
         .unwrap();
+        assert_eq!(config.settings_path, PathBuf::from("/rails/storage/hermes/workspace.json"));
         assert_eq!(config.link_base(), "https://192.168.0.114:8444");
         assert_eq!(config.account.as_deref(), Some("897362094"));
         assert_eq!(config.poll_interval, Duration::from_secs(5));

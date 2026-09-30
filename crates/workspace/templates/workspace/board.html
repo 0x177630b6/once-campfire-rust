@@ -1,0 +1,84 @@
+{#- Hermes fork: the incident board (campfire_workspace::pages::board). Styles: hermes/workspace.css;
+    behaviour (column switcher, Move menus, card sheets): hermes/workspace.js. -#}
+<section class="ws-board" data-ws-board aria-labelledby="ws-board-title">
+  <header class="ws-board__head">
+    <h1 id="ws-board-title" class="ws-board__title">{{ board_name }}</h1>
+    <form class="ws-filters" method="get" action="/workspace/board">
+      <label class="ws-filters__field"><span class="for-screen-reader">Department</span>
+        <select name="dept" class="input ws-select">
+          <option value="">dept: all</option>
+          {%- for department in departments %}
+          <option value="{{ department.value }}"{% if department.selected %} selected{% endif %}>{{ department.label }}</option>
+          {%- endfor %}
+        </select>
+      </label>
+      <fieldset class="ws-filters__sev">
+        <legend class="for-screen-reader">Severity</legend>
+        {%- for severity in severities %}
+        <label class="ws-sev-toggle"><input type="checkbox" name="sev[]" value="{{ severity.value }}"{% if severity.selected %} checked{% endif %}><span class="ws-sev ws-sev--{{ severity.value }}">{{ severity.label }}</span></label>
+        {%- endfor %}
+      </fieldset>
+      <button type="submit" class="btn ws-btn">Filter</button>
+      {%- if filtered %} <a class="ws-link" href="/workspace/board">Clear</a>{% endif %}
+    </form>
+    <span class="ws-board__links">
+      {%- if can_create %}<button type="button" class="btn btn--reversed ws-btn" data-ws-new-card>New card</button>{% endif %}
+      {%- if let Some(board_url) = board_url %} <a class="ws-link" href="{{ board_url }}" target="_blank" rel="noopener">Fizzy ↗</a>{% endif %}
+      {%- if let Some(settings_url) = settings_url %} <a class="ws-link" href="{{ settings_url }}">Settings</a>{% endif %}
+    </span>
+  </header>
+
+  {%- match fizzy %}
+  {%- when FizzyStatus::Ok %}
+  {%- when FizzyStatus::Waiting with { failed } %}
+  <p class="ws-notice" role="status">
+    {%- if failed %}<strong>Boards unavailable.</strong> Cards will appear as soon as Fizzy responds (retrying every {{ retry_seconds }}&nbsp;s).
+    {%- else %}Loading the board…{% endif %}
+  </p>
+  {%- when FizzyStatus::Stale with { since } %}
+  <p class="ws-notice" role="status"><strong>Boards unavailable.</strong> Showing cards as of <time datetime="{{ since }}" data-local-time-target="time"></time>; changes can't be made until Fizzy responds.</p>
+  {%- endmatch %}
+
+  <nav class="ws-coltabs" aria-label="Columns">
+    {%- for column in columns %}
+    <button type="button" class="ws-coltab ws-cc--{{ column.tone }}" data-ws-coltab="{{ column.key }}" aria-pressed="{% if column.active %}true{% else %}false{% endif %}">{{ column.label }} <span class="ws-coltab__count">{{ column.cards.len() }}</span></button>
+    {%- endfor %}
+  </nav>
+
+  <div class="ws-cols">
+    {%- for column in columns %}
+    <section class="ws-col ws-cc--{{ column.tone }}{% if column.active %} ws-col--active{% endif %}" data-ws-col="{{ column.key }}" aria-label="{{ column.label }}">
+      <h2 class="ws-column">{{ column.label }} <span class="ws-column__count">{{ column.cards.len() }}</span></h2>
+      {%- if column.cards.is_empty() %}
+      <p class="ws-empty">No cards</p>
+      {%- else %}
+      <ul class="ws-cards">
+        {%- for card in column.cards %}
+        <li class="ws-card ws-cc--{{ card.tone }}{% if card.closed %} ws-card--closed{% endif %}" data-ws-card-item="{{ card.number }}">
+          <a class="ws-card__link" href="{{ card.sheet_url }}" data-ws-open-sheet="{{ card.number }}">
+            <span class="ws-card__head"><span class="ws-card__no">No. {{ card.number }}</span>{% if let Some(severity) = card.severity %}<span class="ws-sev ws-sev--{{ severity }}">{{ severity }}</span>{% endif %}</span>
+            <span class="ws-card__title">{{ card.title }}</span>
+            <span class="ws-card__meta">
+              {%- if !card.departments.is_empty() %}{{ card.departments }} · {% endif %}
+              {%- if card.assignees.is_empty() %}no owner{% else %}{{ card.assignees }}{% endif %}
+              {%- if let Some(at) = card.last_active_at %} · <time datetime="{{ at }}" data-local-time-target="datetime"></time>{% endif %}</span>
+          </a>
+          {%- if can_change %}
+          <details class="ws-move">
+            <summary class="btn ws-btn ws-btn--small">Move ▸</summary>
+            <div class="ws-move__menu" role="menu">
+              {%- for target in card.moves %}
+              <button type="button" class="btn ws-btn ws-btn--small" role="menuitem" data-ws-move="{{ target.value }}" data-ws-number="{{ card.number }}">{{ target.label }}</button>
+              {%- endfor %}
+            </div>
+          </details>
+          {%- endif %}
+        </li>
+        {%- endfor %}
+      </ul>
+      {%- endif %}
+    </section>
+    {%- endfor %}
+  </div>
+  <p class="ws-board__status" role="status" data-ws-status></p>
+</section>

@@ -34,7 +34,8 @@
 
   <section class="ws-section" aria-labelledby="ws-open">
     <h2 id="ws-open" class="ws-section__title">Open incidents <span class="ws-count">{{ open_count }}</span>
-      {%- if let Some(board_url) = board_url %} <a class="ws-section__link" href="{{ board_url }}" target="_blank" rel="noopener">{{ board_name }} ↗</a>{% endif %}</h2>
+      <a class="ws-section__link" href="{{ board_page }}">Board</a>
+      {%- if let Some(board_url) = board_url %} <a class="ws-section__link ws-section__link--next" href="{{ board_url }}" target="_blank" rel="noopener">{{ board_name }} ↗</a>{% endif %}</h2>
     {%- if open.is_empty() %}
     <p class="ws-empty">No open incidents on {{ board_name }}.</p>
     {%- endif %}
@@ -76,4 +77,7 @@
     </ul>
     {%- endif %}
   </section>
+  {%- if let Some(settings_url) = settings_url %}
+  <p class="ws-muted"><a class="ws-link" href="{{ settings_url }}">Workspace settings</a> (departments, duty managers, who can confirm)</p>
+  {%- endif %}
 </section>
