@@ -31,7 +31,7 @@ pub mod pages;
 pub mod settings;
 pub mod writes;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, RwLock};
@@ -68,6 +68,30 @@ pub struct Workspace {
     tokens: Box<dyn TokenSource>,
     /// Every write, for the log.
     audit: Box<writes::Audit>,
+    /// One lock per card being written to ([`Workspace::lock_card`]); an entry lives only while
+    /// someone holds or waits for it.
+    card_locks: CardLocks,
+}
+
+type CardLocks = Mutex<HashMap<u64, Arc<tokio::sync::Mutex<()>>>>;
+
+/// Held while a sequence of writes to one card runs; dropping it lets the next one in, and
+/// removes the card's lock once nobody waits for it.
+pub(crate) struct CardLock<'a> {
+    locks: &'a CardLocks,
+    number: u64,
+    guard: Option<tokio::sync::OwnedMutexGuard<()>>,
+}
+
+impl Drop for CardLock<'_> {
+    fn drop(&mut self) {
+        drop(self.guard.take());
+        let mut locks = self.locks.lock().unwrap_or_else(|e| e.into_inner());
+        // Every holder or waiter has a clone, taken under this map's lock: only the map's is left.
+        if locks.get(&self.number).is_some_and(|lock| Arc::strong_count(lock) == 1) {
+            locks.remove(&self.number);
+        }
+    }
 }
 
 impl Workspace {
@@ -84,7 +108,17 @@ impl Workspace {
             settings,
             tokens,
             audit: Box::new(|_| {}),
+            card_locks: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Waits until nobody else is writing to card `number`, then holds it until the returned
+    /// guard is dropped. Tag changes are read-diff-toggle sequences over Fizzy's toggles: two of
+    /// them interleaved on one card could put back a tag the other removed.
+    pub(crate) async fn lock_card(&self, number: u64) -> CardLock<'_> {
+        let lock = self.card_locks.lock().unwrap_or_else(|e| e.into_inner()).entry(number).or_default().clone();
+        let guard = lock.lock_owned().await;
+        CardLock { locks: &self.card_locks, number, guard: Some(guard) }
     }
 
     /// Where every write's [`WriteRecord`] goes (the app logs them).

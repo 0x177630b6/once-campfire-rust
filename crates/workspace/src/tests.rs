@@ -141,6 +141,8 @@ impl HttpClient for FakeFizzy {
         body: Option<&'a [u8]>,
     ) -> BoxFuture<'a, Result<HttpResponse, String>> {
         Box::pin(async move {
+            // Like a real request, let other tasks run meanwhile (concurrent writes interleave).
+            tokio::task::yield_now().await;
             let body: Option<Value> = body.map(|body| serde_json::from_slice(body).unwrap());
             self.requests.lock().unwrap().push((method.to_string(), url.to_string(), headers.to_vec(), body.clone()));
             if *self.down.lock().unwrap() {
@@ -533,6 +535,21 @@ async fn several_severities_end_as_one() {
     fizzy.live(card(12, "Lift B", &["sev-critical", "sev-low"], None));
     workspace.change_card(&fizzy, &karim(), 12, Change::Severity(Some(Severity::Medium))).await.unwrap();
     assert_eq!(tags(&fizzy, 12), ["sev-medium"]);
+}
+
+#[tokio::test]
+async fn concurrent_severity_changes_on_one_card_end_with_one_severity() {
+    let (fizzy, workspace, _) = working(departments()).await;
+    // Unserialized, both read sev-low, both toggle it (off, then back on), then each adds its own.
+    let karim = karim();
+    let (high, medium) = tokio::join!(
+        workspace.change_card(&fizzy, &karim, 12, Change::Severity(Some(Severity::High))),
+        workspace.change_card(&fizzy, &karim, 12, Change::Severity(Some(Severity::Medium))),
+    );
+    assert_eq!(high.unwrap().severity(), Some(Severity::High));
+    assert_eq!(medium.unwrap().severity(), Some(Severity::Medium), "the second one ran after the first");
+    assert_eq!(tags(&fizzy, 12), ["engineering", "incident", "sev-medium"]);
+    assert!(workspace.card_locks.lock().unwrap().is_empty(), "no lock left behind");
 }
 
 #[tokio::test]

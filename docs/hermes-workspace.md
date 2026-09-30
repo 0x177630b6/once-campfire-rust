@@ -180,7 +180,13 @@ In `campfire_workspace::actions` (what) and `::writes` (how):
    `POST /triage` (`column_id`), `DELETE /triage` (New), `POST /not_now` (a closed card is
    reopened first: Fizzy postpones open cards), `POST /closure`; steps `PUT /steps/:id`
    (`{"step": {"completed"}}`); comments `POST /comments`; cards `POST /boards/:id/cards` (tags
-   can't be set there, so they follow). A move that didn't take is an error.
+   can't be set there, so they follow). A move that didn't take is an error. **One write
+   sequence per card at a time**: `Workspace::lock_card` (a `tokio` mutex per card number, dropped
+   from the map once nobody holds or waits for it) is held around a change (and its read-back
+   after an error) and around a new card's tags and comment, so two people changing the severity
+   of one card at once can't interleave their toggles (both would remove the old tag, the second
+   putting it back). It serializes this server's writes only: Hermes or someone in Fizzy can still
+   change the card meanwhile, which the final read and check catch.
 5. **Fizzy down or refusing** → `502 fizzy_unavailable` with a clear message; after a failed write
    the cache gets the card's actual state if Fizzy still answers (and the sheet reloads to show
    it). No partial state is silent: a card that was created but whose tags or comment failed is
@@ -270,7 +276,7 @@ redirects to the sign-in page (fetch follows it): the script says to sign in aga
 
 | Path | What |
 |---|---|
-| `crates/workspace` (`campfire_workspace`) | The feature. Depends on no `campfire_*` crate (askama, base64, jiff, regex, serde, serde_json only), so `cargo test -p campfire_workspace --offline` runs anywhere, without libvips or the parity seed |
+| `crates/workspace` (`campfire_workspace`) | The feature. Depends on no `campfire_*` crate (askama, base64, jiff, regex, serde, serde_json, and tokio for its `sync::Mutex` only), so `cargo test -p campfire_workspace --offline` runs anywhere, without libvips or the parity seed |
 | `…/src/config.rs` | `WorkspaceConfig::from_lookup`, `Secret` |
 | `…/src/fizzy.rs` | Fizzy types (lenient decoding), `HttpClient` trait (the app implements it), `Client` (paths, pagination), `@mention` reading from rich text |
 | `…/src/cache.rs` | `Snapshot` and the poll |
@@ -382,7 +388,8 @@ Not seams (fork-owned or new files): `crates/workspace/**`, `controllers/workspa
   not in the import map.
 - Phase 1, in `crates/workspace` against a **stateful** fake Fizzy (writes change its cards the
   way Fizzy does: taggings toggle, triage reopens…): severity as a single choice over toggles
-  (old off, new on; nothing posted when already right; two severities end as one), departments
+  (old off, new on; nothing posted when already right; two severities end as one; two concurrent
+  changes of one card serialized, ending with one severity, no lock left behind), departments
   (exactly the requested tags, other tags untouched, unknown ones refused), moves (column,
   unknown column refused before any write, close, not now on a closed card reopens first, New),
   steps (and no write when already in that state), comments prefixed and escaped, only

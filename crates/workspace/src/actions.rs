@@ -6,7 +6,7 @@
 //! 2. validates its input ([`Change::parse`], [`NewCard::parse`]) and answers 404 for a card that
 //!    isn't on the incident board (a fresh read, before anything is written);
 //! 3. goes through a [`Writer`] as the actor's [`ActingIdentity`](crate::writes::ActingIdentity),
-//!    which logs it;
+//!    which logs it, one write sequence per card at a time (`Workspace::lock_card`);
 //! 4. reads the card again, checks the change took, and puts it in the cache at once
 //!    ([`Workspace::remember`]) instead of waiting for the next poll.
 
@@ -257,6 +257,8 @@ impl Workspace {
     pub async fn change_card(&self, http: &dyn HttpClient, actor: &Viewer, number: u64, change: Change) -> Result<Card, ActionError> {
         self.authorize(&change.act(), actor)?;
         let writer = self.writer(http, actor)?;
+        // One write sequence per card at a time, its error read-back included.
+        let _lock = self.lock_card(number).await;
         let result = self.apply(&writer, number, change).await;
         match &result {
             Ok(card) => self.remember(card.clone()),
@@ -335,6 +337,8 @@ impl Workspace {
         let description = crate::writes::comment_html(None, &new.description, None);
         let card = writer.create_card(&new.title, &description).await?;
         let number = card.number;
+        // Someone may open the new card's sheet and change it while its tags are being set.
+        let _lock = self.lock_card(number).await;
         let mut warnings = Vec::new();
 
         let mut managed = severity_tags();
