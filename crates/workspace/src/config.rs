@@ -9,6 +9,7 @@
 //! | `FIZZY_ACCOUNT` | the token's first account | The account slug (digits), e.g. `897362094` |
 //! | `FIZZY_POLL_S` | `30` | Seconds between polls (at least 5) |
 //! | `WORKSPACE_INCIDENT_BOARD` | `Incident Log` | The incident board, by name or id |
+//! | `CAMPFIRE_PUBLIC_URL` | unset | Campfire as browsers reach it, for the link to the message a card was created from (unset: the message's path, as text) |
 //!
 //! The settings administrators edit in the app ([`crate::settings`]) are in
 //! `<CAMPFIRE_STORAGE_PATH>/hermes/workspace.json` (`storage/hermes/workspace.json` by default).
@@ -54,6 +55,9 @@ pub struct WorkspaceConfig {
     pub incident_board: String,
     /// `<CAMPFIRE_STORAGE_PATH>/hermes/workspace.json`.
     pub settings_path: PathBuf,
+    /// `CAMPFIRE_PUBLIC_URL` without a trailing slash: where links written into Fizzy point back
+    /// to Campfire. `None`: those are paths, as text (the request's `Host` is never used).
+    pub campfire_url: Option<String>,
 }
 
 /// A configuration error. It never quotes `FIZZY_TOKEN`.
@@ -77,6 +81,7 @@ impl WorkspaceConfig {
         };
         let fizzy_url = base_url("FIZZY_URL", &url)?;
         let public_url = present("FIZZY_PUBLIC_URL").map(|url| base_url("FIZZY_PUBLIC_URL", &url)).transpose()?;
+        let campfire_url = present("CAMPFIRE_PUBLIC_URL").map(|url| base_url("CAMPFIRE_PUBLIC_URL", &url)).transpose()?;
         let account = present("FIZZY_ACCOUNT").map(|slug| slug.trim_matches('/').to_string());
         if let Some(slug) = &account
             && (slug.is_empty() || !slug.bytes().all(|b| b.is_ascii_digit()))
@@ -97,6 +102,7 @@ impl WorkspaceConfig {
             settings_path: PathBuf::from(present("CAMPFIRE_STORAGE_PATH").unwrap_or_else(|| "storage".into()))
                 .join("hermes")
                 .join("workspace.json"),
+            campfire_url,
         }))
     }
 
@@ -143,6 +149,7 @@ mod tests {
         assert_eq!(config.incident_board, "Incident Log");
         assert_eq!(config.link_base(), "http://fizzy");
         assert_eq!(config.settings_path, PathBuf::from("storage/hermes/workspace.json"));
+        assert_eq!(config.campfire_url, None);
         assert!(!format!("{config:?}").contains("s3cret"));
     }
 
@@ -156,9 +163,11 @@ mod tests {
             ("FIZZY_POLL_S", "2"),
             ("WORKSPACE_INCIDENT_BOARD", "Incidents"),
             ("CAMPFIRE_STORAGE_PATH", "/rails/storage"),
+            ("CAMPFIRE_PUBLIC_URL", "https://192.168.0.114:8443/"),
         ])
         .unwrap()
         .unwrap();
+        assert_eq!(config.campfire_url.as_deref(), Some("https://192.168.0.114:8443"));
         assert_eq!(config.settings_path, PathBuf::from("/rails/storage/hermes/workspace.json"));
         assert_eq!(config.link_base(), "https://192.168.0.114:8444");
         assert_eq!(config.account.as_deref(), Some("897362094"));
@@ -173,6 +182,7 @@ mod tests {
             vec![("FIZZY_URL", "http://fizzy"), ("FIZZY_TOKEN", "s3cret"), ("FIZZY_PUBLIC_URL", "ftp://x")],
             vec![("FIZZY_URL", "http://fizzy"), ("FIZZY_TOKEN", "s3cret"), ("FIZZY_ACCOUNT", "acme")],
             vec![("FIZZY_URL", "http://fizzy"), ("FIZZY_TOKEN", "s3cret"), ("FIZZY_POLL_S", "often")],
+            vec![("FIZZY_URL", "http://fizzy"), ("FIZZY_TOKEN", "s3cret"), ("CAMPFIRE_PUBLIC_URL", "chat.example")],
         ] {
             let error = config(&vars).unwrap_err().to_string();
             assert!(!error.contains("s3cret"), "{error}");

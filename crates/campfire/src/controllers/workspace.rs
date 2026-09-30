@@ -399,7 +399,8 @@ pub async fn create_card(c: &mut Ctx) -> Result {
         return json_error(c, StatusCode::NOT_FOUND, "not_found", "That message or room isn't one of yours.");
     };
     new.source = found.message.as_ref().map(|message| CardSource {
-        message_url: c.url_for(&campfire_routes::room_at_message(message.room_id, message.id)),
+        // A path: the crate makes it a link only on CAMPFIRE_PUBLIC_URL, never on this request's Host.
+        message_path: campfire_routes::room_at_message(message.room_id, message.id),
         room_name: found.room_name.clone().unwrap_or_default(),
         author_name: message.author_name.clone(),
     });

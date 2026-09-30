@@ -13,6 +13,7 @@
 use serde_json::Value;
 
 use crate::Workspace;
+use crate::config::WorkspaceConfig;
 use crate::fizzy::{Card, Client, HttpClient, Severity};
 use crate::home::Viewer;
 use crate::pages::{self, CardSheet, SheetInput};
@@ -152,10 +153,23 @@ pub struct NewCard {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CardSource {
-    /// Absolute URL of the message in its room.
-    pub message_url: String,
+    /// The message's path in its room (`/rooms/3/@55`).
+    pub message_path: String,
     pub room_name: String,
     pub author_name: String,
+}
+
+impl CardSource {
+    /// The new card's first comment: a link to the message on `CAMPFIRE_PUBLIC_URL` when it's
+    /// set, else the message's path as text. Never the request's `Host`, which the client chooses:
+    /// the link is shown to everyone who opens the card in Fizzy.
+    pub fn comment(&self, config: &WorkspaceConfig) -> (String, Option<String>) {
+        let (author, room) = (&self.author_name, &self.room_name);
+        match &config.campfire_url {
+            Some(base) => (format!("Created from {author}’s message in {room}:"), Some(format!("{base}{}", self.message_path))),
+            None => (format!("Created from {author}’s message in {room} (in Campfire at {}).", self.message_path), None),
+        }
+    }
 }
 
 impl NewCard {
@@ -353,8 +367,8 @@ impl Workspace {
             }
         }
         if let Some(source) = &new.source {
-            let text = format!("Created from {}’s message in {}:", source.author_name, source.room_name);
-            if let Err(error) = writer.comment(number, &text, Some(&source.message_url)).await {
+            let (text, link) = source.comment(&self.config);
+            if let Err(error) = writer.comment(number, &text, link.as_deref()).await {
                 warnings.push(format!("the comment linking to the message couldn't be posted ({error})"));
             }
         }

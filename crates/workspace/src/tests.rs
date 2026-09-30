@@ -733,7 +733,7 @@ async fn creating_a_card_from_a_message() {
     .unwrap();
     assert_eq!(new.title, "Pool pump knocking");
     new.source = Some(crate::actions::CardSource {
-        message_url: "https://chat.example/rooms/3/@55".into(),
+        message_path: "/rooms/3/@55".into(),
         room_name: "engineering".into(),
         author_name: "Maya".into(),
     });
@@ -751,8 +751,8 @@ async fn creating_a_card_from_a_message() {
     );
     let comment = writes.last().unwrap().2.as_ref().unwrap()["comment"]["body"].as_str().unwrap().to_string();
     assert_eq!(
-        comment,
-        r#"<p>Karim: Created from Maya’s message in engineering: <a href="https://chat.example/rooms/3/@55">https://chat.example/rooms/3/@55</a></p>"#
+        comment, "<p>Karim: Created from Maya’s message in engineering (in Campfire at /rooms/3/@55).</p>",
+        "no CAMPFIRE_PUBLIC_URL: the path, as text"
     );
     assert_eq!(records.lock().unwrap().len(), 4, "create, two tags, comment");
 
@@ -761,6 +761,17 @@ async fn creating_a_card_from_a_message() {
     let panel = workspace.room_panel(&karim(), 3).unwrap();
     assert_eq!(panel.cards[0].number, number, "most severe first in the room's panel");
     assert!(workspace.chip(number).unwrap().contains("Pool pump knocking"));
+}
+
+#[test]
+fn the_link_back_to_the_message_uses_the_configured_url() {
+    let source = crate::actions::CardSource { message_path: "/rooms/3/@55".into(), room_name: "#ops".into(), author_name: "Maya".into() };
+    let configured = WorkspaceConfig { campfire_url: Some("https://chat.example".into()), ..config() };
+    assert_eq!(
+        source.comment(&configured),
+        ("Created from Maya’s message in #ops:".to_string(), Some("https://chat.example/rooms/3/@55".to_string()))
+    );
+    assert_eq!(source.comment(&config()), ("Created from Maya’s message in #ops (in Campfire at /rooms/3/@55).".to_string(), None));
 }
 
 #[tokio::test]

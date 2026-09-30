@@ -34,11 +34,14 @@ no routes (404), no hooks installed, so every page renders byte for byte what up
 | `FIZZY_ACCOUNT` | the token's first account | The account slug (digits), e.g. `897362094` |
 | `FIZZY_POLL_S` | `30` | Seconds between polls (minimum 5) |
 | `WORKSPACE_INCIDENT_BOARD` | `Incident Log` | The incident board, by name (case-insensitive) or id |
+| `CAMPFIRE_PUBLIC_URL` | unset | Campfire as *browsers* reach it, e.g. `https://192.168.0.114:8443`, for the link from a card created from a message back to that message. Unset: the comment gives the message's path as text (see below) |
 
-A malformed `FIZZY_URL`, `FIZZY_PUBLIC_URL`, `FIZZY_ACCOUNT` or `FIZZY_POLL_S` fails the boot
-(the message never quotes the token). Only one of `FIZZY_URL`/`FIZZY_TOKEN` set = off. Phase 1 adds
-no variable: its settings are edited in the app and kept in `<CAMPFIRE_STORAGE_PATH>/hermes/
-workspace.json` ([Settings](#settings)).
+A malformed `FIZZY_URL`, `FIZZY_PUBLIC_URL`, `CAMPFIRE_PUBLIC_URL`, `FIZZY_ACCOUNT` or
+`FIZZY_POLL_S` fails the boot (the message never quotes the token). Only one of
+`FIZZY_URL`/`FIZZY_TOKEN` set = off. Phase 1's only variable is the optional `CAMPFIRE_PUBLIC_URL`
+(read by the workspace crate's own `WorkspaceConfig::from_lookup`, so no new seam); its settings
+are edited in the app and kept in `<CAMPFIRE_STORAGE_PATH>/hermes/workspace.json`
+([Settings](#settings)).
 
 Whose token: the token decides what the workspace can see (Fizzy scopes everything to the token's
 user: `Current.user.boards`) and, in phase 1, who Fizzy shows as the author of every change. Use a
@@ -164,7 +167,12 @@ are never changed.
   prefilled: title = the message's first line (120 characters at most), details = its text,
   department = the room's (first) linked department, severity to pick. It creates the card on the
   incident board, adds the severity and department tags, comments "Karim: Created from Maya's
-  message in #room: <link to the message>", then posts "New card: <card URL>" in the room as the
+  message in #room: <link to the message>" (the link is `CAMPFIRE_PUBLIC_URL` + the message's
+  path; without that variable the comment says "… in #room (in Campfire at /rooms/3/@55)." as
+  text. It is never built from the request's `Host` header, which the client controls and which
+  would put a link of their choosing in front of everyone reading the card in Fizzy; the app has
+  no other setting for its own public URL, and `TLS_DOMAIN` doesn't say the port browsers use),
+  then posts "New card: <card URL>" in the room as the
   person (it renders as a chip). That room message goes through `create_message` and
   `broadcast_create` but not the bot webhooks: a link to a card isn't something to ask Hermes.
 - **Cache**: every write reads the card again and puts it in the snapshot at once
