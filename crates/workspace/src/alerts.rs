@@ -21,7 +21,8 @@
 //! what would be sent is recorded, not sent, so turning them back on sends nothing stale; and a
 //! reminder is sent only while it's recently due (3 times its delay after it fell due, 10 minutes
 //! at least), so a shorter delay doesn't send every reminder long overdue at once. Each person (and room) gets at
-//! most one message per poll: several alerts at once are one message (10 lines at most). Recipients
+//! most one message per poll: several alerts at once are one message (10 lines at most, new serious
+//! incidents first, the most severe first, then the reminders). Recipients
 //! follow the visibility settings (phase 2.7). Delivery is the app's (the bot's direct room with each
 //! person, so Campfire's own Web Push applies).
 
@@ -241,7 +242,11 @@ pub struct Plan<'a> {
     pub bot_id: i64,
 }
 
-/// The messages for `events`: one per person or room, whatever the number of events.
+/// A line's place in its message ([`plan`]).
+type Rank = (u8, std::cmp::Reverse<Option<Severity>>);
+
+/// The messages for `events`: one per person or room, whatever the number of events. In each, new
+/// serious incidents come first (critical, then high…), then the reminders, before the 10-line cap.
 pub fn plan(events: &[Event], plan: &Plan<'_>) -> Vec<Delivery> {
     let settings = plan.settings;
     let managers = plan.directory.duty_managers(settings);
@@ -250,9 +255,14 @@ pub fn plan(events: &[Event], plan: &Plan<'_>) -> Vec<Delivery> {
             .viewer(person)
             .is_some_and(|viewer| settings.card_visible(tags, &settings.audience(&viewer, plan.directory.rooms_of(person))))
     };
-    let mut lines: BTreeMap<To, Vec<String>> = BTreeMap::new();
-    let mut add = |to: To, line: String| lines.entry(to).or_default().push(line);
+    // Each line with its rank: new serious incidents first, the most severe first, then reminders.
+    let mut lines: BTreeMap<To, Vec<(Rank, String)>> = BTreeMap::new();
     for event in events {
+        let rank = match &event.kind {
+            EventKind::Raised { severity, .. } => (0, std::cmp::Reverse(Some(*severity))),
+            _ => (1, std::cmp::Reverse(None)),
+        };
+        let mut add = |to: To, line: String| lines.entry(to).or_default().push((rank, line));
         match &event.kind {
             EventKind::Raised { card, severity, from } => {
                 let Some(card) = plan.snapshot.card(*card) else { continue };
@@ -353,7 +363,10 @@ pub fn plan(events: &[Event], plan: &Plan<'_>) -> Vec<Delivery> {
     }
     lines
         .into_iter()
-        .map(|(to, lines)| {
+        .map(|(to, mut lines)| {
+            // Stable: in the order they were found within a rank.
+            lines.sort_by_key(|(rank, _)| *rank);
+            let lines: Vec<String> = lines.into_iter().map(|(_, line)| line).collect();
             let count = lines.len();
             let mut html = String::new();
             if count > 1 {

@@ -641,3 +641,24 @@ async fn turning_alerts_back_on_or_changing_delays_sends_nothing_stale() {
     let html = html_for(&reminder, To::Person(1));
     assert!(html.contains("Still in New after 15 min") && html.contains("#18") && !html.contains("#16"), "{html}");
 }
+
+#[tokio::test]
+async fn new_serious_incidents_come_first_in_a_long_message() {
+    let (fizzy, workspace, clock) = alerting(restricted()).await;
+    poll_at(&fizzy, &workspace, &clock, 0).await;
+    let mut cards: Vec<Value> =
+        (20..30).map(|number| card_at(number, &format!("Leak {number}"), &["engineering", "sev-high"], "2026-09-30T09:00:30Z")).collect();
+    with_cards(&fizzy, &cards);
+    assert_eq!(raised_cards(&poll_at(&fizzy, &workspace, &clock, 1).await).len(), 10);
+    // At 09:16: ten reminders (still in New), a high card and a critical one: 12 lines, 10 shown.
+    cards.push(card_at(30, "Gas smell, laundry", &["engineering", "sev-high"], "2026-09-30T09:15:00Z"));
+    cards.push(card_at(31, "Fire, kitchen", &["engineering", "sev-critical"], "2026-09-30T09:15:00Z"));
+    with_cards(&fizzy, &cards);
+    let html = html_for(&poll_at(&fizzy, &workspace, &clock, 16).await, To::Person(1));
+    let lines: Vec<&str> = html.split("<p>").skip(1).collect();
+    assert!(lines[0].starts_with("<strong>12 alerts</strong>"), "{html}");
+    assert!(lines[1].starts_with("<strong>Critical</strong>: Fire, kitchen"), "{html}");
+    assert!(lines[2].starts_with("<strong>High</strong>: Gas smell, laundry"), "{html}");
+    assert!(lines[3..11].iter().all(|line| line.starts_with("<strong>Still in New")), "{html}");
+    assert!(lines[11].starts_with("… and 2 more"), "{html}");
+}
