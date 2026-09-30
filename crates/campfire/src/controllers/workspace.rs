@@ -36,6 +36,7 @@ use campfire_workspace::drafts::{self, Decision};
 use campfire_workspace::fizzy::{self, HttpResponse};
 use campfire_workspace::overlay::{self, TabBar};
 use campfire_workspace::pages::{self, BoardFilter, FormSource};
+use campfire_workspace::settings::SaveError;
 use campfire_workspace::{Act, ActionError, Bot, BoxFuture, ChatMessage, ChatSource, Settings, Viewer, Workspace, WriteRecord};
 use serde_json::{Value, json};
 
@@ -93,7 +94,10 @@ pub async fn start(app: &App) {
         "Duty Manager Workspace on"
     );
     if let Some(error) = workspace.settings_store().load_error() {
-        tracing::warn!(%error, "the workspace settings couldn't be read; using the defaults until an administrator saves them");
+        tracing::warn!(
+            %error,
+            "the workspace settings couldn't be read; duty managers only and no departments until an administrator saves them"
+        );
     }
     tokio::spawn(poll_loop(Arc::downgrade(app), workspace));
 }
@@ -492,7 +496,8 @@ pub async fn settings(c: &mut Ctx) -> Result {
 
 /// `POST /workspace/settings` `{"departments": [{"name", "tag", "rooms": [ids]}], "duty_managers":
 /// null | [ids], "confirm_policy"}` (administrators). Room and user ids that aren't rooms or active
-/// people are dropped. `200 {"ok": true}` or `422 {"error": "invalid_settings", "message"}`.
+/// people are dropped. `200 {"ok": true}`, `422 {"error": "invalid_settings", "message"}`, or `500
+/// {"error": "settings_not_saved", …}` when the file couldn't be written (nothing changed).
 pub async fn update_settings(c: &mut Ctx) -> Result {
     let workspace = feature(c)?;
     before_actions(c, Before::default()).await?;
@@ -523,7 +528,13 @@ pub async fn update_settings(c: &mut Ctx) -> Result {
             );
             c.json(StatusCode::OK, &json!({ "ok": true }))
         }
-        Err(error) => json_error(c, StatusCode::UNPROCESSABLE_ENTITY, "invalid_settings", &error.0),
+        Err(SaveError::Invalid(error)) => json_error(c, StatusCode::UNPROCESSABLE_ENTITY, "invalid_settings", &error.0),
+        Err(error @ SaveError::Io(_)) => {
+            tracing::error!(%error, "the workspace settings couldn't be saved");
+            let message =
+                "Couldn't save the settings (the server couldn't write its file); nothing changed. Try again, or see the server log.";
+            json_error(c, StatusCode::INTERNAL_SERVER_ERROR, "settings_not_saved", message)
+        }
     }
 }
 

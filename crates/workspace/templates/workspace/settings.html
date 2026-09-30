@@ -3,7 +3,7 @@
 <section class="ws-home ws-settings" aria-labelledby="ws-settings-title">
   <h1 id="ws-settings-title" class="ws-board__title">Workspace settings</h1>
   {%- if let Some(error) = load_error %}
-  <p class="ws-notice" role="alert"><strong>The settings file couldn't be read</strong> ({{ error }}). The defaults are in use; saving replaces the file.</p>
+  <p class="ws-notice" role="alert"><strong>The settings file couldn't be read</strong> ({{ error }}). Until the settings are saved again, only duty managers (the administrators) can confirm drafts or act on cards, and no department is set; saving replaces the file.</p>
   {%- endif %}
 
   <form class="ws-form" data-ws-settings-form action="{{ action }}" method="post">

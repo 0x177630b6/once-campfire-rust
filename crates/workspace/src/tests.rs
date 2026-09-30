@@ -913,6 +913,22 @@ async fn the_settings_page_and_the_bot_view() {
     assert!(html.contains(r#"value="engineering""#) && html.contains("security &#60;desk&#62;"));
     assert!(html.contains(r#"value="admins" checked"#) && html.contains(r#"value="anyone" checked"#));
 
+    let broken = crate::pages::settings_page(
+        workspace.config(),
+        &snapshot,
+        &Settings::fail_closed(),
+        &rooms,
+        &[(1, "Ann".into())],
+        &["Ann".into()],
+        Some("workspace.json isn't valid: EOF".into()),
+    );
+    let html = askama::Template::render(&broken).unwrap();
+    assert!(
+        html.contains("couldn't be read</strong> (workspace.json isn&#39;t valid: EOF)") && html.contains("only duty managers"),
+        "{html}"
+    );
+    assert!(html.contains(r#"value="duty_managers_only" checked"#) && html.contains(r#"value="admins" checked"#));
+
     let json = crate::pages::bot_settings(workspace.config(), &snapshot, &workspace.settings(), &rooms, &[(1, "Ann".into())]);
     assert_eq!(json["incident_board"], "Incident Log");
     assert_eq!(json["departments"][0], json!({"name": "Engineering", "tag": "engineering", "rooms": [{"id": 3, "name": "engineering"}]}));

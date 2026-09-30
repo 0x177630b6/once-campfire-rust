@@ -224,9 +224,13 @@ says why.
 
 `<CAMPFIRE_STORAGE_PATH>/hermes/workspace.json` (so `storage/hermes/workspace.json` by default,
 next to `db/` and `files/`), not Campfire's database (upstream's schema stays untouched). Written
-atomically (temporary file in the same directory, `fsync`, rename). Missing = the defaults; a file
-that can't be read or doesn't validate = the defaults, a warning in the log and on the settings
-page, and the next save replaces it.
+atomically (temporary file in the same directory, `fsync`, rename, `fsync` of the directory), one
+save at a time (a mutex around write-then-use, so the file and memory end as the same save).
+Missing = the defaults (`anyone`). A file that exists but can't be read or doesn't validate **fails
+closed** (`Settings::fail_closed`): no departments, `duty_managers_only`, the administrators as
+duty managers, so a damaged file can't loosen a policy the owner tightened; a warning in the log and
+on the settings page, and the next save replaces it. A save the server can't write is `500
+settings_not_saved` (nothing changed), not `422`.
 
 ```json
 {
@@ -269,7 +273,7 @@ redirects to the sign-in page (fetch follows it): the script says to sign in aga
 | `POST /workspace/cards/:number/:change` — `move {"to": "new"\|"column:<id>"\|"not_now"\|"closed"}`, `severity {"severity": "high"\|""}`, `departments {"tags": […]}`, `step {"step_id", "completed"}`, `comment {"body"}` | `200 {"number", "sheet", "chip"}` (the fresh sheet and chip); unknown change `404`; `403`, `404`, `422`, `502` |
 | `GET /workspace/rooms/:room_id/panel` | The panel (fragment); `204` room not linked; `404` not the user's room |
 | `GET /workspace/settings` | The settings page; `403` unless administrator |
-| `POST /workspace/settings` (JSON above) | `200 {"ok": true}`; `422 invalid_settings` with the reason; `403` unless administrator |
+| `POST /workspace/settings` (JSON above) | `200 {"ok": true}`; `422 invalid_settings` with the reason; `500 settings_not_saved` when the file can't be written (nothing changed); `403` unless administrator |
 | `GET /hermes/:bot_key/workspace/settings.json` | Bots only (`403` for people): `{"incident_board", "severity_tags", "departments": [{"name", "tag", "rooms": [{"id", "name"}]}], "duty_managers": [{"id", "name"}], "confirm_policy"}`, for Hermes's skill to tag cards by department. No bot write endpoint |
 
 ## Crate layout
@@ -284,7 +288,7 @@ redirects to the sign-in page (fetch follows it): the script says to sign in aga
 | `…/src/drafts.rs` | Draft detection, pending drafts, `Decision`, the buttons |
 | `…/src/home.rs`, `templates/workspace/home.html`, `_card.html` | Home view-model and template |
 | `…/src/overlay.rs`, `templates/workspace/_tab_bar.html`, `_nav.html` | Tab bar (and the room panel it carries), pages' nav, page location |
-| `…/src/settings.rs` | `Settings`, `Department`, `Policy`/`Act` (the policy point), `SettingsStore` (the JSON file, atomic writes) |
+| `…/src/settings.rs` | `Settings`, `Department`, `Policy`/`Act` (the policy point), `SettingsStore` (the JSON file, atomic serialized writes, fail-closed reads) |
 | `…/src/writes.rs` | `TokenSource`/`SharedToken`/`ActingIdentity`, `Writer` (every Fizzy write, audited), `ActionError`, `WriteRecord`, toggle diffing |
 | `…/src/actions.rs` | `Change`, `Target`, `NewCard` (input parsing and validation); `Workspace::{authorize, card_sheet, change_card, create_card}` |
 | `…/src/pages.rs`, `templates/workspace/{board,sheet,_panel,_list_card,new_card,settings}.html` | Board, card sheet, room panel, new-card form, settings page, the bot's settings JSON |
@@ -401,7 +405,10 @@ Not seams (fork-owned or new files): `crates/workspace/**`, `controllers/workspa
   once), creation with failing tags (created, with a warning), input validation, the sheet
   (fields, escaping, controls disabled by the policy), the board (columns, filters, Move menus,
   settings link), room panels, the prefilled form, the settings page and the bot JSON; settings
-  (validation, normalization, atomic save and reload, a broken file), the policy table.
+  (validation, normalization, atomic save and reload, a broken, invalid or unreadable file failing
+  closed while a missing one is the defaults, the settings page's warning, a failed write being an
+  I/O error that changes nothing, concurrent saves ending with file and memory agreeing), the
+  policy table.
 - `crates/campfire/src/controllers/workspace.rs` (needs the app to link, i.e. libvips; runs in CI):
   route recognition (all routes), `FizzyHttp` against a fake server (headers, query, `Link`, 404,
   errors without the token, a POST's method and body), settings ids; request tests against the

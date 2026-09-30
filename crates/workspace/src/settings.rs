@@ -4,9 +4,11 @@
 //!
 //! They live in a JSON file under Campfire's storage root (`<CAMPFIRE_STORAGE_PATH>/hermes/
 //! workspace.json`), not in Campfire's database, so upstream's schema stays untouched. Writes are
-//! atomic (a temporary file in the same directory, then a rename). A missing file is the defaults;
-//! a file that can't be read keeps the defaults in memory and says so on the settings page (saving
-//! replaces it).
+//! atomic (a temporary file in the same directory, `fsync`, a rename, then the directory's
+//! `fsync`), one save at a time. A missing file is the defaults (anyone may act). A file that
+//! exists but can't be read or doesn't validate **fails closed** ([`Settings::fail_closed`]: no
+//! departments, duty managers only, the administrators being the duty managers) and says so in the
+//! log and on the settings page; saving replaces it.
 //!
 //! ```json
 //! {
@@ -20,7 +22,7 @@
 //! `duty_managers` absent (or `null`) means Campfire's administrators.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 use serde::{Deserialize, Serialize};
 
@@ -142,6 +144,26 @@ impl Act {
     }
 }
 
+/// Why a save didn't happen.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SaveError {
+    /// The settings aren't valid (422); the message says why.
+    Invalid(SettingsError),
+    /// The file couldn't be written (500); nothing changed, in memory or on disk.
+    Io(String),
+}
+
+impl std::fmt::Display for SaveError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Invalid(error) => error.fmt(f),
+            Self::Io(error) => write!(f, "couldn't write the settings file: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for SaveError {}
+
 /// A settings file or form that can't be used.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SettingsError(pub String);
@@ -160,6 +182,14 @@ pub fn normalize_tag(tag: &str) -> String {
 }
 
 impl Settings {
+    /// What a settings file that exists but can't be used means: nobody but the duty managers
+    /// (Campfire's administrators, since no one is listed) may act, and no departments, until an
+    /// administrator saves the settings again. A policy the owner tightened must not silently
+    /// loosen to `anyone` because the file got damaged.
+    pub fn fail_closed() -> Self {
+        Self { confirm_policy: Policy::DutyManagersOnly, ..Self::default() }
+    }
+
     /// The settings cleaned up (trimmed, tags normalized, duplicates of room and user ids dropped),
     /// or why they can't be saved.
     pub fn validated(mut self) -> Result<Self, SettingsError> {
@@ -255,20 +285,22 @@ fn dedup(ids: &mut Vec<i64>) {
 pub struct SettingsStore {
     path: PathBuf,
     current: RwLock<Arc<Settings>>,
-    /// Why the file couldn't be read at boot (the defaults are in use).
+    /// Why the file couldn't be read at boot ([`Settings::fail_closed`] is in use).
     load_error: RwLock<Option<String>>,
+    /// One save at a time, so that the file and `current` end as the same save.
+    saving: Mutex<()>,
 }
 
 impl SettingsStore {
-    /// Reads `path`: missing = the defaults; unreadable or invalid = the defaults and
+    /// Reads `path`: missing = the defaults; unreadable or invalid = [`Settings::fail_closed`] and
     /// [`load_error`](Self::load_error).
     pub fn open(path: impl Into<PathBuf>) -> Self {
         let path = path.into();
         let (settings, error) = match read(&path) {
             Ok(settings) => (settings, None),
-            Err(error) => (Settings::default(), Some(error.0)),
+            Err(error) => (Settings::fail_closed(), Some(error.0)),
         };
-        Self { path, current: RwLock::new(Arc::new(settings)), load_error: RwLock::new(error) }
+        Self { path, current: RwLock::new(Arc::new(settings)), load_error: RwLock::new(error), saving: Mutex::new(()) }
     }
 
     pub fn path(&self) -> &Path {
@@ -283,10 +315,12 @@ impl SettingsStore {
         self.load_error.read().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
-    /// Validates, writes atomically (temporary file, then rename), then uses them.
-    pub fn save(&self, settings: Settings) -> Result<Arc<Settings>, SettingsError> {
-        let settings = settings.validated()?;
-        write_atomically(&self.path, &settings).map_err(|error| SettingsError(format!("Couldn't save the settings: {error}")))?;
+    /// Validates, writes atomically (temporary file, then rename), then uses them. Saves run one
+    /// at a time: the last one written is the one in use.
+    pub fn save(&self, settings: Settings) -> Result<Arc<Settings>, SaveError> {
+        let settings = settings.validated().map_err(SaveError::Invalid)?;
+        let _saving = self.saving.lock().unwrap_or_else(|e| e.into_inner());
+        write_atomically(&self.path, &settings).map_err(|error| SaveError::Io(error.to_string()))?;
         let settings = Arc::new(settings);
         *self.current.write().unwrap_or_else(|e| e.into_inner()) = settings.clone();
         *self.load_error.write().unwrap_or_else(|e| e.into_inner()) = None;
@@ -323,7 +357,20 @@ fn write_atomically(path: &Path, settings: &Settings) -> std::io::Result<()> {
     if result.is_err() {
         let _ = std::fs::remove_file(&temporary);
     }
-    result
+    result?;
+    sync_dir(dir)
+}
+
+/// Makes the rename durable: a crash right after it can't bring the old file back.
+#[cfg(unix)]
+fn sync_dir(dir: &Path) -> std::io::Result<()> {
+    std::fs::File::open(dir)?.sync_all()
+}
+
+/// Windows can't open a directory as a file; its renames are journaled.
+#[cfg(not(unix))]
+fn sync_dir(_dir: &Path) -> std::io::Result<()> {
+    Ok(())
 }
 
 #[cfg(test)]
@@ -456,18 +503,74 @@ mod tests {
     }
 
     #[test]
-    fn a_broken_file_keeps_the_defaults_and_says_so() {
+    fn a_broken_file_fails_closed_and_says_so() {
         let dir = scratch_dir("broken");
         let path = dir.join("workspace.json");
-        std::fs::write(&path, "{not json").unwrap();
+        std::fs::write(&path, r#"{"departments": [], "confirm_policy": "anyone", "#).unwrap();
         let store = SettingsStore::open(&path);
-        assert_eq!(*store.get(), Settings::default());
+        assert_eq!(*store.get(), Settings::fail_closed());
         assert!(store.load_error().unwrap().contains("isn't valid"));
+        let settings = store.get();
+        assert!(settings.departments.is_empty() && settings.confirm_policy == Policy::DutyManagersOnly);
+        let (member, administrator) = (viewer(1, false), viewer(2, true));
+        for act in [Act::ConfirmDraft { reporter_id: Some(1) }, Act::CreateCard, Act::Comment, Act::ChangeCard] {
+            assert!(!settings.permits(&act, &member) && settings.permits(&act, &administrator), "{act:?}");
+        }
+
         std::fs::write(&path, r#"{"departments": [{"name": "A", "tag": "sev-low"}]}"#).unwrap();
-        assert!(SettingsStore::open(&path).load_error().unwrap().contains("severity tag"));
+        let invalid = SettingsStore::open(&path);
+        assert!(invalid.load_error().unwrap().contains("severity tag"));
+        assert_eq!(*invalid.get(), Settings::fail_closed(), "a file that doesn't validate fails closed too");
+
+        let unreadable = dir.join("a-directory.json");
+        std::fs::create_dir(&unreadable).unwrap();
+        let store_of_a_directory = SettingsStore::open(&unreadable);
+        assert!(store_of_a_directory.load_error().unwrap().contains("couldn't read"));
+        assert_eq!(*store_of_a_directory.get(), Settings::fail_closed(), "an unreadable file fails closed");
+
+        assert_eq!(*SettingsStore::open(dir.join("missing.json")).get(), Settings::default(), "a missing file is still the defaults");
 
         store.save(Settings::default()).unwrap();
         assert_eq!(store.load_error(), None);
+        assert_eq!(*store.get(), Settings::default());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_failed_write_is_an_io_error_and_changes_nothing() {
+        let dir = scratch_dir("unwritable");
+        // The file's directory is a file: nothing can be created in it.
+        std::fs::write(dir.join("hermes"), "").unwrap();
+        let store = SettingsStore::open(dir.join("hermes").join("workspace.json"));
+        let before = store.get();
+        let error = store.save(Settings { departments: vec![department("A", "a", &[])], ..Settings::default() }).unwrap_err();
+        assert!(matches!(error, SaveError::Io(_)), "{error:?}");
+        assert_eq!(store.get(), before);
+        let invalid = store.save(Settings { departments: vec![department("", "x", &[])], ..Settings::default() }).unwrap_err();
+        assert!(matches!(invalid, SaveError::Invalid(_)), "{invalid:?}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn concurrent_saves_leave_the_file_and_memory_agreeing() {
+        let dir = scratch_dir("concurrent");
+        let path = dir.join("workspace.json");
+        let store = std::sync::Arc::new(SettingsStore::open(&path));
+        let threads: Vec<_> = (1..=8)
+            .map(|n| {
+                let store = store.clone();
+                std::thread::spawn(move || {
+                    for round in 0..5 {
+                        let name = format!("D{n}-{round}");
+                        store.save(Settings { departments: vec![department(&name, "", &[])], ..Settings::default() }).unwrap();
+                    }
+                })
+            })
+            .collect();
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        assert_eq!(SettingsStore::open(&path).get(), store.get());
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
