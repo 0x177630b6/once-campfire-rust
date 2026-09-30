@@ -328,18 +328,23 @@ impl Workspace {
     }
 
     /// Phase 2.5: what should alert after this poll, claimed in `notified.json` (so never twice)
-    /// and queued for the app ([`Workspace::take_alerts`]). The first poll since the start only
-    /// records. Compared with the previous poll's picture (never the live one, which
+    /// and queued for the app ([`Workspace::take_alerts`]). The first poll since the start, and any
+    /// poll while alerts are off, only records. Compared with the previous poll's picture (never the live one, which
     /// [`Workspace::remember`] updates between polls).
     fn detect_alerts(&self, next: &Arc<Snapshot>, now: Timestamp) {
         let mut primed = self.alerts_primed.lock().unwrap_or_else(|e| e.into_inner());
         let mut seen = self.alerts_seen.lock().unwrap_or_else(|e| e.into_inner());
         let previous = seen.replace(next.clone()).unwrap_or_default();
-        let events = alerts::detect(&previous, next, &self.settings(), &self.proposals.all(), now, *primed);
+        // While alerts are off, what they would send is recorded all the same, and not sent: turning
+        // them back on doesn't send what happened meanwhile.
+        let mut settings = (*self.settings()).clone();
+        let enabled = std::mem::replace(&mut settings.notifications.enabled, true);
+        let events = alerts::detect(&previous, next, &settings, &self.proposals.all(), now, *primed);
         let fresh = self.notified.claim(events, now);
         match *primed {
             None => *primed = Some(now),
-            Some(_) => self.outbox.lock().unwrap_or_else(|e| e.into_inner()).extend(fresh),
+            Some(_) if enabled => self.outbox.lock().unwrap_or_else(|e| e.into_inner()).extend(fresh),
+            Some(_) => {}
         }
     }
 

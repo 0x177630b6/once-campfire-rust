@@ -17,7 +17,10 @@
 //!
 //! What was sent is kept in `<CAMPFIRE_STORAGE_PATH>/hermes/notified.json` ([`NotifiedStore`]), so
 //! nothing is sent twice, restarts included; and the **first poll after a start alerts on nothing**:
-//! whatever would alert then is recorded as sent without sending it. Each person (and room) gets at
+//! whatever would alert then is recorded as sent without sending it. Likewise while alerts are off:
+//! what would be sent is recorded, not sent, so turning them back on sends nothing stale; and a
+//! reminder is sent only while it's recently due (3 times its delay after it fell due, 10 minutes
+//! at least), so a shorter delay doesn't send every reminder long overdue at once. Each person (and room) gets at
 //! most one message per poll: several alerts at once are one message (10 lines at most). Recipients
 //! follow the visibility settings (phase 2.7). Delivery is the app's (the bot's direct room with each
 //! person, so Campfire's own Web Push applies).
@@ -44,6 +47,15 @@ const KEEP_SENT: SignedDuration = SignedDuration::from_hours(14 * 24);
 const HANDOVER_DUE_FOR: SignedDuration = SignedDuration::from_mins(30);
 /// Lines of one message, at most.
 const MAX_LINES: usize = 10;
+/// A reminder is sent only while it's recently due: for 3 times its delay after it fell due (10
+/// minutes at least), so that a shorter delay, or reminders turned back on, don't send at once every
+/// reminder long overdue.
+const MIN_REMINDER_WINDOW: SignedDuration = SignedDuration::from_mins(10);
+
+/// Whether something `elapsed` old, due at `due` (`delay` being the reminder's delay), is recently due.
+fn recently_due(elapsed: SignedDuration, due: SignedDuration, delay: SignedDuration) -> bool {
+    elapsed >= due && elapsed < due + (delay * 3).max(MIN_REMINDER_WINDOW)
+}
 pub const MAX_REMINDER_MINUTES: u32 = 24 * 60;
 
 /// `settings.notifications`.
@@ -120,6 +132,7 @@ pub enum EventKind {
 
 /// What should alert now, comparing `previous` and `next`. `primed_at`: when the first poll since
 /// the start ran (`None` during it: every card counts as new, to be recorded without being sent).
+/// Reminders are only for what is [recently due](recently_due).
 pub fn detect(
     previous: &Snapshot,
     next: &Snapshot,
@@ -151,9 +164,10 @@ pub fn detect(
             });
         }
         let minutes = notifications.new_reminder_min;
+        let delay = SignedDuration::from_mins(minutes.into());
         if minutes > 0
             && card.state() == CardState::New
-            && card.created_at.is_some_and(|created| now.duration_since(created) >= SignedDuration::from_mins(minutes.into()))
+            && card.created_at.is_some_and(|created| recently_due(now.duration_since(created), delay, delay))
         {
             events.push(Event {
                 key: format!("new:{}", card.number),
@@ -167,14 +181,14 @@ pub fn detect(
         for proposal in proposals.iter().filter(|proposal| proposal.status == Status::Pending) {
             let waited = now.duration_since(proposal.created_at);
             let has_person = proposal.context.user_id.is_some();
-            if has_person && waited >= after {
+            if has_person && recently_due(waited, after, after) {
                 events.push(Event {
                     key: format!("proposal:{}:person", proposal.id),
                     kind: EventKind::ProposalWaiting { id: proposal.id.clone(), managers: false, minutes },
                 });
             }
             let managers_after = if has_person { after * 2 } else { after };
-            if waited >= managers_after {
+            if recently_due(waited, managers_after, after) {
                 events.push(Event {
                     key: format!("proposal:{}:managers", proposal.id),
                     kind: EventKind::ProposalWaiting {

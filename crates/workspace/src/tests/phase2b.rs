@@ -584,3 +584,60 @@ async fn unknown_room_members_see_nothing_restricted() {
     assert!(workspace.proposal_visible_to_room(&proposal, 99));
     assert!(workspace.handover_page(&manager()).unwrap().text.contains("Lift B"));
 }
+
+#[tokio::test]
+async fn turning_alerts_back_on_or_changing_delays_sends_nothing_stale() {
+    let (fizzy, workspace, clock) = alerting(restricted()).await;
+    let set = |change: &dyn Fn(&mut Settings)| {
+        let mut settings = workspace.settings().as_ref().clone();
+        change(&mut settings);
+        workspace.settings_store().save(settings).unwrap();
+    };
+    poll_at(&fizzy, &workspace, &clock, 0).await;
+
+    // Off: what would have been sent is recorded all the same, and not sent once back on.
+    set(&|settings| settings.notifications.enabled = false);
+    with_cards(&fizzy, &[card_at(16, "Smoke in kitchen", &["engineering", "sev-critical"], "2026-09-30T09:01:00Z")]);
+    assert!(poll_at(&fizzy, &workspace, &clock, 2).await.is_empty());
+    assert!(poll_at(&fizzy, &workspace, &clock, 20).await.is_empty(), "16 has been in New 19 minutes");
+    set(&|settings| settings.notifications.enabled = true);
+    assert!(poll_at(&fizzy, &workspace, &clock, 21).await.is_empty(), "neither the alert nor the reminder, late");
+
+    // A shorter delay: reminders long overdue under it aren't sent all at once.
+    set(&|settings| settings.notifications.new_reminder_min = 240);
+    with_cards(
+        &fizzy,
+        &[
+            card_at(16, "Smoke in kitchen", &["engineering", "sev-critical"], "2026-09-30T09:01:00Z"),
+            card_at(17, "Flood, basement", &["engineering", "sev-critical"], "2026-09-30T09:22:00Z"),
+        ],
+    );
+    assert_eq!(raised_cards(&poll_at(&fizzy, &workspace, &clock, 23).await), ["17"]);
+    let mut asking = workspace.settings().as_ref().clone();
+    asking.autonomy.comment = Dial::AskFirst;
+    asking.notifications.draft_reminder_min = 0;
+    workspace.settings_store().save(asking).unwrap();
+    let comment = json!({"action": "comment", "card": 13, "body": "Wet floor sign placed"});
+    workspace.propose(&fizzy, &hermes_bot(), &comment, for_maya(), None).await.unwrap();
+    let html = html_for(&poll_at(&fizzy, &workspace, &clock, 90).await, To::Person(1));
+    assert!(!html.contains("#16") && !html.contains("#17") && !html.contains("waiting"), "not due under these delays: {html}");
+    set(&|settings| {
+        settings.notifications.new_reminder_min = 15;
+        settings.notifications.draft_reminder_min = 10;
+    });
+    assert!(poll_at(&fizzy, &workspace, &clock, 91).await.is_empty(), "due over an hour ago: not sent now");
+
+    // What becomes due from now on is.
+    with_cards(
+        &fizzy,
+        &[
+            card_at(16, "Smoke in kitchen", &["engineering", "sev-critical"], "2026-09-30T09:01:00Z"),
+            card_at(17, "Flood, basement", &["engineering", "sev-critical"], "2026-09-30T09:22:00Z"),
+            card_at(18, "Gas smell, laundry", &["engineering", "sev-high"], "2026-09-30T10:32:00Z"),
+        ],
+    );
+    assert_eq!(raised_cards(&poll_at(&fizzy, &workspace, &clock, 92).await), ["18"]);
+    let reminder = poll_at(&fizzy, &workspace, &clock, 107).await;
+    let html = html_for(&reminder, To::Person(1));
+    assert!(html.contains("Still in New after 15 min") && html.contains("#18") && !html.contains("#16"), "{html}");
+}
