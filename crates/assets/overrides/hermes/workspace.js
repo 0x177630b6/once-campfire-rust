@@ -10,6 +10,18 @@
 // - Draft buttons (`.ws-draft`): File / Dismiss POST the decision; the server posts "confirm" or
 //   "cancel" in the room as the user, mentioning the bot. Edit puts the mention and "change: " in the
 //   composer. A draft followed by a later message from the same bot is marked answered.
+// - Card sheet (phase 1): a chip, a card in a room's panel or on the board opens the card's sheet
+//   in an overlay (GET /workspace/cards/:n?fragment=1); its controls POST JSON to
+//   /workspace/cards/:n/<change> and the sheet, the chips and the panel are refreshed from the reply.
+// - Board: one column at a time on phones (the column switcher), Move menus on cards.
+// - Room panel: the cards of the departments linked to the room, behind a "N cards" button the
+//   script adds to the room's nav; open or closed is remembered per browser.
+// - "Create a card": an entry in every message's action menu (and New card buttons) opens the
+//   new-card form (GET /workspace/cards/new?fragment=1), posted as JSON to /workspace/cards.
+// - Settings: the departments rows (add / remove) and the form, posted as JSON.
+//
+// Every write answers JSON; a refusal or an error shows its message where the action was. A reply
+// that was redirected means the session expired (fetch follows the redirect to the sign-in page).
 
 const CARDS_URL = "/workspace/cards.json"
 const REFRESH_MS = 60_000
@@ -25,6 +37,8 @@ function scheduleScan(delay = 250) {
 function scan() {
   markAnsweredDrafts()
   refreshChips()
+  addCardActions()
+  setUpPanel()
 }
 
 // --- Card chips ------------------------------------------------------------------------------------
@@ -142,6 +156,7 @@ function editDraft(draft) {
 
 document.addEventListener("click", event => {
   const button = event.target.closest?.("[data-ws-draft-action]")
+  if (!button) return
   const draft = button?.closest(".ws-draft")
   if (!draft || draft.dataset.wsDraftState === "busy") return
 
@@ -154,13 +169,434 @@ document.addEventListener("click", event => {
   }
 })
 
+// --- Requests ---------------------------------------------------------------------------------------
+
+const SIGNED_OUT = "You’re signed out. Sign in again, then retry."
+
+// POSTs `body` as JSON. Resolves to the reply's JSON; rejects with a message to show.
+async function postJSON(url, body) {
+  let response
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      body: JSON.stringify(body)
+    })
+  } catch {
+    throw new Error("The server can’t be reached. Check your connection and retry.")
+  }
+  if (response.redirected || response.status === 401) throw new Error(SIGNED_OUT)
+  const data = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(data?.message || `Something went wrong (HTTP ${response.status}).`)
+  return data
+}
+
+// GETs an HTML fragment.
+async function getFragment(url) {
+  const separator = url.includes("?") ? "&" : "?"
+  let response
+  try {
+    response = await fetch(`${url}${separator}fragment=1`, { credentials: "same-origin", headers: { "Accept": "text/html" } })
+  } catch {
+    throw new Error("The server can’t be reached. Check your connection and retry.")
+  }
+  if (response.redirected) throw new Error(SIGNED_OUT)
+  if (response.status === 404) throw new Error("This card isn’t on the incident board.")
+  const html = await response.text()
+  // Errors come as a notice to show as is.
+  return { ok: response.ok, status: response.status, html }
+}
+
+function fragment(html) {
+  const template = document.createElement("template")
+  template.innerHTML = html.trim()
+  return template.content.firstElementChild
+}
+
+function showStatus(container, text, tone = "") {
+  const status = container?.querySelector("[data-ws-status]")
+  if (!status) return
+  status.textContent = text
+  status.dataset.tone = tone
+}
+
+// --- Overlay (card sheet, new-card form) -------------------------------------------------------------
+
+let overlayDirty = false
+
+function overlay() {
+  let dialog = document.querySelector("dialog.ws-overlay")
+  if (!dialog) {
+    dialog = document.createElement("dialog")
+    dialog.className = "ws-overlay"
+    dialog.setAttribute("aria-label", "Card")
+    dialog.addEventListener("close", onOverlayClosed)
+    document.body.append(dialog)
+  }
+  return dialog
+}
+
+async function openOverlay(url) {
+  const dialog = overlay()
+  dialog.innerHTML = `<p class="ws-overlay__loading" role="status">Loading…</p>`
+  if (!dialog.open) dialog.show()
+  document.documentElement.classList.add("ws-overlay-open")
+  try {
+    const { html } = await getFragment(url)
+    dialog.replaceChildren(fragment(html) || document.createTextNode(""))
+    dialog.querySelector("input[name=title], textarea, select")?.focus({ preventScroll: true })
+  } catch (error) {
+    dialog.innerHTML = ""
+    const notice = document.createElement("p")
+    notice.className = "ws-notice"
+    notice.textContent = error.message
+    const close = document.createElement("button")
+    close.type = "button"
+    close.className = "btn ws-btn"
+    close.dataset.wsSheetClose = ""
+    close.textContent = "Close"
+    dialog.append(notice, close)
+  }
+}
+
+function closeOverlay() {
+  const dialog = document.querySelector("dialog.ws-overlay")
+  if (dialog?.open) dialog.close()
+}
+
+function onOverlayClosed() {
+  document.documentElement.classList.remove("ws-overlay-open")
+  // The board shows the cards as of the page load: reload it once something changed.
+  if (overlayDirty && document.querySelector("[data-ws-board]")) reloadPage()
+  overlayDirty = false
+}
+
+function reloadPage() {
+  if (window.Turbo?.visit) {
+    window.Turbo.visit(location.href, { action: "replace" })
+  } else {
+    location.reload()
+  }
+}
+
+// A plain click (no modifier: those keep the link's own behaviour, e.g. Fizzy in a new tab).
+function plainClick(event) {
+  return event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey
+}
+
+document.addEventListener("click", event => {
+  if (!plainClick(event)) return
+  const opener = event.target.closest?.("a.ws-chip[data-ws-card], [data-ws-open-sheet]")
+  if (opener) {
+    const number = opener.dataset.wsOpenSheet || opener.dataset.wsCard
+    if (!/^\d+$/.test(number)) return
+    event.preventDefault()
+    openOverlay(`/workspace/cards/${number}`)
+    return
+  }
+
+  const newCard = event.target.closest?.("[data-ws-new-card]")
+  if (newCard) {
+    event.preventDefault()
+    newCard.closest("details")?.removeAttribute("open")
+    const query = new URLSearchParams()
+    if (newCard.dataset.wsMessage) query.set("message_id", newCard.dataset.wsMessage)
+    else if (newCard.dataset.wsRoom) query.set("room_id", newCard.dataset.wsRoom)
+    openOverlay(`/workspace/cards/new?${query}`)
+    return
+  }
+
+  if (event.target.closest?.("[data-ws-sheet-close]")) {
+    event.preventDefault()
+    if (event.target.closest("dialog.ws-overlay")) closeOverlay()
+    else location.href = "/workspace/board"
+  }
+})
+
+document.addEventListener("keydown", event => {
+  if (event.key === "Escape" && document.querySelector("dialog.ws-overlay[open]")) closeOverlay()
+})
+
+document.addEventListener("turbo:before-cache", () => {
+  closeOverlay()
+  document.querySelector("dialog.ws-overlay")?.remove()
+})
+
+// --- Card sheet ------------------------------------------------------------------------------------
+
+function changeBody(control) {
+  switch (control.dataset.wsChange) {
+    case "severity": return { severity: control.value }
+    case "move": return { to: control.value }
+    case "departments": return { tags: [ ...control.querySelectorAll("input:checked") ].map(input => input.value) }
+    case "step": return { step_id: control.dataset.wsStep, completed: control.checked }
+  }
+}
+
+async function changeCard(sheet, kind, body) {
+  sheet.setAttribute("aria-busy", "true")
+  showStatus(sheet, "Saving…")
+  try {
+    const data = await postJSON(`${sheet.dataset.wsActionUrl}/${kind}`, body)
+    overlayDirty = true
+    if (data.chip) updateChips(data.number, data.chip)
+    refreshPanel()
+    const next = data.sheet && fragment(data.sheet)
+    if (next) {
+      sheet.replaceWith(next)
+      showStatus(next, "Saved.", "ok")
+    } else {
+      showStatus(sheet, "Saved.", "ok")
+    }
+  } catch (error) {
+    showStatus(sheet, error.message, "error")
+    // Show the card as it really is now (a toggle may have half-applied).
+    if (sheet.closest("dialog.ws-overlay")) {
+      const { ok, html } = await getFragment(sheet.dataset.wsActionUrl).catch(() => ({ ok: false }))
+      const next = ok && fragment(html)
+      if (next) {
+        sheet.replaceWith(next)
+        showStatus(next, error.message, "error")
+      }
+    }
+  } finally {
+    sheet.removeAttribute("aria-busy")
+  }
+}
+
+function updateChips(number, html) {
+  for (const link of document.querySelectorAll(`a[data-ws-card="${number}"]`)) {
+    const chip = fragment(html)
+    if (!chip) continue
+    chip.dataset.wsV = hash(html)
+    link.replaceWith(chip)
+  }
+}
+
+document.addEventListener("change", event => {
+  const control = event.target.closest?.(".ws-sheet [data-ws-change]")
+  const sheet = control?.closest(".ws-sheet")
+  if (!sheet || sheet.getAttribute("aria-busy") === "true") return
+  const body = changeBody(control)
+  if (body) changeCard(sheet, control.dataset.wsChange, body)
+})
+
+document.addEventListener("submit", event => {
+  const form = event.target
+  if (form.matches?.(".ws-sheet [data-ws-comment]")) {
+    event.preventDefault()
+    const sheet = form.closest(".ws-sheet")
+    const body = form.elements.body.value.trim()
+    if (body && sheet.getAttribute("aria-busy") !== "true") changeCard(sheet, "comment", { body })
+  } else if (form.matches?.("[data-ws-new-card-form]")) {
+    event.preventDefault()
+    createCard(form)
+  } else if (form.matches?.("[data-ws-settings-form]")) {
+    event.preventDefault()
+    saveSettings(form)
+  }
+})
+
+// --- Board -----------------------------------------------------------------------------------------
+
+document.addEventListener("click", async event => {
+  const tab = event.target.closest?.("[data-ws-coltab]")
+  if (tab) {
+    const board = tab.closest("[data-ws-board]")
+    for (const other of board.querySelectorAll("[data-ws-coltab]")) other.setAttribute("aria-pressed", String(other === tab))
+    for (const column of board.querySelectorAll("[data-ws-col]")) column.classList.toggle("ws-col--active", column.dataset.wsCol === tab.dataset.wsColtab)
+    return
+  }
+
+  const move = event.target.closest?.("[data-ws-move]")
+  if (move) {
+    const board = move.closest("[data-ws-board]")
+    move.closest("details")?.removeAttribute("open")
+    showStatus(board, `Moving No. ${move.dataset.wsNumber}…`)
+    try {
+      await postJSON(`/workspace/cards/${move.dataset.wsNumber}/move`, { to: move.dataset.wsMove })
+      reloadPage()
+    } catch (error) {
+      showStatus(board, error.message, "error")
+    }
+  }
+})
+
+// --- Room panel ------------------------------------------------------------------------------------
+
+const PANEL_KEY = "ws-panel-open"
+
+function panelWanted() {
+  try { return localStorage.getItem(PANEL_KEY) === "1" } catch { return false }
+}
+
+function rememberPanel(open) {
+  try { localStorage.setItem(PANEL_KEY, open ? "1" : "0") } catch {}
+}
+
+function setUpPanel() {
+  const root = document.querySelector("[data-ws-panel-root]")
+  const nav = document.querySelector("#nav")
+  let toggle = nav?.querySelector(".ws-panel-toggle")
+  if (!root || !nav) {
+    toggle?.remove()
+    return
+  }
+  if (!toggle) {
+    toggle = document.createElement("button")
+    toggle.type = "button"
+    toggle.className = "btn ws-panel-toggle"
+    toggle.setAttribute("aria-controls", "ws-panel")
+    toggle.addEventListener("click", () => showPanel(document.querySelector("#ws-panel")?.hidden ?? false))
+    const current = nav.querySelector(".room--current")
+    current ? current.after(toggle) : nav.append(toggle)
+  }
+  const count = Number(root.dataset.wsPanelCount || 0)
+  toggle.textContent = `${count} ${count === 1 ? "card" : "cards"}`
+  if (root.dataset.wsPanelReady) return
+  root.dataset.wsPanelReady = "1"
+  // Wide screens keep it open if it was; phones open it on demand (it covers the room).
+  showPanel(panelWanted() && matchMedia("(min-width: 100ch)").matches, false)
+}
+
+function showPanel(open, remember = true) {
+  const panel = document.querySelector("#ws-panel")
+  if (!panel) return
+  panel.hidden = !open
+  document.body.classList.toggle("ws-panel-open", open)
+  document.querySelector(".ws-panel-toggle")?.setAttribute("aria-expanded", String(open))
+  if (remember) rememberPanel(open)
+}
+
+async function refreshPanel() {
+  const root = document.querySelector("[data-ws-panel-root]")
+  if (!root) return
+  const open = !document.querySelector("#ws-panel")?.hidden
+  try {
+    const response = await fetch(root.dataset.wsPanelUrl, { credentials: "same-origin", headers: { "Accept": "text/html" } })
+    if (!response.ok || response.redirected || response.status === 204) return
+    const next = fragment(await response.text())
+    if (!next) return
+    next.dataset.wsPanelReady = "1"
+    root.replaceWith(next)
+    showPanel(open, false)
+    setUpPanel()
+  } catch {
+    // Kept as it is; the next page load shows it again.
+  }
+}
+
+document.addEventListener("click", event => {
+  if (event.target.closest?.("[data-ws-panel-close]")) showPanel(false)
+})
+
+// --- "Create a card from this message" -------------------------------------------------------------
+
+function addCardActions() {
+  if (!document.querySelector("meta[name='current-room-id']")) return
+  const icon = document.querySelector(".ws-tabbar a[href='/workspace/board'] img")?.getAttribute("src")
+  for (const grid of document.querySelectorAll(".message .message__actions-grid:not([data-ws-card-action])")) {
+    const message = grid.closest(".message")
+    if (!message?.dataset.messageId) continue
+    grid.dataset.wsCardAction = ""
+    const button = document.createElement("button")
+    button.type = "button"
+    button.className = "btn message__action-btn center full-width ws-card-action"
+    button.title = "Create a card from this message"
+    button.setAttribute("aria-label", "Create a card from this message")
+    button.dataset.wsNewCard = ""
+    button.dataset.wsMessage = message.dataset.messageId
+    if (icon) {
+      const image = document.createElement("img")
+      image.className = "colorize--black"
+      image.src = icon
+      image.width = image.height = 20
+      image.setAttribute("aria-hidden", "true")
+      button.append(image)
+    } else {
+      button.textContent = "Card"
+    }
+    grid.append(button)
+  }
+}
+
+async function createCard(form) {
+  const submit = form.querySelector("[type=submit]")
+  const value = name => form.elements[name]?.value ?? ""
+  const body = {
+    title: value("title"),
+    description: value("description"),
+    severity: value("severity"),
+    department: value("department"),
+    message_id: value("message_id"),
+    room_id: value("room_id")
+  }
+  submit.disabled = true
+  showStatus(form, "Creating the card…")
+  try {
+    const data = await postJSON(form.action, body)
+    overlayDirty = true
+    refreshPanel()
+    showStatus(form, data.warning || `Card #${data.number} created.`, data.warning ? "error" : "ok")
+    if (data.warning) {
+      submit.remove()
+    } else {
+      setTimeout(closeOverlay, 900)
+    }
+  } catch (error) {
+    submit.disabled = false
+    showStatus(form, error.message, "error")
+  }
+}
+
+// --- Settings --------------------------------------------------------------------------------------
+
+document.addEventListener("click", event => {
+  if (event.target.closest?.("[data-ws-add-department]")) {
+    const form = event.target.closest("form")
+    const template = form.querySelector("template[data-ws-department-template]")
+    const list = form.querySelector("[data-ws-departments]")
+    const row = template.content.firstElementChild.cloneNode(true)
+    list.append(row)
+    row.querySelector("input[name=name]")?.focus()
+  } else if (event.target.closest?.("[data-ws-remove-department]")) {
+    event.target.closest("[data-ws-department]")?.remove()
+  }
+})
+
+async function saveSettings(form) {
+  const departments = [ ...form.querySelectorAll("[data-ws-departments] [data-ws-department]") ].map(row => ({
+    name: row.querySelector("input[name=name]").value,
+    tag: row.querySelector("input[name=tag]").value,
+    rooms: [ ...row.querySelectorAll("input[name=rooms]:checked") ].map(input => Number(input.value))
+  }))
+  const listed = form.querySelector("input[name=managers][value=listed]")?.checked
+  const body = {
+    departments,
+    duty_managers: listed ? [ ...form.querySelectorAll("input[name=duty_managers]:checked") ].map(input => Number(input.value)) : null,
+    confirm_policy: form.querySelector("input[name=confirm_policy]:checked")?.value || "anyone"
+  }
+  const submit = form.querySelector("[type=submit]")
+  submit.disabled = true
+  showStatus(form, "Saving…")
+  try {
+    await postJSON(form.action, body)
+    showStatus(form, "Settings saved.", "ok")
+  } catch (error) {
+    showStatus(form, error.message, "error")
+  } finally {
+    submit.disabled = false
+  }
+}
+
 // --- Wiring ----------------------------------------------------------------------------------------
 
 // The whole document, not the body: Turbo swaps the body on every visit.
 new MutationObserver(mutations => {
   const relevant = mutations.some(mutation => [ ...mutation.addedNodes ].some(node =>
     node.nodeType === Node.ELEMENT_NODE && !node.dataset.wsV &&
-      (node.matches("a[data-ws-card], .ws-draft, .message") || node.querySelector("a[data-ws-card], .ws-draft"))
+      (node.matches("a[data-ws-card], .ws-draft, .message, [data-ws-panel-root]") || node.querySelector("a[data-ws-card], .ws-draft, .message"))
   ))
   if (relevant) scheduleScan()
 }).observe(document.documentElement, { childList: true, subtree: true })

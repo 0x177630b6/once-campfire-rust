@@ -350,7 +350,7 @@ a.ws-chip {
   }
 
   .ws-tab--report {
-    order: 3;
+    order: 5;
   }
 
   .ws-tab__disc {
@@ -573,4 +573,580 @@ a.ws-card__link {
 .ws-card__meta {
   color: color-mix(in srgb, var(--ws-cc) 40%, color-mix(in srgb, var(--color-text) 60%, transparent));
   font-size: 0.8rem;
+}
+
+/* ---------------------------------------------------------------------------------------------
+ * Phase 1: shared bits (buttons, links, fields, statuses) */
+
+.ws-btn {
+  --btn-padding: 0.35em 0.9em;
+
+  font-size: 0.9em;
+  min-block-size: 2.25rem;
+
+  @media (pointer: coarse) {
+    min-block-size: 2.75rem;
+  }
+}
+
+.ws-btn--small {
+  --btn-padding: 0.2em 0.6em;
+
+  font-size: 0.8em;
+  min-block-size: 1.9rem;
+}
+
+.ws-link {
+  font-size: 0.85em;
+  font-weight: 600;
+}
+
+.ws-muted {
+  color: color-mix(in srgb, var(--color-text) 60%, transparent);
+  font-size: 0.85em;
+  margin: 0;
+}
+
+.ws-text {
+  overflow-wrap: anywhere;
+  white-space: pre-line;
+}
+
+.ws-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25em;
+  margin: 0;
+  min-inline-size: 0;
+}
+
+.ws-field--wide {
+  inline-size: 100%;
+
+  .input {
+    inline-size: 100%;
+  }
+}
+
+.ws-field__label {
+  color: color-mix(in srgb, var(--color-text) 60%, transparent);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 0;
+  text-transform: uppercase;
+}
+
+.ws-select {
+  font-size: 0.9em;
+  inline-size: auto;
+  min-block-size: 2.25rem;
+}
+
+.ws-textarea {
+  inline-size: 100%;
+  resize: vertical;
+}
+
+.ws-tag,
+.ws-tag-toggle span {
+  border: 1px solid var(--color-border-dark);
+  border-radius: 2em;
+  display: inline-block;
+  font-size: 0.8em;
+  padding: 0.1em 0.7em;
+}
+
+.ws-tag-toggle,
+.ws-sev-toggle {
+  cursor: pointer;
+  display: inline-flex;
+
+  input {
+    block-size: 1px;
+    inline-size: 1px;
+    opacity: 0;
+    position: absolute;
+  }
+
+  input:focus-visible + span {
+    outline: 2px solid var(--color-link);
+    outline-offset: 1px;
+  }
+}
+
+.ws-tag-toggle input:checked + span {
+  background: var(--color-text);
+  border-color: var(--color-text);
+  color: var(--color-bg);
+  font-weight: 700;
+}
+
+.ws-sev-toggle .ws-sev {
+  font-size: 0.8em;
+  opacity: 0.45;
+  padding-block: 0.15em;
+}
+
+.ws-sev-toggle input:checked + .ws-sev {
+  opacity: 1;
+}
+
+[data-ws-status] {
+  font-size: 0.85em;
+  margin: 0;
+
+  &:empty {
+    display: none;
+  }
+
+  &[data-tone="ok"] {
+    color: var(--ws-col-doing);
+  }
+
+  &[data-tone="error"] {
+    color: var(--color-negative, var(--ws-sev-critical));
+    font-weight: 600;
+  }
+}
+
+.ws-radio {
+  align-items: center;
+  display: flex;
+  gap: 0.5em;
+}
+
+/* ---------------------------------------------------------------------------------------------
+ * Board: the Fizzy kanban (tinted columns); one column at a time on phones */
+
+.ws-board {
+  display: flex;
+  flex-direction: column;
+  gap: var(--block-space-half, 0.5rem);
+  inline-size: 100%;
+  padding: var(--block-space, 1rem) calc(var(--inline-space, 1ch) + 1vw) calc(var(--block-space, 1rem) * 3);
+
+  @media (min-width: 100ch) {
+    padding-inline: max(5vw, 4rem) 2vw;
+  }
+}
+
+.ws-board__head {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5em 1em;
+}
+
+.ws-board__title {
+  font-size: 1.3rem;
+  font-weight: 800;
+  margin: 0;
+}
+
+.ws-board__links {
+  align-items: center;
+  display: flex;
+  gap: 0.75em;
+  margin-inline-start: auto;
+}
+
+.ws-filters {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4em 0.6em;
+}
+
+.ws-filters__sev {
+  border: 0;
+  display: flex;
+  gap: 0.3em;
+  margin: 0;
+  padding: 0;
+}
+
+.ws-coltabs {
+  display: flex;
+  gap: 0.4em;
+  overflow-x: auto;
+  padding-block: 0.25em;
+  scrollbar-width: none;
+
+  @media (min-width: 100ch) {
+    display: none;
+  }
+}
+
+.ws-coltab {
+  --ws-cc: var(--ws-col-new);
+
+  background: color-mix(in srgb, var(--ws-cc) 10%, var(--color-bg));
+  border: 1px solid color-mix(in srgb, var(--ws-cc) 35%, transparent);
+  border-radius: 2em;
+  color: color-mix(in srgb, var(--ws-cc) 60%, var(--color-text));
+  cursor: pointer;
+  flex: none;
+  font: inherit;
+  font-size: 0.85em;
+  font-weight: 700;
+  min-block-size: 2.25rem;
+  padding: 0.2em 0.9em;
+
+  &[aria-pressed="true"] {
+    background: var(--ws-cc);
+    border-color: var(--ws-cc);
+    color: var(--ws-on-cc);
+  }
+}
+
+.ws-coltab__count {
+  font-weight: 400;
+  opacity: 0.8;
+}
+
+.ws-cols {
+  display: grid;
+  gap: 0.75em;
+
+  @media (min-width: 100ch) {
+    align-items: start;
+    grid-auto-columns: minmax(15rem, 1fr);
+    grid-auto-flow: column;
+    overflow-x: auto;
+    padding-block-end: 0.5em;
+  }
+}
+
+.ws-col {
+  --ws-cc: var(--ws-col-new);
+
+  background: color-mix(in srgb, var(--ws-cc) 7%, var(--color-bg));
+  border-radius: 0.5em;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6em;
+  padding: 0.6em;
+
+  @media (max-width: 100ch) {
+    &:not(.ws-col--active) {
+      display: none;
+    }
+
+    .ws-column {
+      display: none;
+    }
+  }
+}
+
+.ws-col .ws-card {
+  position: relative;
+}
+
+.ws-move {
+  padding: 0 0.8em 0.6em;
+
+  summary {
+    list-style: none;
+
+    &::-webkit-details-marker {
+      display: none;
+    }
+  }
+}
+
+.ws-move__menu {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3em;
+  margin-block-start: 0.4em;
+}
+
+/* ---------------------------------------------------------------------------------------------
+ * Card sheet (overlay on the right on wide screens, full screen on phones; or a page) */
+
+dialog.ws-overlay {
+  background: var(--color-bg);
+  border: 0;
+  box-shadow: -0.5em 0 2em oklch(0% 0 0 / 18%);
+  color: var(--color-text);
+  block-size: 100dvh;
+  inline-size: min(34rem, 100vw);
+  inset: 0 0 0 auto;
+  margin: 0;
+  max-block-size: 100dvh;
+  max-inline-size: 100vw;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: var(--block-space, 1rem) calc(var(--inline-space, 1ch) + 1vw) calc(var(--block-space, 1rem) * 2 + env(safe-area-inset-bottom, 0px));
+  position: fixed;
+  z-index: 10;
+
+  @media (max-width: 100ch) {
+    inline-size: 100vw;
+  }
+}
+
+.ws-overlay__loading {
+  color: color-mix(in srgb, var(--color-text) 60%, transparent);
+}
+
+.ws-sheet-page {
+  max-inline-size: 42rem;
+}
+
+.ws-sheet,
+.ws-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9em;
+
+  &[aria-busy="true"] :is(select, input, button, textarea) {
+    opacity: 0.6;
+    pointer-events: none;
+  }
+}
+
+.ws-sheet__head {
+  align-items: center;
+  display: flex;
+  gap: 0.75em;
+
+  .ws-card__no {
+    border-radius: 0.25em;
+  }
+
+  .ws-sheet__close {
+    margin-inline-start: auto;
+  }
+}
+
+.ws-sheet-page .ws-sheet__close {
+  display: none;
+}
+
+.ws-sheet__title {
+  color: color-mix(in srgb, var(--ws-cc, var(--color-text)) 30%, var(--color-text));
+  font-size: 1.35rem;
+  font-weight: 800;
+  line-height: 1.2;
+  margin: 0;
+}
+
+.ws-sheet__fields {
+  align-items: end;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75em 1em;
+}
+
+.ws-sheet__departments,
+.ws-dept__rooms {
+  border: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35em;
+  margin: 0;
+  padding: 0;
+
+  legend {
+    margin-block-end: 0.35em;
+  }
+}
+
+.ws-sheet__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35em;
+  margin: 0;
+}
+
+.ws-sheet__report {
+  background: var(--color-message-bg);
+  border-radius: 0.5em;
+  padding: 0.6em 0.9em;
+
+  summary {
+    cursor: pointer;
+    font-weight: 700;
+  }
+
+  p {
+    margin: 0.5em 0 0;
+  }
+}
+
+.ws-sheet__section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5em;
+}
+
+.ws-sheet__subtitle {
+  align-items: center;
+  display: flex;
+  font-size: 1rem;
+  gap: 0.5em;
+  margin: 0;
+}
+
+.ws-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2em;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.ws-step {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  gap: 0.6em;
+  min-block-size: 2.5rem;
+
+  input {
+    block-size: 1.25rem;
+    flex: none;
+    inline-size: 1.25rem;
+  }
+}
+
+.ws-step--done span {
+  color: color-mix(in srgb, var(--color-text) 55%, transparent);
+  text-decoration: line-through;
+}
+
+.ws-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5em;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.ws-comment {
+  background: var(--color-message-bg);
+  border-radius: 0.66em;
+  padding: 0.5em 0.8em;
+
+  p {
+    margin: 0;
+  }
+}
+
+.ws-comment__meta {
+  color: color-mix(in srgb, var(--color-text) 65%, transparent);
+  font-size: 0.8em;
+}
+
+.ws-comment-form {
+  align-items: end;
+  display: flex;
+  gap: 0.5em;
+
+  .ws-textarea {
+    flex: 1;
+  }
+}
+
+.ws-form__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5em;
+}
+
+/* ---------------------------------------------------------------------------------------------
+ * Room cards panel: a column beside the conversation on wide screens, a sheet on phones */
+
+.ws-panel-root {
+  display: contents;
+}
+
+.ws-panel-toggle {
+  --btn-padding: 0.3em 0.8em;
+
+  font-size: 0.85em;
+  font-weight: 700;
+  white-space: nowrap;
+
+  &[aria-expanded="true"] {
+    background: var(--color-text);
+    color: var(--color-bg);
+  }
+}
+
+.ws-panel {
+  background: var(--color-bg);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75em;
+  overflow: auto;
+  padding: var(--block-space, 1rem) calc(var(--inline-space, 1ch) + 1vw);
+
+  &[hidden] {
+    display: none;
+  }
+
+  @media (max-width: 100ch) {
+    inset: 0 0 var(--ws-tabbar-height) 0;
+    position: fixed;
+    z-index: 4;
+  }
+
+  @media (min-width: 100ch) {
+    border-inline-start: 1px solid var(--color-border-dark);
+    grid-area: panel;
+    max-block-size: 100dvh;
+  }
+}
+
+@media (min-width: 100ch) {
+  body.ws-panel-open {
+    grid-template-areas:
+      "nav panel sidebar"
+      "main panel sidebar";
+    grid-template-columns: 1fr minmax(17rem, 22vw) var(--sidebar-width);
+  }
+}
+
+.ws-panel__head {
+  align-items: center;
+  display: flex;
+  gap: 0.5em;
+  justify-content: space-between;
+}
+
+.ws-panel__title {
+  align-items: center;
+  display: flex;
+  font-size: 1.05rem;
+  gap: 0.5em;
+  margin: 0;
+}
+
+.ws-panel__linked {
+  color: color-mix(in srgb, var(--color-text) 60%, transparent);
+  font-size: 0.85em;
+  margin: 0;
+}
+
+.ws-panel__foot {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75em;
+}
+
+/* ---------------------------------------------------------------------------------------------
+ * Settings */
+
+.ws-settings .ws-dept {
+  gap: 0.75em;
+}
+
+.ws-section__link--next {
+  margin-inline-start: 0;
 }

@@ -172,7 +172,7 @@ fn the_workspace_assets_are_served_but_never_linked_or_pinned() {
     // links them, and only while the workspace is on, so every upstream page keeps the reference's
     // stylesheet tags and import map.
     let added = added();
-    for logical in ["hermes/workspace.css", "hermes/workspace.js", "hermes/home.svg"] {
+    for logical in ["hermes/workspace.css", "hermes/workspace.js", "hermes/home.svg", "hermes/board.svg"] {
         assert!(added.iter().any(|added| added == logical), "{logical}");
         let path = campfire_assets::asset_path(logical);
         assert!(path.starts_with("/assets/hermes/"), "{path}");
