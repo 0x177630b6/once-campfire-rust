@@ -913,9 +913,9 @@ async fn fetch(a: &Args) -> Res<Value> {
     Ok(json!({"status": r.status, "bytes": r.body.len(), "content_encoding": r.headers.get("content-encoding").map(|v| v.to_str().unwrap_or("").to_string())}))
 }
 
-/// CPU per compression of one body. `miniz_oxide` is the app's backend (flate2's default
-/// `rust_backend`); the app's `Rack::Deflater` port writes the body as one chunk with a sync flush
-/// and then finishes, at `Compression::default()` (6). zlib-rs is flate2's optional backend.
+/// CPU per compression of one body. zlib-rs is the app's backend; the app's `Rack::Deflater` port
+/// writes the body as one chunk with a sync flush and then finishes, at `Compression::default()`
+/// (6). `miniz_oxide` is flate2's default `rust_backend`, which the app used before.
 fn gzip_cost(a: &Args) -> Res<Value> {
     use std::io::Write;
     let data = std::fs::read(a.get("file"))?;
