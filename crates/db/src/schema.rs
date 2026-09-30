@@ -9,7 +9,6 @@
 //! migration order. All queries in this crate name their columns, so both work.
 
 use rusqlite::{Connection, OptionalExtension, params};
-use sha1::{Digest, Sha1};
 
 use crate::error::{Error, Result};
 use crate::time::{Clock, Timestamp};
@@ -17,6 +16,7 @@ use crate::time::{Clock, Timestamp};
 pub const SCHEMA_SQL: &str = include_str!("schema.sql");
 
 /// Every migration in `reference/db/migrate`, oldest first.
+#[rustfmt::skip]
 pub const MIGRATION_VERSIONS: &[&str] = &[
     "20231215043540",
     "20231220143106",
@@ -77,10 +77,7 @@ pub fn prepare(conn: &mut Connection, environment: &str, clock: &dyn Clock) -> R
     let prepared = if table_exists(conn, "schema_migrations")? {
         let pending = pending_migrations(conn)?;
         if !pending.is_empty() {
-            return Err(Error::Other(format!(
-                "pending migrations: {}",
-                pending.join(", ")
-            )));
+            return Err(Error::Other(format!("pending migrations: {}", pending.join(", "))));
         }
         Prepared::UpToDate
     } else {
@@ -110,10 +107,7 @@ fn load_schema(conn: &mut Connection, environment: &str, clock: &dyn Clock) -> R
 
     // `assume_migrated_upto_version` inserts the current version, then the rest newest first.
     for version in MIGRATION_VERSIONS.iter().rev() {
-        tx.execute(
-            r#"INSERT INTO "schema_migrations" ("version") VALUES (?)"#,
-            [version],
-        )?;
+        tx.execute(r#"INSERT INTO "schema_migrations" ("version") VALUES (?)"#, [version])?;
     }
 
     set_internal_metadata(&tx, "environment", environment, clock.now())?;
@@ -123,13 +117,8 @@ fn load_schema(conn: &mut Connection, environment: &str, clock: &dyn Clock) -> R
 }
 
 fn set_internal_metadata(conn: &Connection, key: &str, value: &str, now: Timestamp) -> Result<()> {
-    let existing: Option<String> = conn
-        .query_row(
-            r#"SELECT "value" FROM "ar_internal_metadata" WHERE "key" = ?"#,
-            [key],
-            |r| r.get(0),
-        )
-        .optional()?;
+    let existing: Option<String> =
+        conn.query_row(r#"SELECT "value" FROM "ar_internal_metadata" WHERE "key" = ?"#, [key], |r| r.get(0)).optional()?;
     match existing {
         None => {
             conn.execute(
@@ -138,10 +127,7 @@ fn set_internal_metadata(conn: &Connection, key: &str, value: &str, now: Timesta
             )?;
         }
         Some(current) if current != value => {
-            conn.execute(
-                r#"UPDATE "ar_internal_metadata" SET "value" = ?, "updated_at" = ? WHERE "key" = ?"#,
-                params![value, now, key],
-            )?;
+            conn.execute(r#"UPDATE "ar_internal_metadata" SET "value" = ?, "updated_at" = ? WHERE "key" = ?"#, params![value, now, key])?;
         }
         Some(_) => {}
     }
@@ -149,14 +135,7 @@ fn set_internal_metadata(conn: &Connection, key: &str, value: &str, now: Timesta
 }
 
 fn table_exists(conn: &Connection, name: &str) -> Result<bool> {
-    Ok(conn
-        .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?")?
-        .exists([name])?)
-}
-
-/// SHA1 hex of a schema file, as Rails computes it for `schema_sha1`.
-pub fn schema_sha1(contents: &[u8]) -> String {
-    hex::encode(Sha1::digest(contents))
+    Ok(conn.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?")?.exists([name])?)
 }
 
 #[cfg(test)]
@@ -168,23 +147,16 @@ mod tests {
 
     #[test]
     fn schema_sha1_matches_reference_schema_rb() {
+        use sha1::{Digest, Sha1};
         let contents = std::fs::read(format!("{REFERENCE}/schema.rb")).unwrap();
-        assert_eq!(schema_sha1(&contents), SCHEMA_SHA1);
+        assert_eq!(hex::encode(Sha1::digest(contents)), SCHEMA_SHA1);
     }
 
     #[test]
     fn migration_versions_match_reference_migrations() {
         let mut versions: Vec<String> = std::fs::read_dir(format!("{REFERENCE}/migrate"))
             .unwrap()
-            .map(|e| {
-                e.unwrap()
-                    .file_name()
-                    .to_string_lossy()
-                    .split('_')
-                    .next()
-                    .unwrap()
-                    .to_string()
-            })
+            .map(|e| e.unwrap().file_name().to_string_lossy().split('_').next().unwrap().to_string())
             .collect();
         versions.sort();
         assert_eq!(versions, MIGRATION_VERSIONS);
@@ -193,43 +165,15 @@ mod tests {
     #[test]
     fn prepare_loads_then_is_idempotent() {
         let mut conn = Connection::open_in_memory().unwrap();
-        assert_eq!(
-            prepare(&mut conn, "production", &SystemClock).unwrap(),
-            Prepared::Loaded
-        );
-        assert_eq!(
-            prepare(&mut conn, "production", &SystemClock).unwrap(),
-            Prepared::UpToDate
-        );
+        assert_eq!(prepare(&mut conn, "production", &SystemClock).unwrap(), Prepared::Loaded);
+        assert_eq!(prepare(&mut conn, "production", &SystemClock).unwrap(), Prepared::UpToDate);
 
-        let first: String = conn
-            .query_row(
-                "SELECT version FROM schema_migrations ORDER BY rowid LIMIT 1",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
+        let first: String = conn.query_row("SELECT version FROM schema_migrations ORDER BY rowid LIMIT 1", [], |r| r.get(0)).unwrap();
         assert_eq!(first, "20251212154340");
-        let sha: String = conn
-            .query_row(
-                "SELECT value FROM ar_internal_metadata WHERE key = 'schema_sha1'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
+        let sha: String = conn.query_row("SELECT value FROM ar_internal_metadata WHERE key = 'schema_sha1'", [], |r| r.get(0)).unwrap();
         assert_eq!(sha, SCHEMA_SHA1);
-        conn.execute(
-            "INSERT INTO message_search_index(rowid, body) VALUES (1, 'running dogs')",
-            [],
-        )
-        .unwrap();
-        let hit: i64 = conn
-            .query_row(
-                "SELECT rowid FROM message_search_index WHERE body MATCH 'run'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
+        conn.execute("INSERT INTO message_search_index(rowid, body) VALUES (1, 'running dogs')", []).unwrap();
+        let hit: i64 = conn.query_row("SELECT rowid FROM message_search_index WHERE body MATCH 'run'", [], |r| r.get(0)).unwrap();
         assert_eq!(hit, 1, "porter tokenizer");
     }
 
@@ -258,11 +202,7 @@ mod tests {
     fn prepare_reports_pending_migrations() {
         let mut conn = Connection::open_in_memory().unwrap();
         prepare(&mut conn, "production", &SystemClock).unwrap();
-        conn.execute(
-            "DELETE FROM schema_migrations WHERE version = '20251212154340'",
-            [],
-        )
-        .unwrap();
+        conn.execute("DELETE FROM schema_migrations WHERE version = '20251212154340'", []).unwrap();
         assert!(prepare(&mut conn, "production", &SystemClock).is_err());
     }
 }

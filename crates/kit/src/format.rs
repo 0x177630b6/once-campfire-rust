@@ -86,9 +86,8 @@ mime!(TURBO_STREAM, "turbo_stream", "text/vnd.turbo-stream.html", [], []);
 pub static ALL: Mime = Mime { symbol: "*/*", string: "*/*", synonyms: &[], extensions: &[] };
 
 pub static REGISTERED: [&Mime; 37] = [
-    &HTML, &TEXT, &JS, &CSS, &ICS, &CSV, &VCF, &VTT, &MD, &PNG, &JPEG, &GIF, &BMP, &TIFF, &SVG, &WEBP, &MPEG, &MP3,
-    &OGG, &M4A, &WEBM, &MP4, &OTF, &TTF, &WOFF, &WOFF2, &XML, &RSS, &ATOM, &YAML, &MULTIPART_FORM, &URL_ENCODED_FORM,
-    &JSON, &PDF, &ZIP, &GZIP, &TURBO_STREAM,
+    &HTML, &TEXT, &JS, &CSS, &ICS, &CSV, &VCF, &VTT, &MD, &PNG, &JPEG, &GIF, &BMP, &TIFF, &SVG, &WEBP, &MPEG, &MP3, &OGG, &M4A, &WEBM,
+    &MP4, &OTF, &TTF, &WOFF, &WOFF2, &XML, &RSS, &ATOM, &YAML, &MULTIPART_FORM, &URL_ENCODED_FORM, &JSON, &PDF, &ZIP, &GZIP, &TURBO_STREAM,
 ];
 
 /// `Mime[ext]` / `Mime::Type.lookup_by_extension`.
@@ -197,9 +196,10 @@ pub fn parse_accept(header: &str) -> Result<Vec<Format>, InvalidMimeType> {
 
     for item in &list {
         if let Some(mime) = lookup(&item.name)?
-            && !formats.contains(&mime) {
-                formats.push(mime);
-            }
+            && !formats.contains(&mime)
+        {
+            formats.push(mime);
+        }
     }
     Ok(formats)
 }
@@ -319,11 +319,7 @@ pub fn formats(input: &NegotiationInput) -> Result<Vec<Format>, InvalidMimeType>
     }
     if valid_accept_header(input) {
         let accept = input.accept.unwrap_or("").trim();
-        return if accept.is_empty() {
-            Ok(content_mime_type(input.content_type)?.into_iter().collect())
-        } else {
-            parse_accept(accept)
-        };
+        return if accept.is_empty() { Ok(content_mime_type(input.content_type)?.into_iter().collect()) } else { parse_accept(accept) };
     }
     if let Some(format) = format_from_path_extension(input.path) {
         return Ok(vec![format]);
@@ -351,8 +347,7 @@ pub fn should_apply_vary_header(input: &NegotiationInput) -> bool {
 fn valid_accept_header(input: &NegotiationInput) -> bool {
     let accept = input.accept.unwrap_or("");
     let present = !accept.trim().is_empty();
-    (input.xhr && (present || input.content_type.is_some_and(|ct| !ct.is_empty())))
-        || (present && !browser_like(accept))
+    (input.xhr && (present || input.content_type.is_some_and(|ct| !ct.is_empty()))) || (present && !browser_like(accept))
 }
 
 /// `BROWSER_LIKE_ACCEPTS = /,\s*\*\/\*|\*\/\*\s*,/`

@@ -5,10 +5,10 @@ use base64::Engine;
 use regex::Regex;
 use std::sync::LazyLock;
 
+use crate::Error;
 use crate::dom::{Dom, NodeId};
 use crate::ruby::{html_escape, is_blank, presence, strip, truncate};
 use crate::uri::{self, UriError};
-use crate::Error;
 
 pub const MENTION_CONTENT_TYPE: &str = "application/vnd.campfire.mention";
 pub const OPENGRAPH_EMBED_CONTENT_TYPE: &str = "application/vnd.actiontext.opengraph-embed";
@@ -86,13 +86,27 @@ pub enum Attachable {
     User(MentionUser),
     OpengraphEmbed(OpengraphEmbed),
     /// `ActionText::Attachables::ContentAttachment`
-    Content { content: String },
+    Content {
+        content: String,
+    },
     /// `ActionText::Attachables::RemoteImage`
-    RemoteImage { url: String, width: Option<String>, height: Option<String> },
+    RemoteImage {
+        url: String,
+        width: Option<String>,
+        height: Option<String>,
+    },
     /// Lexxy's `ActionText::Attachables::RemoteVideo`
-    RemoteVideo { url: String, content_type: String, width: Option<String>, height: Option<String>, filename: Option<String> },
+    RemoteVideo {
+        url: String,
+        content_type: String,
+        width: Option<String>,
+        height: Option<String>,
+        filename: Option<String>,
+    },
     /// `ActionText::Attachables::MissingAttachable`, remembering the model a still-valid SGID named
-    Missing { signed_model: Option<String> },
+    Missing {
+        signed_model: Option<String>,
+    },
 }
 
 impl Attachable {
@@ -114,8 +128,7 @@ pub struct Attachment {
 
 // --- Resolution --------------------------------------------------------------------------------
 
-static OPENGRAPH_CONTENT_TYPE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"application/vnd.actiontext.opengraph-embed").unwrap());
+static OPENGRAPH_CONTENT_TYPE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"application/vnd.actiontext.opengraph-embed").unwrap());
 static IMAGE_CONTENT_TYPE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^image(/.+|$)").unwrap());
 static VIDEO_CONTENT_TYPE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^video(/.+|$)").unwrap());
 static MARSHALED_GID_RE: LazyLock<regex::bytes::Regex> =
@@ -149,9 +162,11 @@ pub fn action_text_attachable_from_node(dom: &Dom, node: NodeId, ctx: &RenderCon
     }
     let content_type = dom.attr(node, "content-type");
     if let Some(content) = dom.attr(node, "content")
-        && content_type.is_some_and(|t| t.contains("html")) && !is_blank(content) {
-            return Attachable::Content { content: content.to_string() };
-        }
+        && content_type.is_some_and(|t| t.contains("html"))
+        && !is_blank(content)
+    {
+        return Attachable::Content { content: content.to_string() };
+    }
     if let Some(url) = dom.attr(node, "url") {
         if IMAGE_CONTENT_TYPE_RE.is_match(content_type.unwrap_or("")) {
             return Attachable::RemoteImage {
@@ -204,7 +219,8 @@ fn attachable_from_possibly_expired_sgid(sgid: Option<&str>, ctx: &RenderContext
         Some(serde_json::Value::Object(map)) => Some(map),
         Some(_) => return Err(Error::Raised("TypeError: dig")),
     };
-    let truthy = |v: Option<&serde_json::Value>| v.filter(|v| !matches!(v, serde_json::Value::Null | serde_json::Value::Bool(false))).cloned();
+    let truthy =
+        |v: Option<&serde_json::Value>| v.filter(|v| !matches!(v, serde_json::Value::Null | serde_json::Value::Bool(false))).cloned();
     let gid: Option<String> = if let Some(data) = truthy(rails.and_then(|r| r.get("data"))) {
         // GlobalID.find of anything but a string finds nothing
         data.as_str().map(str::to_string)
@@ -340,10 +356,7 @@ impl OpengraphEmbed {
 
 /// `render_action_text_attachment(attachment)`: the attachable's partial, chomped. `render_content`
 /// renders a nested content attachment's own content (`ContentAttachment#to_html`).
-pub fn render_attachment(
-    attachment: &Attachment,
-    render_content: &dyn Fn(&str) -> Result<String, Error>,
-) -> Result<String, Error> {
+pub fn render_attachment(attachment: &Attachment, render_content: &dyn Fn(&str) -> Result<String, Error>) -> Result<String, Error> {
     let html = match &attachment.attachable {
         Attachable::User(user) => render_mention(user),
         Attachable::OpengraphEmbed(embed) => render_opengraph_embed(embed),
@@ -359,25 +372,28 @@ pub fn render_attachment(
             html.push_str(&image_tag(url, width.as_deref(), height.as_deref())?);
             html.push('\n');
             if let Some(caption) = &attachment.caption {
-                html.push_str(&format!("    <figcaption class=\"attachment__caption\">\n      {}\n    </figcaption>\n", html_escape(caption)));
+                html.push_str(&format!(
+                    "    <figcaption class=\"attachment__caption\">\n      {}\n    </figcaption>\n",
+                    html_escape(caption)
+                ));
             }
             html.push_str("</figure>\n");
             html
         }
         Attachable::RemoteVideo { url, content_type, width, height, .. } => {
-            let mut html = String::from("<figure class=\"attachment attachment--preview attachment--video\">\n  <video controls=\"controls\"");
+            let mut html =
+                String::from("<figure class=\"attachment attachment--preview attachment--video\">\n  <video controls=\"controls\"");
             for (name, value) in [("width", width), ("height", height)] {
                 if let Some(v) = value {
                     html.push_str(&format!(" {name}=\"{}\"", html_escape(v)));
                 }
             }
-            html.push_str(&format!(
-                ">\n    <source src=\"{}\" type=\"{}\">\n</video>",
-                html_escape(url),
-                html_escape(content_type)
-            ));
+            html.push_str(&format!(">\n    <source src=\"{}\" type=\"{}\">\n</video>", html_escape(url), html_escape(content_type)));
             if let Some(caption) = &attachment.caption {
-                html.push_str(&format!("    <figcaption class=\"attachment__caption\">\n      {}\n    </figcaption>\n", html_escape(caption)));
+                html.push_str(&format!(
+                    "    <figcaption class=\"attachment__caption\">\n      {}\n    </figcaption>\n",
+                    html_escape(caption)
+                ));
             }
             html.push_str("</figure>\n");
             html
@@ -457,10 +473,9 @@ pub fn attachment_plain_text(attachment: &Attachment) -> PlainTextRepresentation
         Attachable::OpengraphEmbed(_) => PlainTextRepresentation::Html(String::new()),
         Attachable::Content { content } => PlainTextRepresentation::Content(content.clone()),
         Attachable::RemoteImage { .. } => PlainTextRepresentation::Html(format!("[{}]", caption.unwrap_or_else(|| "Image".into()))),
-        Attachable::RemoteVideo { filename, .. } => PlainTextRepresentation::Html(format!(
-            "[{}]",
-            caption.or_else(|| filename.clone()).unwrap_or_else(|| "Video".into())
-        )),
+        Attachable::RemoteVideo { filename, .. } => {
+            PlainTextRepresentation::Html(format!("[{}]", caption.or_else(|| filename.clone()).unwrap_or_else(|| "Video".into())))
+        }
         Attachable::Missing { .. } => PlainTextRepresentation::Html(caption.unwrap_or_default()),
     }
 }

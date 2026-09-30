@@ -59,10 +59,11 @@ impl Uri {
                 s.push_str(host);
             }
             if let Some(port) = self.port
-                && Some(port) != self.default_port() {
-                    s.push(':');
-                    s.push_str(&port.to_string());
-                }
+                && Some(port) != self.default_port()
+            {
+                s.push(':');
+                s.push_str(&port.to_string());
+            }
             s.push_str(self.path.as_deref().unwrap_or(""));
             if let Some(query) = &self.query {
                 s.push('?');
@@ -102,10 +103,18 @@ fn check_scheme_class(uri: &Uri) -> Result<(), UriError> {
             if mailto_to_valid(to) { Ok(()) } else { Err(UriError::InvalidComponent) }
         }
         Some("LDAP") | Some("LDAPS") => {
-            if uri.fragment.is_some() || uri.path.is_none() { Err(UriError::InvalidUri) } else { Ok(()) }
+            if uri.fragment.is_some() || uri.path.is_none() {
+                Err(UriError::InvalidUri)
+            } else {
+                Ok(())
+            }
         }
         Some("FTP") => {
-            if uri.path.is_none() { Err(UriError::InvalidUri) } else { Ok(()) }
+            if uri.path.is_none() {
+                Err(UriError::InvalidUri)
+            } else {
+                Ok(())
+            }
         }
         _ => Ok(()),
     }

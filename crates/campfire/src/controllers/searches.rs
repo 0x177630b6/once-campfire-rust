@@ -62,10 +62,9 @@ fn query_param(c: &Ctx) -> Result<Option<String>> {
     match c.param("q") {
         None => Ok(None),
         Some(param) if param.is_null() => Ok(None),
-        Some(param) => param
-            .as_str()
-            .map(|q| Some(q.to_string()))
-            .ok_or_else(|| Error::internal(anyhow::anyhow!("undefined method 'gsub'"))),
+        Some(param) => {
+            param.as_str().map(|q| Some(q.to_string())).ok_or_else(|| Error::internal(anyhow::anyhow!("undefined method 'gsub'")))
+        }
     }
 }
 

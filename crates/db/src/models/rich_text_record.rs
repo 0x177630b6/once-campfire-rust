@@ -31,12 +31,7 @@ impl RichTextRecord {
         })
     }
 
-    pub fn find_for(
-        conn: &Connection,
-        record_type: &str,
-        record_id: i64,
-        name: &str,
-    ) -> Result<Option<Self>> {
+    pub fn find_for(conn: &Connection, record_type: &str, record_id: i64, name: &str) -> Result<Option<Self>> {
         query_one(
             conn,
             r#"SELECT * FROM "action_text_rich_texts" WHERE "action_text_rich_texts"."record_id" = ? AND "action_text_rich_texts"."record_type" = ? AND "action_text_rich_texts"."name" = ? LIMIT 1"#,
@@ -45,13 +40,7 @@ impl RichTextRecord {
         )
     }
 
-    pub fn create(
-        tx: &Tx<'_>,
-        record_type: &str,
-        record_id: i64,
-        name: &str,
-        body: &str,
-    ) -> Result<Self> {
+    pub fn create(tx: &Tx<'_>, record_type: &str, record_id: i64, name: &str, body: &str) -> Result<Self> {
         let now = tx.now();
         let id: i64 = tx.conn().query_row_cached(
             r#"INSERT INTO "action_text_rich_texts" ("body", "created_at", "name", "record_id", "record_type", "updated_at") VALUES (?, ?, ?, ?, ?, ?) RETURNING "id""#,
@@ -81,10 +70,7 @@ impl RichTextRecord {
     }
 
     pub fn delete(&self, tx: &Tx<'_>) -> Result<()> {
-        tx.conn().execute_cached(
-            r#"DELETE FROM "action_text_rich_texts" WHERE "action_text_rich_texts"."id" = ?"#,
-            [self.id],
-        )?;
+        tx.conn().execute_cached(r#"DELETE FROM "action_text_rich_texts" WHERE "action_text_rich_texts"."id" = ?"#, [self.id])?;
         Ok(())
     }
 }

@@ -50,12 +50,7 @@ pub struct Env {
 
 impl Default for Env {
     fn default() -> Self {
-        Self {
-            clock: Arc::new(SystemClock),
-            sink: Arc::new(NullSink),
-            rich_text: Arc::new(BasicRichText),
-            bcrypt_cost: 12,
-        }
+        Self { clock: Arc::new(SystemClock), sink: Arc::new(NullSink), rich_text: Arc::new(BasicRichText), bcrypt_cost: 12 }
     }
 }
 
@@ -120,12 +115,7 @@ impl<'c> Tx<'c> {
         if self.in_transaction {
             self.after_commit.push(AfterCommit::Hook(Box::new(hook)));
         } else {
-            let mut tx = Tx {
-                conn: self.conn,
-                env: self.env,
-                in_transaction: false,
-                after_commit: Vec::new(),
-            };
+            let mut tx = Tx { conn: self.conn, env: self.env, in_transaction: false, after_commit: Vec::new() };
             if let Err(error) = hook(&mut tx) {
                 tracing::error!(%error, "after_commit hook failed");
             }
@@ -140,18 +130,9 @@ impl<'c> Tx<'c> {
 /// Runs `f` in `BEGIN IMMEDIATE`, commits, then runs the after-commit queue. An error from
 /// `f` rolls back and discards the queue. An error from an after-commit hook is returned
 /// after the rest of the queue has run (Rails raises it from the save that committed).
-pub fn run_write<T>(
-    conn: &Connection,
-    env: &Env,
-    f: impl FnOnce(&mut Tx<'_>) -> Result<T>,
-) -> Result<T> {
+pub fn run_write<T>(conn: &Connection, env: &Env, f: impl FnOnce(&mut Tx<'_>) -> Result<T>) -> Result<T> {
     conn.execute_batch("BEGIN IMMEDIATE TRANSACTION")?;
-    let mut tx = Tx {
-        conn,
-        env,
-        in_transaction: true,
-        after_commit: Vec::new(),
-    };
+    let mut tx = Tx { conn, env, in_transaction: true, after_commit: Vec::new() };
     let value = match f(&mut tx) {
         Ok(value) => value,
         Err(error) => {
@@ -166,12 +147,7 @@ pub fn run_write<T>(
 
     let mut queue = std::mem::take(&mut tx.after_commit);
     let mut first_error = None;
-    let mut after = Tx {
-        conn,
-        env,
-        in_transaction: false,
-        after_commit: Vec::new(),
-    };
+    let mut after = Tx { conn, env, in_transaction: false, after_commit: Vec::new() };
     for item in queue.drain(..) {
         match item {
             AfterCommit::Event(event) => env.sink.emit(event),
@@ -203,13 +179,7 @@ pub struct Config {
 
 impl Config {
     pub fn new(path: impl Into<PathBuf>) -> Self {
-        Self {
-            path: path.into(),
-            readers: 8,
-            write_queue: 256,
-            prepare: true,
-            environment: "production".into(),
-        }
+        Self { path: path.into(), readers: 8, write_queue: 256, prepare: true, environment: "production".into() }
     }
 }
 
@@ -241,31 +211,22 @@ impl Database {
             .spawn(move || {
                 while let Some(job) = receiver.blocking_recv() {
                     // A panicking write must not take the writer down with it.
-                    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        job(&conn, &writer_env)
-                    }));
+                    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job(&conn, &writer_env)));
                     if outcome.is_err() && !conn.is_autocommit() {
                         let _ = conn.execute_batch("ROLLBACK TRANSACTION");
                     }
                     match WAL_PAGES.replace(0) {
                         0 => {}
-                        pages if pages >= WAL_LIMIT_PAGES => restart_wal(&conn),
+                        pages if pages >= WAL_LIMIT_PAGES => restart_wal(&conn, &checkpoints),
                         pages => checkpoints.wal_grew_to(pages),
                     }
                 }
             })
             .map_err(|e| Error::Other(e.to_string()))?;
 
-        let readers = (0..config.readers.max(1))
-            .map(|_| open_connection(&config.path, true))
-            .collect::<Result<Vec<_>>>()?;
+        let readers = (0..config.readers.max(1)).map(|_| open_connection(&config.path, true)).collect::<Result<Vec<_>>>()?;
 
-        Ok(Self {
-            writer: sender,
-            readers: Arc::new(ReaderPool::new(readers)),
-            env,
-            path: config.path,
-        })
+        Ok(Self { writer: sender, readers: Arc::new(ReaderPool::new(readers)), env, path: config.path })
     }
 
     pub fn env(&self) -> &Env {
@@ -314,9 +275,7 @@ impl Database {
         F: FnOnce(&Connection) -> Result<T> + Send + 'static,
     {
         let readers = self.readers.clone();
-        tokio::task::spawn_blocking(move || readers.with(f))
-            .await
-            .map_err(|e| Error::Other(e.to_string()))?
+        tokio::task::spawn_blocking(move || readers.with(f)).await.map_err(|e| Error::Other(e.to_string()))?
     }
 
     /// [`Database::read`] for synchronous callers.
@@ -350,6 +309,9 @@ fn note_wal_size(_: &rusqlite::hooks::Wal, pages: std::os::raw::c_int) -> rusqli
 /// connection each time it's woken. It stops with the writer (the sender's owner).
 struct Checkpoints {
     wake: std::sync::mpsc::SyncSender<()>,
+    /// Held while the checkpointer runs, so the writer's RESTART waits for it rather than being
+    /// refused (SQLite runs one checkpoint at a time) and letting the WAL grow past its limit.
+    running: Arc<Mutex<()>>,
     /// The WAL's size in pages when the checkpointer was last woken.
     woken_at: i32,
 }
@@ -358,15 +320,18 @@ impl Checkpoints {
     fn spawn(path: &Path) -> Result<Self> {
         let conn = open_connection(path, false)?;
         let (wake, woken) = std::sync::mpsc::sync_channel::<()>(1);
+        let running = Arc::new(Mutex::new(()));
+        let checkpointer_running = running.clone();
         std::thread::Builder::new()
             .name("campfire-db-checkpointer".into())
             .spawn(move || {
                 while woken.recv().is_ok() {
+                    let _running = checkpointer_running.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                     checkpoint(&conn, "PASSIVE");
                 }
             })
             .map_err(|e| Error::Other(e.to_string()))?;
-        Ok(Self { wake, woken_at: 0 })
+        Ok(Self { wake, running, woken_at: 0 })
     }
 
     /// Wakes the checkpointer for every [`AUTOCHECKPOINT_PAGES`] the WAL grows.
@@ -382,22 +347,27 @@ impl Checkpoints {
 }
 
 /// A RESTART checkpoint on the writer connection, between writes: it copies what the
-/// checkpointer hasn't, and waits for readers so that the next write restarts the WAL.
-fn restart_wal(conn: &Connection) {
+/// checkpointer hasn't, and waits for readers so that the next write restarts the WAL. It waits
+/// for a running PASSIVE checkpoint first, which would otherwise make SQLite refuse it.
+fn restart_wal(conn: &Connection, checkpoints: &Checkpoints) {
+    let _running = checkpoints.running.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     checkpoint(conn, "RESTART");
 }
 
+/// `PRAGMA wal_checkpoint`, which reports a checkpoint it couldn't finish (another checkpoint
+/// running, or readers still on old frames past the busy timeout) in its `busy` column, not as an
+/// error.
 fn checkpoint(conn: &Connection, mode: &str) {
-    if let Err(error) = conn.query_row(&format!("PRAGMA wal_checkpoint({mode})"), [], |_| Ok(())) {
-        tracing::warn!(%error, mode, "WAL checkpoint failed");
+    match conn.query_row(&format!("PRAGMA wal_checkpoint({mode})"), [], |row| row.get::<_, i64>(0)) {
+        Ok(0) => {}
+        Ok(_) => tracing::warn!(mode, "WAL checkpoint couldn't finish"),
+        Err(error) => tracing::warn!(%error, mode, "WAL checkpoint failed"),
     }
 }
 
 fn open_connection(path: &Path, reader: bool) -> Result<Connection> {
-    let flags = OpenFlags::SQLITE_OPEN_READ_WRITE
-        | OpenFlags::SQLITE_OPEN_CREATE
-        | OpenFlags::SQLITE_OPEN_NO_MUTEX
-        | OpenFlags::SQLITE_OPEN_URI;
+    let flags =
+        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE | OpenFlags::SQLITE_OPEN_NO_MUTEX | OpenFlags::SQLITE_OPEN_URI;
     let conn = Connection::open_with_flags(path, flags)?;
     // rusqlite's default of 16 is fewer statements than a page like the room show runs.
     conn.set_prepared_statement_cache_capacity(STATEMENT_CACHE_CAPACITY);
@@ -415,10 +385,7 @@ struct ReaderPool {
 
 impl ReaderPool {
     fn new(connections: Vec<Connection>) -> Self {
-        Self {
-            idle: Mutex::new(connections),
-            available: Condvar::new(),
-        }
+        Self { idle: Mutex::new(connections), available: Condvar::new() }
     }
 
     fn with<T>(&self, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
@@ -502,6 +469,14 @@ mod tests {
             assert!(std::time::Instant::now() < deadline, "the WAL was never checkpointed");
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
+    }
+
+    /// Before 3.51.3, a checkpoint that starts just as another connection's commit restarts the
+    /// WAL can leave that commit out of the database (https://sqlite.org/wal.html#walresetbug).
+    /// The checkpointer and the writer are two such connections, on separate threads.
+    #[test]
+    fn the_bundled_sqlite_has_the_wal_reset_fix() {
+        assert!(rusqlite::version_number() >= 3_051_003, "SQLite {}", rusqlite::version());
     }
 
     /// Writes that never pause still get the WAL restarted, at WAL_LIMIT_PAGES.

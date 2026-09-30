@@ -12,8 +12,8 @@ use std::sync::Arc;
 
 use futures_util::stream::{AbortRegistration, Abortable, SelectAll};
 use futures_util::{FutureExt, StreamExt};
-use tokio::io::{ReadHalf, WriteHalf};
 use serde_json::Value;
+use tokio::io::{ReadHalf, WriteHalf};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
@@ -97,8 +97,7 @@ pub(crate) async fn run<U: Identified + Send + Sync + 'static>(server: Server<U>
     heartbeat.mark_unchanged();
     let mut restarts = server.restarts();
 
-    let mut connection =
-        Connection { server, user: Arc::new(user), subscriptions: Vec::new(), pending: Vec::new(), started: Vec::new() };
+    let mut connection = Connection { server, user: Arc::new(user), subscriptions: Vec::new(), pending: Vec::new(), started: Vec::new() };
 
     let mut close: Option<Close> = None;
     if sink.send(&[protocol::welcome().into()]).await.is_err() {
@@ -162,7 +161,8 @@ pub(crate) async fn run<U: Identified + Send + Sync + 'static>(server: Server<U>
             }
         }
 
-        deliveries.extend(connection.started.drain(..).map(|(subscriber, registration)| Abortable::new(subscriber.deliveries(), registration)));
+        deliveries
+            .extend(connection.started.drain(..).map(|(subscriber, registration)| Abortable::new(subscriber.deliveries(), registration)));
         if !connection.flush(&mut sink).await {
             break;
         }
@@ -273,15 +273,15 @@ impl<U: Send + Sync + 'static> Connection<U> {
         if self.subscriptions.len() >= MAX_SUBSCRIPTIONS || identifier.len() > MAX_IDENTIFIER_BYTES {
             return tracing::error!(subscriptions = self.subscriptions.len(), "Could not execute command: subscription limit reached");
         }
-        let class_name = params.get("channel").and_then(Value::as_str).unwrap_or_default().to_string();
-        let Some(factory) = self.server.channel_factory(&class_name) else {
-            return tracing::error!(channel = class_name, "Subscription class not found");
+        let requested = params.get("channel").and_then(Value::as_str).unwrap_or_default();
+        let Some((class_name, factory)) = self.server.channel(requested) else {
+            return tracing::error!(channel = requested, "Subscription class not found");
         };
 
         let channel = factory();
         let sub = Subscription {
             server: self.server.clone(),
-            class_name,
+            class_name: class_name.clone(),
             identifier: identifier.into(),
             encoded_identifier: json::encode(identifier).into(),
             current_user: self.user.clone(),

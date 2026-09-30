@@ -18,6 +18,8 @@ use crate::clock::{self, SharedClock};
 use crate::crypto::SharedCrypto;
 use crate::{Error, Result};
 
+pub use rails_compat::cookies::escape;
+
 pub const MAX_COOKIE_SIZE: usize = 4096;
 const PERMANENT_YEARS: i64 = 20;
 
@@ -141,11 +143,7 @@ impl std::fmt::Debug for CookieJar {
 
 impl CookieJar {
     /// Build the jar from the request's `Cookie` header(s).
-    pub fn from_headers<'a>(
-        headers: impl IntoIterator<Item = &'a str>,
-        crypto: SharedCrypto,
-        clock: SharedClock,
-    ) -> Self {
+    pub fn from_headers<'a>(headers: impl IntoIterator<Item = &'a str>, crypto: SharedCrypto, clock: SharedClock) -> Self {
         let mut cookies: Vec<(String, String)> = Vec::new();
         let mut seen = std::collections::HashSet::new();
         for header in headers {
@@ -288,19 +286,6 @@ pub fn parse_cookie_header(header: &str) -> Vec<(String, String)> {
     cookies
 }
 
-/// `Rack::Utils.escape` (`URI.encode_www_form_component`).
-pub fn escape(value: &str) -> String {
-    let mut out = String::with_capacity(value.len());
-    for byte in value.bytes() {
-        match byte {
-            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'*' | b'-' | b'.' | b'_' => out.push(byte as char),
-            b' ' => out.push('+'),
-            _ => out.push_str(&format!("%{byte:02X}")),
-        }
-    }
-    out
-}
-
 fn same_site_attribute(same_site: Option<SameSite>) -> &'static str {
     match same_site {
         None => "",
@@ -376,10 +361,7 @@ mod tests {
         jar.set("last_room", "42");
         assert!(jar.set_cookie_headers(false, "h").is_empty());
         jar.set("last_room", Cookie::new("42").permanent());
-        assert_eq!(
-            jar.set_cookie_headers(false, "h"),
-            vec!["last_room=42; path=/; expires=Wed, 01 Jun 2044 12:00:00 GMT; samesite=lax"]
-        );
+        assert_eq!(jar.set_cookie_headers(false, "h"), vec!["last_room=42; path=/; expires=Wed, 01 Jun 2044 12:00:00 GMT; samesite=lax"]);
     }
 
     #[test]
@@ -400,11 +382,8 @@ mod tests {
         assert_eq!(jar.signed("session_token").as_deref(), Some("tok"));
 
         let raw = jar.get("session_token").unwrap().to_string();
-        let next = CookieJar::from_headers(
-            [format!("session_token={}", escape(&raw)).as_str()],
-            testing::crypto(),
-            testing::frozen_clock(),
-        );
+        let next =
+            CookieJar::from_headers([format!("session_token={}", escape(&raw)).as_str()], testing::crypto(), testing::frozen_clock());
         assert_eq!(next.signed("session_token").as_deref(), Some("tok"));
     }
 

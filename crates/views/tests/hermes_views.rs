@@ -172,7 +172,10 @@ fn the_voice_page_carries_the_controller_values_escaped() {
     assert!(!html.contains("ask-url"), "no ask_hermes without HERMES_ASK_URL");
     let with_ask = VoiceView { ask_url: Some("/rooms/7/voice/ask".into()), ..voice.clone() };
     let asking = render(|ctx| VoiceShow { ctx, voice: &with_ask }.render().unwrap());
-    assert!(asking.contains(r#"data-voice-report-url-value="/rooms/7/voice/report" data-voice-ask-url-value="/rooms/7/voice/ask" "#), "{asking}");
+    assert!(
+        asking.contains(r#"data-voice-report-url-value="/rooms/7/voice/report" data-voice-ask-url-value="/rooms/7/voice/ask" "#),
+        "{asking}"
+    );
     assert!(html.contains("<title>Rapport vocal · Atelier &quot;B&quot; &lt;1&gt;</title>"), "{html}");
     assert!(html.contains(r#"<h1 class="room__contents txt-medium overflow-ellipsis">Rapport vocal</h1>"#), "short title");
     assert!(html.contains("dans «&nbsp;Atelier &quot;B&quot; &lt;1&gt;&nbsp;» après votre accord"), "the room in the intro");
@@ -188,7 +191,10 @@ fn the_voice_page_carries_the_controller_values_escaped() {
     }
     assert!(html.contains(r#"data-controller="voice""#));
     assert!(html.contains(r#"data-voice-target="toggle" data-action="voice#toggle""#));
-    for target in ["label", "control", "status", "timer", "hint", "notice", "noticeBody", "confirm", "cancel", "resume", "restart", "resultText", "messageLink", "announcer"] {
+    for target in [
+        "label", "control", "status", "timer", "hint", "notice", "noticeBody", "confirm", "cancel", "resume", "restart", "resultText",
+        "messageLink", "announcer",
+    ] {
         assert!(html.contains(&format!(r#"data-voice-target="{target}""#)), "{target}");
     }
     assert!(html.contains(r#"data-voice-target="transcript" aria-live="off""#), "turns are announced once, not streamed");

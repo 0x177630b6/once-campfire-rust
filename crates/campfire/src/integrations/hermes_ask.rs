@@ -158,7 +158,8 @@ mod tests {
 
     #[tokio::test]
     async fn posts_the_question_and_reads_the_answer() {
-        let reply = Route::new("POST", "*", ASK_PATH, 200).header("Content-Type", "application/json").body(r#"{"answer":" Appelez Marc. "}"#);
+        let reply =
+            Route::new("POST", "*", ASK_PATH, 200).header("Content-Type", "application/json").body(r#"{"answer":" Appelez Marc. "}"#);
         let server = FakeServer::start(vec![reply]).await;
         assert_eq!(asker_for(&server).ask(question()).await.unwrap(), "Appelez Marc.");
 

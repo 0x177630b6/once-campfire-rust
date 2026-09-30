@@ -32,11 +32,8 @@ const RESTRICT_ROOM_CREATION: &str = "restrict_room_creation_to_administrators";
 
 impl AccountSettings {
     fn from_column(raw: Option<&str>) -> Self {
-        let mut data = raw
-            .and_then(|r| serde_json::from_str::<Map<String, Value>>(r).ok())
-            .unwrap_or_default();
-        data.entry(RESTRICT_ROOM_CREATION)
-            .or_insert(Value::Bool(false));
+        let mut data = raw.and_then(|r| serde_json::from_str::<Map<String, Value>>(r).ok()).unwrap_or_default();
+        data.entry(RESTRICT_ROOM_CREATION).or_insert(Value::Bool(false));
         Self { data }
     }
 
@@ -57,9 +54,7 @@ impl AccountSettings {
             match *key {
                 RESTRICT_ROOM_CREATION => self.set_restrict_room_creation_to_administrators(value),
                 other => {
-                    return Err(Error::Other(format!(
-                        "undefined method '{other}=' for account settings"
-                    )));
+                    return Err(Error::Other(format!("undefined method '{other}=' for account settings")));
                 }
             }
         }
@@ -79,11 +74,7 @@ impl AccountSettings {
 /// false, anything else is true.
 pub fn cast_boolean(value: &str) -> Option<bool> {
     const FALSE_VALUES: &[&str] = &["0", "f", "F", "false", "FALSE", "off", "OFF"];
-    if value.is_empty() {
-        None
-    } else {
-        Some(!FALSE_VALUES.contains(&value))
-    }
+    if value.is_empty() { None } else { Some(!FALSE_VALUES.contains(&value)) }
 }
 
 fn present(value: Option<&Value>) -> bool {
@@ -112,22 +103,11 @@ impl Account {
 
     /// `Account.first` (`Current.account`).
     pub fn first(conn: &Connection) -> Result<Option<Self>> {
-        query_one(
-            conn,
-            r#"SELECT * FROM "accounts" ORDER BY "accounts"."id" ASC LIMIT 1"#,
-            [],
-            Self::from_row,
-        )
+        query_one(conn, r#"SELECT * FROM "accounts" ORDER BY "accounts"."id" ASC LIMIT 1"#, [], Self::from_row)
     }
 
     pub fn find(conn: &Connection, id: i64) -> Result<Self> {
-        query_one(
-            conn,
-            r#"SELECT * FROM "accounts" WHERE "accounts"."id" = ? LIMIT 1"#,
-            [id],
-            Self::from_row,
-        )?
-        .or_not_found("Account")
+        query_one(conn, r#"SELECT * FROM "accounts" WHERE "accounts"."id" = ? LIMIT 1"#, [id], Self::from_row)?.or_not_found("Account")
     }
 
     pub fn count(conn: &Connection) -> Result<i64> {
@@ -178,10 +158,7 @@ impl Account {
             self.name = name.into();
             sets.push(("name", Box::new(name.to_string())));
         }
-        if let Some(styles) = custom_styles
-            .map(|s| s.map(str::to_string))
-            .filter(|s| *s != self.custom_styles)
-        {
+        if let Some(styles) = custom_styles.map(|s| s.map(str::to_string)).filter(|s| *s != self.custom_styles) {
             self.custom_styles = styles.clone();
             sets.push(("custom_styles", Box::new(styles)));
         }
@@ -202,10 +179,7 @@ impl Account {
         self.updated_at = now;
         sets.push(("updated_at", Box::new(now)));
         let assignments: Vec<String> = sets.iter().map(|(c, _)| format!(r#""{c}" = ?"#)).collect();
-        let sql = format!(
-            r#"UPDATE "accounts" SET {} WHERE "accounts"."id" = ?"#,
-            assignments.join(", ")
-        );
+        let sql = format!(r#"UPDATE "accounts" SET {} WHERE "accounts"."id" = ?"#, assignments.join(", "));
         let mut values: Vec<&dyn rusqlite::ToSql> = sets.iter().map(|(_, v)| v.as_ref()).collect();
         values.push(&self.id);
         tx.conn().execute_cached(&sql, values.as_slice())?;

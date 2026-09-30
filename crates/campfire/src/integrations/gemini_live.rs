@@ -132,8 +132,8 @@ pub fn ask_hermes_declaration() -> Value {
     json!({
         "name": "ask_hermes",
         "description": "Pose une question à Hermes, l'agent interne de l'entreprise : procédures, incidents \
-existants ou ouverts sur le tableau Fizzy, contacts, ou toute information propre à l'entreprise. \
-La réponse peut prendre plusieurs secondes.",
+    existants ou ouverts sur le tableau Fizzy, contacts, ou toute information propre à l'entreprise. \
+    La réponse peut prendre plusieurs secondes.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -153,7 +153,7 @@ pub fn submit_incident_declaration() -> Value {
     json!({
         "name": "submit_incident",
         "description": "Publie le compte rendu d'incident confirmé par l'employé dans le salon Campfire. \
-N'appeler qu'après confirmation explicite du récapitulatif.",
+    N'appeler qu'après confirmation explicite du récapitulatif.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -229,7 +229,8 @@ impl HttpMinter {
             ("x-goog-api-key".to_string(), self.api_key.expose().to_string()),
             ("User-Agent".to_string(), "campfire-hermes".to_string()),
         ];
-        let mut request = http::Request::net_http(hyper::Method::POST, AUTH_TOKENS_PATH.into(), None, headers).transport(true, &self.endpoint);
+        let mut request =
+            http::Request::net_http(hyper::Method::POST, AUTH_TOKENS_PATH.into(), None, headers).transport(true, &self.endpoint);
         request.body = body;
         let timeouts = Timeouts { open: UPSTREAM_TIMEOUT, read: UPSTREAM_TIMEOUT };
         let response = http::exchange(&self.net, &self.endpoint, request, &timeouts).await.map_err(transport_error)?;
@@ -471,7 +472,8 @@ mod tests {
 
     #[tokio::test]
     async fn posts_the_request_with_the_api_key() {
-        let reply = Route::new("POST", "*", AUTH_TOKENS_PATH, 200).header("Content-Type", "application/json").body(r#"{"name":"auth_tokens/xyz"}"#);
+        let reply =
+            Route::new("POST", "*", AUTH_TOKENS_PATH, 200).header("Content-Type", "application/json").body(r#"{"name":"auth_tokens/xyz"}"#);
         let server = FakeServer::start(vec![reply]).await;
         let request = interview(Timestamp::UNIX_EPOCH).token_request();
         let token = minter_for(&server).mint(request.clone()).await.unwrap();

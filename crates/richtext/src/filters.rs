@@ -1,12 +1,12 @@
 //! `ContentFilters::TextMessagePresentationFilters` (reference/app/helpers/content_filters/*.rb):
 //! RemoveSoloUnfurledLinkText, SanitizeTags, SanitizeAttributes, applied in that order.
 
+use crate::Error;
 use crate::attachables::{OPENGRAPH_EMBED_CONTENT_TYPE, RenderContext, opengraph_embed_from_node};
 use crate::content::{ATTACHMENT_TAG, Content};
 use crate::ruby::{is_blank, strip};
 use crate::sanitizer::{self, SafeList, sanitize_tags_allowed_tags};
 use crate::uri::{self, UriError};
-use crate::Error;
 
 pub fn apply(content: Content, ctx: &RenderContext) -> Result<Content, Error> {
     let content = remove_solo_unfurled_link_text(content, ctx)?;
@@ -22,7 +22,9 @@ pub fn remove_solo_unfurled_link_text(content: Content, ctx: &RenderContext) -> 
         .dom
         .descendants(content.root)
         .into_iter()
-        .filter(|&n| content.dom.local_name(n) == Some(ATTACHMENT_TAG) && content.dom.attr(n, "content-type") == Some(OPENGRAPH_EMBED_CONTENT_TYPE))
+        .filter(|&n| {
+            content.dom.local_name(n) == Some(ATTACHMENT_TAG) && content.dom.attr(n, "content-type") == Some(OPENGRAPH_EMBED_CONTENT_TYPE)
+        })
         .collect();
     let solo_unfurled_url = if unfurled_links.len() == 1 {
         opengraph_embed_from_node(&content.dom, unfurled_links[0], ctx)?.and_then(|embed| embed.href)
@@ -81,11 +83,8 @@ fn normalize_tweet_url(url: Option<&str>) -> Result<Option<String>, Error> {
 pub fn sanitize_tags(content: Content) -> Content {
     let Content { mut dom, root } = content;
     let allowed = sanitize_tags_allowed_tags();
-    let disallowed: Vec<_> = dom
-        .descendants(root)
-        .into_iter()
-        .filter(|&n| dom.local_name(n).is_some_and(|name| !allowed.contains(&name)))
-        .collect();
+    let disallowed: Vec<_> =
+        dom.descendants(root).into_iter().filter(|&n| dom.local_name(n).is_some_and(|name| !allowed.contains(&name))).collect();
     for node in disallowed {
         dom.detach(node);
     }

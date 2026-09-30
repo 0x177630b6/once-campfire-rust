@@ -8,7 +8,8 @@ use crate::error::Result;
 pub trait CachedStatements {
     fn execute_cached(&self, sql: &str, params: impl Params) -> rusqlite::Result<usize>;
 
-    fn query_row_cached<T>(&self, sql: &str, params: impl Params, map: impl FnOnce(&Row<'_>) -> rusqlite::Result<T>) -> rusqlite::Result<T>;
+    fn query_row_cached<T>(&self, sql: &str, params: impl Params, map: impl FnOnce(&Row<'_>) -> rusqlite::Result<T>)
+    -> rusqlite::Result<T>;
 }
 
 impl CachedStatements for Connection {
@@ -16,7 +17,12 @@ impl CachedStatements for Connection {
         self.prepare_cached(sql)?.execute(params)
     }
 
-    fn query_row_cached<T>(&self, sql: &str, params: impl Params, map: impl FnOnce(&Row<'_>) -> rusqlite::Result<T>) -> rusqlite::Result<T> {
+    fn query_row_cached<T>(
+        &self,
+        sql: &str,
+        params: impl Params,
+        map: impl FnOnce(&Row<'_>) -> rusqlite::Result<T>,
+    ) -> rusqlite::Result<T> {
         self.prepare_cached(sql)?.query_row(params, map)
     }
 }
@@ -26,12 +32,7 @@ pub fn placeholders(n: usize) -> String {
     vec!["?"; n].join(", ")
 }
 
-pub fn query_all<T>(
-    conn: &Connection,
-    sql: &str,
-    params: impl Params,
-    map: impl FnMut(&Row<'_>) -> rusqlite::Result<T>,
-) -> Result<Vec<T>> {
+pub fn query_all<T>(conn: &Connection, sql: &str, params: impl Params, map: impl FnMut(&Row<'_>) -> rusqlite::Result<T>) -> Result<Vec<T>> {
     let mut stmt = conn.prepare_cached(sql)?;
     let rows = stmt.query_map(params, map)?;
     Ok(rows.collect::<rusqlite::Result<Vec<T>>>()?)
@@ -61,9 +62,7 @@ pub fn alphanumeric(n: usize) -> String {
     use rand::Rng;
     const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     let mut rng = rand::rng();
-    (0..n)
-        .map(|_| CHARS[rng.random_range(0..CHARS.len())] as char)
-        .collect()
+    (0..n).map(|_| CHARS[rng.random_range(0..CHARS.len())] as char).collect()
 }
 
 /// `SecureRandom.base58(n)`, as `has_secure_token` uses it.
@@ -71,9 +70,7 @@ pub fn base58(n: usize) -> String {
     use rand::Rng;
     const CHARS: &[u8] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
     let mut rng = rand::rng();
-    (0..n)
-        .map(|_| CHARS[rng.random_range(0..CHARS.len())] as char)
-        .collect()
+    (0..n).map(|_| CHARS[rng.random_range(0..CHARS.len())] as char).collect()
 }
 
 /// `SecureRandom.uuid` / `Random.uuid`

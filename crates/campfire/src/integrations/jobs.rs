@@ -12,9 +12,9 @@ use super::web_push::{self, VapidConfig, VapidError};
 use super::webhook::{self, WebhookReply};
 use crate::app::App;
 use crate::config::Config;
-use crate::controllers::presenters::page::{self, Rendered};
 use crate::controllers::messages::{canonicalize_body, process_attachment, save_staged};
 use crate::controllers::presenters::Presenter;
+use crate::controllers::presenters::page::{self, Rendered};
 use crate::jobs::{JobKind, Registry};
 
 /// Registers the handlers for `Event::PushMessage` and `Event::DeliverWebhook`.
@@ -120,7 +120,9 @@ async fn create_text_reply(app: &App, room: &Room, bot: &User, text: String) -> 
     let body = canonicalize_body(app, text, None).await.map_err(|e| anyhow!("{e:?}"))?;
     let message = app
         .db
-        .write(move |tx| Message::create(tx, NewMessage { room_id, creator_id, client_message_id: None, body: Some(body), attachment_blob_id: None }))
+        .write(move |tx| {
+            Message::create(tx, NewMessage { room_id, creator_id, client_message_id: None, body: Some(body), attachment_blob_id: None })
+        })
         .await?;
     Ok(message)
 }
@@ -136,7 +138,9 @@ async fn create_attachment_reply(app: &App, room: &Room, bot: &User, attachment:
     let (room_id, creator_id, blob_id) = (room.id, bot.id, blob.id);
     let message = app
         .db
-        .write(move |tx| Message::create(tx, NewMessage { room_id, creator_id, client_message_id: None, body: None, attachment_blob_id: Some(blob_id) }))
+        .write(move |tx| {
+            Message::create(tx, NewMessage { room_id, creator_id, client_message_id: None, body: None, attachment_blob_id: Some(blob_id) })
+        })
         .await?;
     process_attachment(app, blob).await.map_err(|e| anyhow!("{e:?}"))?;
     let id = message.id;
@@ -148,7 +152,7 @@ async fn broadcast_create(app: &App, room: &Room, message: &Message) -> anyhow::
     let (app, room, message) = (app.clone(), room.clone(), message.clone());
     let db = app.db.clone();
     db.read(move |conn| {
-        let presenter = Presenter::new(conn, &app.secrets, &app.storage, &*app.db.env().rich_text, app.clock.now(), None);
+        let presenter = Presenter::new(conn, &app, None);
         let view = presenter.message(&message)?;
         let account = campfire_db::Account::first(conn)?;
         let html = page::render_detached(&app, account.as_ref(), |ctx| views::message(ctx, &view));

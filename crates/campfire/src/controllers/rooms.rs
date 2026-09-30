@@ -172,7 +172,7 @@ pub(crate) async fn render_shared_room(c: &Ctx, room: &Room) -> Result<Rendered>
         .app()
         .db
         .read(move |conn| {
-            let presenter = Presenter::new(conn, &app.secrets, &app.storage, &*app.db.env().rich_text, app.clock.now(), None);
+            let presenter = Presenter::new(conn, &app, None);
             let sidebar_room = presenter.sidebar_room(&room);
             let account = Account::first(conn)?;
             Ok(page::render_detached_at(&app, account.as_ref(), &base_url, |_| {
@@ -199,7 +199,7 @@ async fn render_show(c: &mut Ctx, room: Room) -> Result {
                 Some(message) if message.room_id == room.id => Message::page_around(conn, room.id, &message)?,
                 _ => Message::last_page(conn, room.id)?,
             };
-            let presenter = Presenter::new(conn, &app.secrets, &app.storage, &*app.db.env().rich_text, app.clock.now(), request_host);
+            let presenter = Presenter::new(conn, &app, request_host);
             let original = Room::original(conn)?.is_some_and(|original| original.id == room.id);
             let room_gid = crate::channels::room_gid(&room).to_param();
             Ok(campfire_views::rooms::ShowView {

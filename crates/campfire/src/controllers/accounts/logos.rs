@@ -36,7 +36,13 @@ pub async fn show(c: &mut Ctx) -> Result {
         // `logo.variant(size).processed if logo.variable?`: :small is 192, :large 512, both PNG.
         Some(account) => {
             let size = if small { 192 } else { 512 };
-            attachments::processed_variant(c.app(), Record::account(account.id), "logo", Variation::resize_to_limit(size, size, Some("png"))).await?
+            attachments::processed_variant(
+                c.app(),
+                Record::account(account.id),
+                "logo",
+                Variation::resize_to_limit(size, size, Some("png")),
+            )
+            .await?
         }
         None => None,
     };
@@ -60,11 +66,7 @@ pub async fn destroy(c: &mut Ctx) -> Result {
     concerns::before_actions(c, Before::default()).await?;
     concerns::ensure_can_administer(c)?;
     let account = super::current_account(c).await?;
-    c.app()
-        .db
-        .write(move |tx| attachments::destroy(tx, Record::account(account.id), "logo"))
-        .await
-        .map_err(Error::internal)?;
+    c.app().db.write(move |tx| attachments::destroy(tx, Record::account(account.id), "logo")).await.map_err(Error::internal)?;
     let location = c.url_for(&campfire_routes::edit_account());
     c.redirect_to(&location)
 }

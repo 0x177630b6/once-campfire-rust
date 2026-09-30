@@ -26,10 +26,7 @@ impl Variation {
     /// `resize_to_limit: [width, height]` plus an optional `format:` symbol, the only shape the
     /// app's named variants and previews use (`Message::Attachment`, `User::Avatar`, `Account`).
     pub fn resize_to_limit(width: i64, height: i64, format: Option<&str>) -> Self {
-        let mut transformations = vec![(
-            "resize_to_limit".to_string(),
-            Value::Array(vec![Value::Int(width), Value::Int(height)]),
-        )];
+        let mut transformations = vec![("resize_to_limit".to_string(), Value::Array(vec![Value::Int(width), Value::Int(height)]))];
         if let Some(format) = format {
             transformations.push(("format".to_string(), Value::Symbol(format.to_string())));
         }
@@ -136,8 +133,6 @@ fn from_json(json: &Json) -> Result<Value> {
         Json::Float(_) => return Err(Error::InvalidVariation("float transformation arguments are unsupported".into())),
         Json::String(s) => Value::Str(s.clone()),
         Json::Array(items) => Value::Array(items.iter().map(from_json).collect::<Result<_>>()?),
-        Json::Object(entries) => {
-            Value::Hash(entries.iter().map(|(k, v)| Ok((k.clone(), from_json(v)?))).collect::<Result<_>>()?)
-        }
+        Json::Object(entries) => Value::Hash(entries.iter().map(|(k, v)| Ok((k.clone(), from_json(v)?))).collect::<Result<_>>()?),
     })
 }

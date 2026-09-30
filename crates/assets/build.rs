@@ -18,41 +18,18 @@ const PREFIX: &str = "/assets";
 
 fn main() {
     let crate_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
-    let rails_root = crate_dir
-        .join("../../reference")
-        .canonicalize()
-        .expect("reference/ submodule is missing");
+    let rails_root = crate_dir.join("../../reference").canonicalize().expect("reference/ submodule is missing");
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
 
-    for watched in [
-        "app/assets",
-        "app/javascript",
-        "vendor/javascript",
-        "public",
-        "config/importmap.rb",
-        "config/initializers/assets.rb",
-    ] {
-        println!(
-            "cargo:rerun-if-changed={}",
-            rails_root.join(watched).display()
-        );
+    for watched in ["app/assets", "app/javascript", "vendor/javascript", "public", "config/importmap.rb", "config/initializers/assets.rb"] {
+        println!("cargo:rerun-if-changed={}", rails_root.join(watched).display());
     }
-    println!(
-        "cargo:rerun-if-changed={}",
-        crate_dir.join("vendor").display()
-    );
-    println!(
-        "cargo:rerun-if-changed={}",
-        crate_dir.join("overrides").display()
-    );
+    println!("cargo:rerun-if-changed={}", crate_dir.join("vendor").display());
+    println!("cargo:rerun-if-changed={}", crate_dir.join("overrides").display());
     println!("cargo:rerun-if-changed=build");
     println!("cargo:rerun-if-env-changed=SOURCE_DATE_EPOCH");
 
-    let load_path = propshaft::LoadPath::new(
-        &load_path_dirs(&crate_dir, &rails_root),
-        &assets_version(&rails_root),
-        PREFIX,
-    );
+    let load_path = propshaft::LoadPath::new(&load_path_dirs(&crate_dir, &rails_root), &assets_version(&rails_root), PREFIX);
     let compiled_dir = out_dir.join("compiled");
     let _ = fs::remove_dir_all(&compiled_dir);
 
@@ -69,17 +46,8 @@ fn main() {
             }
             None => asset.source.clone(),
         };
-        writeln!(
-            code,
-            "static ASSET_{index}: &[u8] = include_bytes!({:?});",
-            body_path.display().to_string()
-        )
-        .unwrap();
-        entries.push((
-            asset.logical_path.clone(),
-            digested,
-            format!("ASSET_{index}"),
-        ));
+        writeln!(code, "static ASSET_{index}: &[u8] = include_bytes!({:?});", body_path.display().to_string()).unwrap();
+        entries.push((asset.logical_path.clone(), digested, format!("ASSET_{index}")));
     }
 
     // Propshaft::Processor#write_manifest (the order is the load path's, not readdir's).
@@ -87,11 +55,7 @@ fn main() {
         "{{{}}}",
         entries
             .iter()
-            .map(|(logical, digested, _)| format!(
-                "{}:{{\"digested_path\":{},\"integrity\":null}}",
-                json(logical),
-                json(digested)
-            ))
+            .map(|(logical, digested, _)| format!("{}:{{\"digested_path\":{},\"integrity\":null}}", json(logical), json(digested)))
             .collect::<Vec<_>>()
             .join(",")
     );
@@ -109,11 +73,7 @@ fn main() {
     // Hermes fork: except the overrides' `hermes/` stylesheets, which only the Hermes templates
     // link, so that every other page keeps the reference's exact `<link>` tags.
     code.push_str("pub(crate) static STYLESHEETS: &[&str] = &[\n");
-    for (index, _) in by_logical
-        .iter()
-        .enumerate()
-        .filter(|(_, e)| propshaft::extname(&e.0) == ".css" && !e.0.starts_with("hermes/"))
-    {
+    for (index, _) in by_logical.iter().enumerate().filter(|(_, e)| propshaft::extname(&e.0) == ".css" && !e.0.starts_with("hermes/")) {
         writeln!(code, "    {:?},", by_logical[index].0).unwrap();
     }
     code.push_str("];\n");
@@ -128,21 +88,13 @@ fn main() {
     public_files.retain(|file| !file.starts_with(public.join("assets")));
     for (i, file) in public_files.iter().enumerate() {
         let url = format!("/{}", file.strip_prefix(&public).unwrap().display());
-        writeln!(
-            code,
-            "static PUBLIC_{i}: &[u8] = include_bytes!({:?});",
-            file.display().to_string()
-        )
-        .unwrap();
+        writeln!(code, "static PUBLIC_{i}: &[u8] = include_bytes!({:?});", file.display().to_string()).unwrap();
         files.push((url, format!("PUBLIC_{i}")));
     }
     for (_, digested, body) in &entries {
         files.push((format!("{PREFIX}/{digested}"), body.clone()));
     }
-    files.push((
-        format!("{PREFIX}/.manifest.json"),
-        "MANIFEST_JSON.as_bytes()".to_string(),
-    ));
+    files.push((format!("{PREFIX}/.manifest.json"), "MANIFEST_JSON.as_bytes()".to_string()));
     files.sort_by(|a, b| a.0.cmp(&b.0));
     files.dedup_by(|a, b| a.0 == b.0);
     code.push_str("pub(crate) static FILES: &[(&str, &[u8])] = &[\n");
@@ -151,23 +103,9 @@ fn main() {
     }
     code.push_str("];\n");
 
-    writeln!(
-        code,
-        "pub(crate) static MANIFEST_JSON: &str = {manifest_json:?};"
-    )
-    .unwrap();
-    writeln!(
-        code,
-        "pub(crate) static IMPORTMAP_TAGS: &str = {:?};",
-        importmap_tags(&load_path, &entries, &rails_root)
-    )
-    .unwrap();
-    writeln!(
-        code,
-        "pub(crate) static BUILT_AT: &str = {:?};",
-        httpdate(build_time())
-    )
-    .unwrap();
+    writeln!(code, "pub(crate) static MANIFEST_JSON: &str = {manifest_json:?};").unwrap();
+    writeln!(code, "pub(crate) static IMPORTMAP_TAGS: &str = {:?};", importmap_tags(&load_path, &entries, &rails_root)).unwrap();
+    writeln!(code, "pub(crate) static BUILT_AT: &str = {:?};", httpdate(build_time())).unwrap();
 
     fs::write(out_dir.join("embedded.rs"), code).unwrap();
 }
@@ -177,23 +115,19 @@ fn main() {
 /// `Rails.application.assets.load_path.paths`).
 fn load_path_dirs(crate_dir: &Path, rails_root: &Path) -> Vec<PathBuf> {
     let overrides = crate_dir.join("overrides");
-    let load_path = fs::read_to_string(crate_dir.join("vendor/LOAD_PATH"))
-        .expect("vendor/LOAD_PATH is missing; run crates/assets/script/revendor");
-    let exported = load_path
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| match line.split_once(':') {
-            Some(("reference", dir)) => rails_root.join(dir),
-            Some(("vendor", dir)) => crate_dir.join("vendor").join(dir),
-            _ => panic!("vendor/LOAD_PATH: bad line {line:?}"),
-        });
+    let load_path =
+        fs::read_to_string(crate_dir.join("vendor/LOAD_PATH")).expect("vendor/LOAD_PATH is missing; run crates/assets/script/revendor");
+    let exported = load_path.lines().filter(|line| !line.trim().is_empty()).map(|line| match line.split_once(':') {
+        Some(("reference", dir)) => rails_root.join(dir),
+        Some(("vendor", dir)) => crate_dir.join("vendor").join(dir),
+        _ => panic!("vendor/LOAD_PATH: bad line {line:?}"),
+    });
     std::iter::once(overrides).chain(exported).collect()
 }
 
 /// config/initializers/assets.rb sets `Rails.application.config.assets.version`.
 fn assets_version(rails_root: &Path) -> String {
-    let initializer =
-        fs::read_to_string(rails_root.join("config/initializers/assets.rb")).unwrap_or_default();
+    let initializer = fs::read_to_string(rails_root.join("config/initializers/assets.rb")).unwrap_or_default();
     initializer
         .lines()
         .filter(|line| !line.trim_start().starts_with('#'))
@@ -207,35 +141,17 @@ fn assets_version(rails_root: &Path) -> String {
 
 /// Importmap::ImportmapTagsHelper#javascript_importmap_tags for the "application" entry point,
 /// with no CSP nonce (the reference configures no content security policy).
-fn importmap_tags(
-    load_path: &propshaft::LoadPath,
-    entries: &[(String, String, String)],
-    rails_root: &Path,
-) -> String {
-    let resolve = |path: &str| {
-        load_path
-            .find(path)
-            .map(|index| format!("{PREFIX}/{}", entries[index].1))
-    };
+fn importmap_tags(load_path: &propshaft::LoadPath, entries: &[(String, String, String)], rails_root: &Path) -> String {
+    let resolve = |path: &str| load_path.find(path).map(|index| format!("{PREFIX}/{}", entries[index].1));
     let overrides = Path::new(env!("CARGO_MANIFEST_DIR")).join("overrides");
-    let pins = importmap::expand(
-        &rails_root.join("config/importmap.rb"),
-        rails_root,
-        &overrides,
-    );
+    let pins = importmap::expand(&rails_root.join("config/importmap.rb"), rails_root, &overrides);
 
     // Missing assets are skipped (Propshaft::MissingAssetError is a rescuable asset error).
-    let imports: Vec<(String, String)> = pins
-        .iter()
-        .filter_map(|pin| Some((pin.name.clone(), resolve(&pin.path)?)))
-        .collect();
+    let imports: Vec<(String, String)> = pins.iter().filter_map(|pin| Some((pin.name.clone(), resolve(&pin.path)?))).collect();
     let json = if imports.is_empty() {
         "{\n  \"imports\": {}\n}".to_string()
     } else {
-        let lines: Vec<String> = imports
-            .iter()
-            .map(|(name, path)| format!("    {}: {}", json(name), json(path)))
-            .collect();
+        let lines: Vec<String> = imports.iter().map(|(name, path)| format!("    {}: {}", json(name), json(path))).collect();
         format!("{{\n  \"imports\": {{\n{}\n  }}\n}}", lines.join(",\n"))
     };
 
@@ -248,20 +164,9 @@ fn importmap_tags(
         }
     }
 
-    let mut tags = vec![format!(
-        "<script type=\"importmap\" data-turbo-track=\"reload\">{json}</script>"
-    )];
+    let mut tags = vec![format!("<script type=\"importmap\" data-turbo-track=\"reload\">{json}</script>")];
     tags.push(
-        preloads
-            .iter()
-            .map(|path| {
-                format!(
-                    "<link rel=\"modulepreload\" href=\"{}\">",
-                    escape_html(path)
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n"),
+        preloads.iter().map(|path| format!("<link rel=\"modulepreload\" href=\"{}\">", escape_html(path))).collect::<Vec<_>>().join("\n"),
     );
     tags.push("<script type=\"module\">import \"application\"</script>".to_string());
     tags.join("\n")
@@ -304,31 +209,20 @@ fn json(s: &str) -> String {
 
 /// ERB::Util.html_escape
 fn escape_html(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#39;")
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&#39;")
 }
 
 fn build_time() -> u64 {
     env::var("SOURCE_DATE_EPOCH")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or_else(|| {
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs()
-        })
+        .unwrap_or_else(|| SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs())
 }
 
 /// Time#httpdate: "Sat, 26 Sep 2026 12:23:14 GMT".
 fn httpdate(epoch: u64) -> String {
     const DAYS: [&str; 7] = ["Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed"];
-    const MONTHS: [&str; 12] = [
-        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-    ];
+    const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
     let days = (epoch / 86_400) as i64;
     let secs = epoch % 86_400;
     // Howard Hinnant's civil_from_days.

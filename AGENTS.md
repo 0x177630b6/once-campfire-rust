@@ -37,10 +37,19 @@ faster or better.
 - Rust comes from mise if it isn't on the PATH: `mise exec rust@1.98.1 -- cargo ...` (the version
   in `Dockerfile`). The `reference/` submodule must be checked out for `crates/assets` to build.
 - `cargo test --workspace --exclude html5ever` runs everything. The app's integration tests need the
-  seed data (`parity/bin/seed build`, which needs Docker); without it they skip silently, so say so
-  when reporting results.
+  seed data (`parity/bin/seed build`, which needs Docker); without it they pass without running,
+  with only a note on stderr, so say so when reporting results. `CAMPFIRE_REQUIRE_SEED=1` makes a
+  missing seed fail them instead.
 - `cargo clippy --workspace --exclude html5ever --all-targets` should stay clean. (`html5ever` is a
-  vendored copy with one backported fix, kept identical to upstream otherwise.)
+  vendored copy with one backported fix and two small additions for Gumbo's parse limits, all
+  recorded in its `Cargo.toml`, and identical to upstream otherwise.)
+- Format with `cargo fmt --all` (`rustfmt.toml`) before committing, and `bench/loadgen`, a workspace
+  of its own, with `cargo fmt --manifest-path bench/loadgen/Cargo.toml`; CI checks both. The
+  vendored html5ever has its own `rustfmt.toml` that turns formatting off, and generated tables are
+  marked `#[rustfmt::skip]`.
+- CI also runs `cargo shear` for dependencies declared but not used. When it can't see a real use
+  (a build script's `#[path]` modules, a self dev-dependency), list the crate under
+  `[package.metadata.cargo-shear] ignored` in that manifest, with the reason.
 - Put shared dependency versions in the root `[workspace.dependencies]`, and reference them with
   `foo.workspace = true`.
 - When matching existing behavior, read the reference's source. When it depends on Rails or gem

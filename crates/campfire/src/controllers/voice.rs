@@ -160,7 +160,14 @@ pub async fn ask(c: &mut Ctx) -> Result {
     let elapsed_ms = started.elapsed().as_millis() as u64;
     match result {
         Ok(answer) => {
-            tracing::info!(room_id = room.id, user_id = user.id, question_chars = length, answer_chars = answer.chars().count(), elapsed_ms, "Hermes answered a live voice question");
+            tracing::info!(
+                room_id = room.id,
+                user_id = user.id,
+                question_chars = length,
+                answer_chars = answer.chars().count(),
+                elapsed_ms,
+                "Hermes answered a live voice question"
+            );
             c.json(StatusCode::OK, &json!({ "answer": answer }))
         }
         Err(AskError::Timeout) => {
@@ -196,7 +203,7 @@ async fn room_display_name(c: &Ctx, room: &Room) -> Result<String> {
     c.app()
         .db
         .read(move |conn| {
-            let presenter = Presenter::new(conn, &app.secrets, &app.storage, &*app.db.env().rich_text, app.clock.now(), None);
+            let presenter = Presenter::new(conn, &app, None);
             Ok(presenter.room_view(&room, &user)?.display_name)
         })
         .await

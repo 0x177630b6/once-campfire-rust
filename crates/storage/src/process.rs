@@ -49,7 +49,9 @@ fn operations(variation: &Variation) -> Result<Vec<(Option<i32>, Option<i32>)>> 
             ("resize_to_limit", Value::Array(args)) if args.len() == 2 => {
                 let dimension = |v: Option<&Value>| match v {
                     None | Some(Value::Nil) => Ok(None),
-                    Some(Value::Int(n)) => Ok(Some(*n as i32)),
+                    Some(Value::Int(n)) => {
+                        i32::try_from(*n).map(Some).map_err(|_| Error::InvalidVariation(format!("resize_to_limit argument {n}")))
+                    }
                     Some(other) => Err(Error::InvalidVariation(format!("resize_to_limit argument {other:?}"))),
                 };
                 let (width, height) = (dimension(args.first())?, dimension(args.get(1))?);
@@ -81,12 +83,7 @@ fn blank(value: &Value) -> bool {
 pub fn ffmpeg_exists() -> bool {
     static EXISTS: OnceLock<bool> = OnceLock::new();
     *EXISTS.get_or_init(|| {
-        Command::new(ffmpeg_path())
-            .arg("-version")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .is_ok_and(|s| s.success())
+        Command::new(ffmpeg_path()).arg("-version").stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok_and(|s| s.success())
     })
 }
 
@@ -154,6 +151,41 @@ fn wait_until(child: &mut Child, deadline: Instant) -> std::io::Result<Option<Ex
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn fixture(name: &str) -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../reference/test/fixtures/files").join(name)
+    }
+
+    fn thumbnail(input: &Path, size: i64, format: &str) -> Result<NamedTempFile> {
+        transform(input, &Variation::resize_to_limit(size, size, Some(format)))
+    }
+
+    #[test]
+    fn a_failing_variant_reports_its_own_error_after_many_variants() {
+        // libvips' error buffer is process-wide and holds 10 KB. Probing JPEG and PNG loaders for
+        // `page` used to append "no property named `page'" to it on every variant, until it was
+        // full and the next real error was cut off.
+        let jpeg = thumbnail(&fixture("moon.jpg"), 8, "jpg").unwrap();
+        let png = thumbnail(jpeg.path(), 8, "png").unwrap();
+        for _ in 0..200 {
+            thumbnail(jpeg.path(), 4, "webp").unwrap();
+            thumbnail(png.path(), 4, "webp").unwrap();
+        }
+
+        let corrupt = tempfile::Builder::new().suffix(".jpg").tempfile().unwrap();
+        std::fs::write(corrupt.path(), b"\xFF\xD8\xFF\xE0 not really a JPEG").unwrap();
+        let Err(Error::Vips(message)) = thumbnail(corrupt.path(), 4, "webp") else { panic!("a corrupt JPEG made a variant") };
+        assert!(message.contains("JPEG datastream contains no image"), "{message}");
+        assert!(!message.contains("no property named"), "{message}");
+    }
+
+    #[test]
+    fn resize_arguments_must_fit_libvips() {
+        let too_wide = Variation::resize_to_limit(i64::from(i32::MAX) + 1, 100, None);
+        assert!(matches!(operations(&too_wide), Err(Error::InvalidVariation(_))));
+        let widest = Variation::resize_to_limit(i64::from(i32::MAX), 100, None);
+        assert_eq!(operations(&widest).unwrap(), [(Some(i32::MAX), Some(100))]);
+    }
 
     #[test]
     fn output_within_captures_a_quick_child() {

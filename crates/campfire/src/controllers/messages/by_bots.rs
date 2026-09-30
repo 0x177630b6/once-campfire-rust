@@ -126,9 +126,7 @@ async fn set_pagination_headers(c: &mut Ctx, room: &Room, messages: &[Message]) 
         .read(move |conn| {
             let count = Message::count_in_room(conn, room_id)?;
             let next_page = match (first, last) {
-                (Some(_), Some(last)) if after => {
-                    Message::exists_after(conn, room_id, &last)?.then_some(("after", last.id))
-                }
+                (Some(_), Some(last)) if after => Message::exists_after(conn, room_id, &last)?.then_some(("after", last.id)),
                 (Some(first), Some(_)) => Message::exists_before(conn, room_id, &first)?.then_some(("before", first.id)),
                 _ => None,
             };

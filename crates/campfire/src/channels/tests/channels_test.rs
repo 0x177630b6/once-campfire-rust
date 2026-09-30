@@ -50,11 +50,18 @@ async fn room_channel_streams_for_member_rooms_only() {
     client.reject(&room_identifier("RoomChannel", -1)).await;
     client.reject(&identifier(json!({ "channel": "RoomChannel" }))).await;
     // Params are cast like Active Record casts an id.
-    client.confirm(&identifier(json!({ "channel": "RoomChannel", "room_id": designers.id.to_string() }))).await;
+    let by_string = identifier(json!({ "channel": "RoomChannel", "room_id": designers.id.to_string() }));
+    client.confirm(&by_string).await;
 
+    // Both subscriptions stream the room; a connection polls its subscriptions in no set order.
     let stream = format!("room:{}", room_gid(&designers).to_param());
     app.server.broadcast(&stream, &json!({ "hello": 1 }));
-    assert_eq!(client.next_text().await, delivery(&member, r#"{"hello":1}"#));
+    let mut received = vec![client.next_text().await, client.next_text().await];
+    received.sort();
+    let mut expected = vec![delivery(&member, r#"{"hello":1}"#), delivery(&by_string, r#"{"hello":1}"#)];
+    expected.sort();
+    assert_eq!(received, expected);
+    client.assert_silent().await;
 }
 
 // PresenceChannel (reference/test/channels/presence_channel_test.rb)
@@ -69,7 +76,12 @@ async fn presence_subscribes_and_marks_the_membership_connected() {
     let membership = app.membership("designers", "david").await.unwrap();
     assert!(!membership.is_connected(app.clock.now()));
     // A member's unread room gets cleared by `present`.
-    app.db.write(move |tx| tx.conn().execute("UPDATE memberships SET unread_at = '2024-01-01 00:00:00' WHERE id = ?", [membership.id]).map_err(Into::into)).await.unwrap();
+    app.db
+        .write(move |tx| {
+            tx.conn().execute("UPDATE memberships SET unread_at = '2024-01-01 00:00:00' WHERE id = ?", [membership.id]).map_err(Into::into)
+        })
+        .await
+        .unwrap();
 
     let presence = room_identifier("PresenceChannel", id("designers"));
     client.confirm(&presence).await;
@@ -187,6 +199,29 @@ fn typing_stream_name(room: &campfire_db::Room) -> String {
     campfire_cable::naming::broadcasting_for("TypingNotificationsChannel", &[&room_gid(room).to_param()])
 }
 
+/// `safe_constantize` resolves "::TypingNotificationsChannel" to the class, whose broadcastings
+/// are named after the class alone, so both spellings share the room's typing stream.
+#[tokio::test]
+async fn typing_notifications_reach_the_room_however_the_channel_is_spelled() {
+    let app = start().await;
+    let prefixed = room_identifier("::TypingNotificationsChannel", id("designers"));
+    let plain = room_identifier("TypingNotificationsChannel", id("designers"));
+    let mut typist = app.connect("jz").await;
+    let mut reader = app.connect("kevin").await;
+    typist.confirm(&prefixed).await;
+    reader.confirm(&plain).await;
+
+    typist.perform(&prefixed, json!({ "action": "start" })).await;
+    let start = format!(r#"{{"action":"start","user":{{"id":{},"name":"JZ"}}}}"#, id("jz"));
+    assert_eq!(reader.next_text().await, delivery(&plain, &start));
+    assert_eq!(typist.next_text().await, delivery(&prefixed, &start));
+
+    reader.perform(&plain, json!({ "action": "stop" })).await;
+    let stop = format!(r#"{{"action":"stop","user":{{"id":{},"name":"Kevin"}}}}"#, id("kevin"));
+    assert_eq!(typist.next_text().await, delivery(&prefixed, &stop));
+    assert_eq!(reader.next_text().await, delivery(&plain, &stop));
+}
+
 /// A subscription whose `subscribed` failed has no room: typing there is an error, not a panic
 /// that takes the whole connection down.
 #[tokio::test]
@@ -296,7 +331,10 @@ async fn the_stock_turbo_channel_refuses_room_message_streams_but_serves_the_roo
     app.broadcasts.room_remove(&designers);
     assert_eq!(
         kevin.next_text().await,
-        delivery(&rooms, &html_json(&format!(r#"<turbo-stream action="remove" target="list_rooms_closed_{}"></turbo-stream>"#, designers.id)))
+        delivery(
+            &rooms,
+            &html_json(&format!(r#"<turbo-stream action="remove" target="list_rooms_closed_{}"></turbo-stream>"#, designers.id))
+        )
     );
 }
 

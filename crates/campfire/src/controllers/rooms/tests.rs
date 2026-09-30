@@ -90,7 +90,12 @@ async fn open_rooms_are_created_edited_and_updated() {
     let shown = david.get(&format!("/rooms/opens/{room_id}")).await;
     assert_eq!(shown.location(), Some(format!("http://campfire.test/rooms/{room_id}").as_str()));
 
-    let updated = david.write(Req::new(Method::PATCH, &format!("/rooms/closeds/{room_id}")).form(&[("room[name]", "Private"), ("user_ids[]", &DAVID.to_string())])).await;
+    let updated = david
+        .write(
+            Req::new(Method::PATCH, &format!("/rooms/closeds/{room_id}"))
+                .form(&[("room[name]", "Private"), ("user_ids[]", &DAVID.to_string())]),
+        )
+        .await;
     assert_eq!(updated.status, StatusCode::FOUND, "{}", updated.text());
     let room = app.db().read(move |conn| Room::find(conn, room_id)).await.unwrap();
     assert_eq!((room.name.as_deref(), room.room_type), (Some("Private"), RoomType::Closed));
@@ -116,7 +121,8 @@ async fn closed_rooms_are_created_with_the_selected_users() {
         .await;
     assert_eq!(created.status, StatusCode::FOUND, "{}", created.text());
     let room_id: i64 = created.location().unwrap().rsplit('/').next().unwrap().parse().unwrap();
-    let mut members: Vec<i64> = app.db().read(move |conn| Membership::for_room(conn, room_id)).await.unwrap().iter().map(|m| m.user_id).collect();
+    let mut members: Vec<i64> =
+        app.db().read(move |conn| Membership::for_room(conn, room_id)).await.unwrap().iter().map(|m| m.user_id).collect();
     members.sort();
     assert_eq!(members, vec![DAVID, JASON]);
     assert_eq!(david.get(&format!("/rooms/closeds/{room_id}/edit")).await.status, StatusCode::OK);
@@ -156,7 +162,9 @@ async fn refresh_streams_messages_since_a_time() {
     let Some(app) = TestApp::boot().await else { return };
     let mut david = app.david();
     let reply = david
-        .send(Req::new(Method::GET, &format!("/rooms/{ALL_TALK}/refresh?since=0")).header("accept", "text/vnd.turbo-stream.html, text/html"))
+        .send(
+            Req::new(Method::GET, &format!("/rooms/{ALL_TALK}/refresh?since=0")).header("accept", "text/vnd.turbo-stream.html, text/html"),
+        )
         .await;
     assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
     assert_eq!(reply.content_type(), Some("text/vnd.turbo-stream.html; charset=utf-8"));
@@ -174,7 +182,8 @@ async fn involvement_is_shown_and_changed() {
     let shown = david.get(&format!("/rooms/{ALL_TALK}/involvement")).await;
     assert_eq!(shown.status, StatusCode::OK);
     assert!(shown.text().contains("turbo-frame"));
-    let updated = david.write(Req::new(Method::PATCH, &format!("/rooms/{ALL_TALK}/involvement")).form(&[("involvement", "invisible")])).await;
+    let updated =
+        david.write(Req::new(Method::PATCH, &format!("/rooms/{ALL_TALK}/involvement")).form(&[("involvement", "invisible")])).await;
     assert_eq!(updated.location(), Some(format!("http://campfire.test/rooms/{ALL_TALK}/involvement").as_str()));
     let membership = app.db().read(|conn| Membership::find_by_room_and_user(conn, ALL_TALK, DAVID)).await.unwrap().unwrap();
     assert_eq!(membership.involvement, Some(campfire_db::Involvement::Invisible));
@@ -209,9 +218,8 @@ async fn cross_site_writes_are_refused() {
 async fn the_last_room_cookie_is_set_only_when_it_changes() {
     let Some(app) = TestApp::boot().await else { return };
     let mut david = app.david();
-    let last_room = |reply: &Reply| {
-        reply.headers.get_all(axum::http::header::SET_COOKIE).iter().any(|c| c.to_str().unwrap().starts_with("last_room="))
-    };
+    let last_room =
+        |reply: &Reply| reply.headers.get_all(axum::http::header::SET_COOKIE).iter().any(|c| c.to_str().unwrap().starts_with("last_room="));
     assert!(last_room(&david.get(&format!("/rooms/{HQ}")).await));
     assert!(!last_room(&david.get(&format!("/rooms/{HQ}")).await), "the same room again");
     assert!(last_room(&david.get(&format!("/rooms/{ALL_TALK}")).await));

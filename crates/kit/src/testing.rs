@@ -64,9 +64,10 @@ impl TestCrypto {
             return None;
         }
         if let Some(exp) = payload["exp"].as_str()
-            && exp.parse::<Timestamp>().ok()? <= now {
-                return None;
-            }
+            && exp.parse::<Timestamp>().ok()? <= now
+        {
+            return None;
+        }
         Some(payload["v"].clone())
     }
 }

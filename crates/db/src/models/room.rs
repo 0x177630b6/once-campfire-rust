@@ -54,8 +54,7 @@ impl ToSql for RoomType {
 impl FromSql for RoomType {
     fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
         let name = value.as_str()?;
-        RoomType::from_class_name(name)
-            .ok_or_else(|| FromSqlError::Other(format!("unknown room type {name:?}").into()))
+        RoomType::from_class_name(name).ok_or_else(|| FromSqlError::Other(format!("unknown room type {name:?}").into()))
     }
 }
 
@@ -69,7 +68,8 @@ pub struct Room {
     pub updated_at: Timestamp,
 }
 
-const SELECT_FOR_USER: &str = r#"SELECT "rooms".* FROM "rooms" INNER JOIN "memberships" ON "rooms"."id" = "memberships"."room_id" WHERE "memberships"."user_id" = ?"#;
+const SELECT_FOR_USER: &str =
+    r#"SELECT "rooms".* FROM "rooms" INNER JOIN "memberships" ON "rooms"."id" = "memberships"."room_id" WHERE "memberships"."user_id" = ?"#;
 
 impl Room {
     pub(crate) fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
@@ -88,12 +88,7 @@ impl Room {
     }
 
     pub fn find_by_id(conn: &Connection, id: i64) -> Result<Option<Self>> {
-        query_one(
-            conn,
-            r#"SELECT * FROM "rooms" WHERE "rooms"."id" = ? LIMIT 1"#,
-            [id],
-            Self::from_row,
-        )
+        query_one(conn, r#"SELECT * FROM "rooms" WHERE "rooms"."id" = ? LIMIT 1"#, [id], Self::from_row)
     }
 
     pub fn all(conn: &Connection) -> Result<Vec<Self>> {
@@ -102,30 +97,16 @@ impl Room {
 
     /// `Room.opens` / `closeds` / `directs`
     pub fn of_type(conn: &Connection, room_type: RoomType) -> Result<Vec<Self>> {
-        query_all(
-            conn,
-            r#"SELECT * FROM "rooms" WHERE "rooms"."type" = ?"#,
-            [room_type],
-            Self::from_row,
-        )
+        query_all(conn, r#"SELECT * FROM "rooms" WHERE "rooms"."type" = ?"#, [room_type], Self::from_row)
     }
 
     pub fn count_of_type(conn: &Connection, room_type: RoomType) -> Result<i64> {
-        sql::count(
-            conn,
-            r#"SELECT COUNT(*) FROM "rooms" WHERE "rooms"."type" = ?"#,
-            [room_type],
-        )
+        sql::count(conn, r#"SELECT COUNT(*) FROM "rooms" WHERE "rooms"."type" = ?"#, [room_type])
     }
 
     /// `Room.original`: the oldest room.
     pub fn original(conn: &Connection) -> Result<Option<Self>> {
-        query_one(
-            conn,
-            r#"SELECT * FROM "rooms" ORDER BY "rooms"."created_at" ASC LIMIT 1"#,
-            [],
-            Self::from_row,
-        )
+        query_one(conn, r#"SELECT * FROM "rooms" ORDER BY "rooms"."created_at" ASC LIMIT 1"#, [], Self::from_row)
     }
 
     // `Current.user.rooms` and its scopes
@@ -142,11 +123,7 @@ impl Room {
     }
 
     /// `user.rooms.directs` / `.opens` / `.closeds`
-    pub fn for_user_of_type(
-        conn: &Connection,
-        user_id: i64,
-        room_type: RoomType,
-    ) -> Result<Vec<Self>> {
+    pub fn for_user_of_type(conn: &Connection, user_id: i64, room_type: RoomType) -> Result<Vec<Self>> {
         let sql = format!(r#"{SELECT_FOR_USER} AND "rooms"."type" = ?"#);
         query_all(conn, &sql, params![user_id, room_type], Self::from_row)
     }
@@ -154,12 +131,7 @@ impl Room {
     /// `user.rooms.without_directs`
     pub fn for_user_without_directs(conn: &Connection, user_id: i64) -> Result<Vec<Self>> {
         let sql = format!(r#"{SELECT_FOR_USER} AND "rooms"."type" != ?"#);
-        query_all(
-            conn,
-            &sql,
-            params![user_id, RoomType::Direct],
-            Self::from_row,
-        )
+        query_all(conn, &sql, params![user_id, RoomType::Direct], Self::from_row)
     }
 
     /// `user.rooms.original`
@@ -178,12 +150,7 @@ impl Room {
 
     /// `Rooms::<Type>.create!(name:, creator:)`. An open room grants itself to every active
     /// user after commit (`Rooms::Open#grant_access_to_all_users`).
-    pub fn create(
-        tx: &mut Tx<'_>,
-        room_type: RoomType,
-        name: Option<&str>,
-        creator_id: i64,
-    ) -> Result<Self> {
+    pub fn create(tx: &mut Tx<'_>, room_type: RoomType, name: Option<&str>, creator_id: i64) -> Result<Self> {
         let now = tx.now();
         let id: i64 = tx.conn().query_row_cached(
             r#"INSERT INTO "rooms" ("created_at", "creator_id", "name", "type", "updated_at") VALUES (?, ?, ?, ?, ?) RETURNING "id""#,
@@ -197,13 +164,7 @@ impl Room {
     }
 
     /// `Room.create_for(attributes, users:)`
-    pub fn create_for(
-        tx: &mut Tx<'_>,
-        room_type: RoomType,
-        name: Option<&str>,
-        creator_id: i64,
-        user_ids: &[i64],
-    ) -> Result<Self> {
+    pub fn create_for(tx: &mut Tx<'_>, room_type: RoomType, name: Option<&str>, creator_id: i64, user_ids: &[i64]) -> Result<Self> {
         let room = Self::create(tx, room_type, name, creator_id)?;
         room.grant_to(tx, user_ids)?;
         Ok(room)
@@ -211,11 +172,7 @@ impl Room {
 
     /// `Rooms::Direct.find_or_create_for(users)`: the direct room whose members are exactly
     /// `user_ids`, created (by `creator_id`, i.e. `Current.user`) if there isn't one.
-    pub fn find_or_create_direct_for(
-        tx: &mut Tx<'_>,
-        user_ids: &[i64],
-        creator_id: i64,
-    ) -> Result<Self> {
+    pub fn find_or_create_direct_for(tx: &mut Tx<'_>, user_ids: &[i64], creator_id: i64) -> Result<Self> {
         match Self::find_direct_for(tx.conn(), user_ids)? {
             Some(room) => Ok(room),
             None => Self::create_for(tx, RoomType::Direct, None, creator_id, user_ids),
@@ -233,8 +190,7 @@ impl Room {
             Self::from_row,
         )?;
         for room in candidates {
-            let members: std::collections::BTreeSet<i64> =
-                room.user_ids(conn)?.into_iter().collect();
+            let members: std::collections::BTreeSet<i64> = room.user_ids(conn)?.into_iter().collect();
             if members == wanted {
                 return Ok(Some(room));
             }
@@ -246,15 +202,8 @@ impl Room {
 
     /// `room.update!(name:, type:)`. A direct room can't change type
     /// (`direct_rooms_keep_their_type`). Becoming open grants every active user after commit.
-    pub fn update(
-        &mut self,
-        tx: &mut Tx<'_>,
-        name: Option<Option<&str>>,
-        room_type: Option<RoomType>,
-    ) -> Result<()> {
-        let name = name
-            .map(|n| n.map(str::to_string))
-            .filter(|n| *n != self.name);
+    pub fn update(&mut self, tx: &mut Tx<'_>, name: Option<Option<&str>>, room_type: Option<RoomType>) -> Result<()> {
+        let name = name.map(|n| n.map(str::to_string)).filter(|n| *n != self.name);
         let room_type = room_type.filter(|t| *t != self.room_type);
 
         if room_type.is_some() && self.room_type == RoomType::Direct {
@@ -287,24 +236,17 @@ impl Room {
 
     /// `touch`: `belongs_to :room, touch: true` on messages.
     pub fn touch(tx: &Tx<'_>, room_id: i64) -> Result<()> {
-        tx.conn().execute_cached(
-            r#"UPDATE "rooms" SET "updated_at" = ? WHERE "rooms"."id" = ?"#,
-            params![tx.now(), room_id],
-        )?;
+        tx.conn().execute_cached(r#"UPDATE "rooms" SET "updated_at" = ? WHERE "rooms"."id" = ?"#, params![tx.now(), room_id])?;
         Ok(())
     }
 
     /// `room.destroy`: memberships are deleted without callbacks, messages are destroyed.
     pub fn destroy(&self, tx: &mut Tx<'_>) -> Result<()> {
-        tx.conn().execute_cached(
-            r#"DELETE FROM "memberships" WHERE "memberships"."room_id" = ?"#,
-            [self.id],
-        )?;
+        tx.conn().execute_cached(r#"DELETE FROM "memberships" WHERE "memberships"."room_id" = ?"#, [self.id])?;
         for message in Message::for_room(tx.conn(), self.id)? {
             message.destroy(tx)?;
         }
-        tx.conn()
-            .execute_cached(r#"DELETE FROM "rooms" WHERE "rooms"."id" = ?"#, [self.id])?;
+        tx.conn().execute_cached(r#"DELETE FROM "rooms" WHERE "rooms"."id" = ?"#, [self.id])?;
         Ok(())
     }
 
@@ -327,15 +269,8 @@ impl Room {
             r#"SELECT "memberships".* FROM "memberships" WHERE "memberships"."room_id" = ? AND "memberships"."user_id" IN ({})"#,
             placeholders(user_ids.len())
         );
-        let values: Vec<i64> = std::iter::once(self.id)
-            .chain(user_ids.iter().copied())
-            .collect();
-        for membership in query_all(
-            tx.conn(),
-            &sql,
-            rusqlite::params_from_iter(values),
-            Membership::from_row,
-        )? {
+        let values: Vec<i64> = std::iter::once(self.id).chain(user_ids.iter().copied()).collect();
+        for membership in query_all(tx.conn(), &sql, rusqlite::params_from_iter(values), Membership::from_row)? {
             membership.destroy(tx)?;
         }
         Ok(())
@@ -386,10 +321,7 @@ impl Room {
     /// unread, then enqueues the push.
     pub(crate) fn receive(tx: &mut Tx<'_>, room_id: i64, message: &Message) -> Result<()> {
         Self::unread_memberships(tx, room_id, message)?;
-        tx.emit_after_commit(Event::PushMessage {
-            room_id,
-            message_id: message.id,
-        });
+        tx.emit_after_commit(Event::PushMessage { room_id, message_id: message.id });
         Ok(())
     }
 
@@ -425,18 +357,10 @@ impl Room {
 }
 
 /// `Membership.insert_all(... { room_id:, user_id:, involvement: })`
-fn insert_memberships(
-    tx: &Tx<'_>,
-    room_id: i64,
-    involvement: &str,
-    user_ids: &[i64],
-) -> Result<()> {
+fn insert_memberships(tx: &Tx<'_>, room_id: i64, involvement: &str, user_ids: &[i64]) -> Result<()> {
     // In batches: SQLite binds at most 32,766 variables per statement, 3 per row here.
     for user_ids in user_ids.chunks(MEMBERSHIP_INSERT_BATCH) {
-        let rows: Vec<String> = user_ids
-            .iter()
-            .map(|_| format!("({SQLITE_NOW}, ?, ?, {SQLITE_NOW}, ?)"))
-            .collect();
+        let rows: Vec<String> = user_ids.iter().map(|_| format!("({SQLITE_NOW}, ?, ?, {SQLITE_NOW}, ?)")).collect();
         let sql = format!(
             r#"INSERT INTO "memberships" ("created_at","involvement","room_id","updated_at","user_id") VALUES {} ON CONFLICT  DO NOTHING RETURNING "id""#,
             rows.join(", ")
@@ -459,12 +383,7 @@ pub(crate) const MEMBERSHIP_INSERT_BATCH: usize = 1_000;
 
 /// `memberships.grant_to(User.active)`, from `Rooms::Open`'s `after_save_commit`.
 fn grant_to_active_users(tx: &mut Tx<'_>, room_id: i64) -> Result<()> {
-    let user_ids: Vec<i64> = query_all(
-        tx.conn(),
-        r#"SELECT "users"."id" FROM "users" WHERE "users"."status" = ?"#,
-        [0],
-        |r| r.get(0),
-    )?;
+    let user_ids: Vec<i64> = query_all(tx.conn(), r#"SELECT "users"."id" FROM "users" WHERE "users"."status" = ?"#, [0], |r| r.get(0))?;
     let room = Room::find(tx.conn(), room_id)?;
     insert_memberships(tx, room_id, room.default_involvement(), &user_ids)
 }

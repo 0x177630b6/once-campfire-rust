@@ -122,11 +122,7 @@ pub struct StoragePaths {
 impl StoragePaths {
     pub fn new(root: impl Into<PathBuf>, environment: &str) -> Self {
         let root = root.into();
-        Self {
-            database: root.join("db").join(format!("{environment}.sqlite3")),
-            files: root.join("files"),
-            backups: root.join("backups"),
-        }
+        Self { database: root.join("db").join(format!("{environment}.sqlite3")), files: root.join("files"), backups: root.join("backups") }
     }
 
     /// `config/initializers/storage_paths.rb`: `storage/{db,files}` exist after boot.
@@ -339,7 +335,9 @@ mod tests {
 
     #[test]
     fn hermes_ask_url_is_a_redacted_http_url() {
-        let with = |url: &str| config(&[("SECRET_KEY_BASE", "abc"), ("GEMINI_API_KEY", "k"), ("HERMES_ASK_URL", url), ("HERMES_ASKS_PER_HOUR", "5")]);
+        let with = |url: &str| {
+            config(&[("SECRET_KEY_BASE", "abc"), ("GEMINI_API_KEY", "k"), ("HERMES_ASK_URL", url), ("HERMES_ASKS_PER_HOUR", "5")])
+        };
         let live = with(" http://campfire-bridge:8645/ask/s3cret ").unwrap().gemini_live.unwrap();
         let url = live.hermes_ask_url.unwrap();
         assert_eq!(url.expose(), "http://campfire-bridge:8645/ask/s3cret");
@@ -357,12 +355,9 @@ mod tests {
 
     #[test]
     fn storage_overrides() {
-        let config = config(&[
-            ("SECRET_KEY_BASE", "abc"),
-            ("CAMPFIRE_STORAGE_PATH", "/rails/storage"),
-            ("CAMPFIRE_FILES_PATH", "/seed/storage"),
-        ])
-        .unwrap();
+        let config =
+            config(&[("SECRET_KEY_BASE", "abc"), ("CAMPFIRE_STORAGE_PATH", "/rails/storage"), ("CAMPFIRE_FILES_PATH", "/seed/storage")])
+                .unwrap();
         assert_eq!(config.storage.database, PathBuf::from("/rails/storage/db/production.sqlite3"));
         assert_eq!(config.storage.files, PathBuf::from("/seed/storage"));
     }

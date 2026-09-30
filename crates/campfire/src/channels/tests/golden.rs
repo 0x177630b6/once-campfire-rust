@@ -33,6 +33,8 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use crate::channels::{self, Broadcasts, Cable, Deps, revocation};
 
 const GOLDEN: &str = "crates/campfire/src/channels/tests/golden/reference.json";
+/// How long a replay waits for a frame the recording says is coming.
+const EXPECTED_FRAME_WAIT: Duration = Duration::from_secs(10);
 const TRIGGER: &str = "crates/campfire/src/channels/tests/golden/trigger.rb";
 
 /// The repository root (`CAMPFIRE_REPO_ROOT` when this module is built outside the workspace).
@@ -104,7 +106,10 @@ fn script(tokens: &BTreeMap<String, String>) -> Vec<(String, Step)> {
         ("A presence", Send("A", subscribe(&presence))),
         ("A presence in a room A isn't in", Send("A", subscribe(&json!({ "channel": "PresenceChannel", "room_id": closed_id })))),
         ("A presence with a non-numeric room", Send("A", subscribe(&json!({ "channel": "PresenceChannel", "room_id": "abc" })))),
-        ("A presence with a numeric string room", Send("A", subscribe(&json!({ "channel": "PresenceChannel", "room_id": room_id.to_string() })))),
+        (
+            "A presence with a numeric string room",
+            Send("A", subscribe(&json!({ "channel": "PresenceChannel", "room_id": room_id.to_string() }))),
+        ),
         ("A room", Send("A", subscribe(&room))),
         ("A room A isn't in", Send("A", subscribe(&json!({ "channel": "RoomChannel", "room_id": closed_id })))),
         ("A room without an id", Send("A", subscribe(&json!({ "channel": "RoomChannel" })))),
@@ -119,8 +124,14 @@ fn script(tokens: &BTreeMap<String, String>) -> Vec<(String, Step)> {
             Send("A", subscribe(&json!({ "channel": "RoomMessagesChannel", "signed_stream_name": t("CLOSED_MESSAGES_SIGNED") }))),
         ),
         ("A room messages without a name", Send("A", subscribe(&json!({ "channel": "RoomMessagesChannel" })))),
-        ("A room messages with a forged name", Send("A", subscribe(&json!({ "channel": "RoomMessagesChannel", "signed_stream_name": forged })))),
-        ("A room messages with the rooms name", Send("A", subscribe(&json!({ "channel": "RoomMessagesChannel", "signed_stream_name": t("ROOMS_SIGNED") })))),
+        (
+            "A room messages with a forged name",
+            Send("A", subscribe(&json!({ "channel": "RoomMessagesChannel", "signed_stream_name": forged }))),
+        ),
+        (
+            "A room messages with the rooms name",
+            Send("A", subscribe(&json!({ "channel": "RoomMessagesChannel", "signed_stream_name": t("ROOMS_SIGNED") }))),
+        ),
         ("A turbo rooms", Send("A", subscribe(&rooms))),
         ("A turbo own rooms", Send("A", subscribe(&turbo(t("A_ROOMS_SIGNED"))))),
         ("A turbo guarded room messages", Send("A", subscribe(&guarded))),
@@ -166,10 +177,13 @@ struct RustApp {
     broadcasts: Broadcasts,
 }
 
-async fn run_script(target: &Target) -> Vec<Exchange> {
+/// Runs the script, returning what each socket received at each step. With `expected` (a
+/// replay), each step first waits, generously, for as many frames as the recording has, so a slow
+/// machine can't cut a step short; `quiet` then only has to catch frames beyond those.
+async fn run_script(target: &Target, expected: Option<&[Exchange]>) -> Vec<Exchange> {
     let mut sockets: BTreeMap<String, Socket> = BTreeMap::new();
     let mut exchanges = Vec::new();
-    for (name, step) in script(&target.fixtures.tokens) {
+    for (index, (name, step)) in script(&target.fixtures.tokens).into_iter().enumerate() {
         match step {
             Step::Connect(socket, cookie) => {
                 let mut request = target.url.as_str().into_client_request().unwrap();
@@ -190,7 +204,8 @@ async fn run_script(target: &Target) -> Vec<Exchange> {
         }
         let mut frames = BTreeMap::new();
         for (socket, ws) in sockets.iter_mut() {
-            let received = collect(ws, target.quiet).await;
+            let at_least = expected.and_then(|steps| steps.get(index)).and_then(|step| step.frames.get(socket)).map_or(0, Vec::len);
+            let received = collect(ws, target.quiet, at_least).await;
             if !received.is_empty() {
                 frames.insert(socket.clone(), received);
             }
@@ -200,11 +215,13 @@ async fn run_script(target: &Target) -> Vec<Exchange> {
     exchanges
 }
 
-/// Frames until the socket has been quiet for a moment. Reading on after a close frame sends
-/// the client's half of the close handshake.
-async fn collect(ws: &mut Socket, quiet: Duration) -> Vec<String> {
+/// Frames until the socket has sent `at_least` of them and then been quiet for a moment. Reading
+/// on after a close frame sends the client's half of the close handshake.
+async fn collect(ws: &mut Socket, quiet: Duration, at_least: usize) -> Vec<String> {
     let mut frames = Vec::new();
-    while let Ok(message) = tokio::time::timeout(quiet, ws.next()).await {
+    loop {
+        let wait = if frames.len() < at_least { EXPECTED_FRAME_WAIT } else { quiet };
+        let Ok(message) = tokio::time::timeout(wait, ws.next()).await else { break };
         match message {
             Some(Ok(WsMessage::Text(text))) if text.starts_with(r#"{"type":"ping""#) => {}
             Some(Ok(WsMessage::Text(text))) => frames.push(text.to_string()),
@@ -362,7 +379,7 @@ async fn record_reference() {
         reference_port: Some(port),
         quiet: Duration::from_millis(500),
     };
-    let steps = run_script(&target).await;
+    let steps = run_script(&target, None).await;
     let recording = Recording { fixtures, steps };
     std::fs::write(repo_root().join(GOLDEN), serde_json::to_string_pretty(&recording).unwrap() + "\n").unwrap();
 }
@@ -372,7 +389,7 @@ async fn replays_reference_frames() {
     let golden: Recording = serde_json::from_str(&std::fs::read_to_string(repo_root().join(GOLDEN)).unwrap()).unwrap();
     let dir = tempfile::tempdir().unwrap();
     let target = start_rust(&golden.fixtures, dir.path()).await;
-    let actual = sorted(&run_script(&target).await);
+    let actual = sorted(&run_script(&target, Some(&golden.steps)).await);
     for (expected, actual) in sorted(&golden.steps).iter().zip(&actual) {
         assert_eq!(actual, expected, "step {:?}", expected.step);
     }

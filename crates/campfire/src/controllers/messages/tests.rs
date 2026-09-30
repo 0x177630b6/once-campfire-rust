@@ -7,9 +7,9 @@ use campfire_db::{Boost, Message};
 use crate::controllers::presenters::test_support::*;
 
 const PNG: &[u8] = &[
-    137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 4, 0, 0, 0, 3, 8, 2, 0, 0, 0, 59, 150, 57, 145, 0, 0,
-    0, 16, 73, 68, 65, 84, 120, 156, 99, 248, 207, 192, 0, 71, 12, 56, 57, 0, 245, 49, 11, 245, 53, 123, 251, 130, 0, 0, 0, 0,
-    73, 69, 78, 68, 174, 66, 96, 130,
+    137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 4, 0, 0, 0, 3, 8, 2, 0, 0, 0, 59, 150, 57, 145, 0, 0, 0, 16, 73,
+    68, 65, 84, 120, 156, 99, 248, 207, 192, 0, 71, 12, 56, 57, 0, 245, 49, 11, 245, 53, 123, 251, 130, 0, 0, 0, 0, 73, 69, 78, 68, 174,
+    66, 96, 130,
 ];
 
 const TURBO_STREAM_ACCEPT: &str = "text/vnd.turbo-stream.html, text/html, application/xhtml+xml";
@@ -71,9 +71,8 @@ async fn create_appends_the_message_as_a_turbo_stream() {
 async fn create_in_a_room_you_left_renders_room_not_found() {
     let Some(app) = TestApp::boot().await else { return };
     let mut david = app.david();
-    let reply = david
-        .write(Req::new(Method::POST, &format!("/rooms/{DIRECT_KEVIN_BENDER}/messages")).form(&[("message[body]", "hi")]))
-        .await;
+    let reply =
+        david.write(Req::new(Method::POST, &format!("/rooms/{DIRECT_KEVIN_BENDER}/messages")).form(&[("message[body]", "hi")])).await;
     assert_eq!(reply.status, StatusCode::OK);
     assert!(reply.text().contains("This room was deleted."));
     assert!(reply.text().contains("<html"), "in the application layout");
@@ -105,7 +104,9 @@ async fn uploads_attach_and_process_the_file() {
     assert_eq!(blob.filename, "red.png");
     let variants: i64 = app
         .db()
-        .read(move |conn| Ok(conn.query_row("SELECT count(*) FROM active_storage_variant_records WHERE blob_id = ?", [blob.id], |r| r.get(0))?))
+        .read(move |conn| {
+            Ok(conn.query_row("SELECT count(*) FROM active_storage_variant_records WHERE blob_id = ?", [blob.id], |r| r.get(0))?)
+        })
         .await
         .unwrap();
     assert_eq!(variants, 1, "the :thumb variant is processed");
@@ -141,7 +142,10 @@ async fn show_edit_update_and_destroy() {
 
     let destroyed = david.write(Req::new(Method::DELETE, &path).header("accept", TURBO_STREAM_ACCEPT)).await;
     assert_eq!(destroyed.status, StatusCode::OK);
-    assert_eq!(destroyed.text().trim(), format!(r#"<turbo-stream action="remove" target="message_{}"></turbo-stream>"#, message.client_message_id));
+    assert_eq!(
+        destroyed.text().trim(),
+        format!(r#"<turbo-stream action="remove" target="message_{}"></turbo-stream>"#, message.client_message_id)
+    );
     assert!(app.db().read(move |conn| Message::find_by_id(conn, message.id)).await.unwrap().is_none());
     assert_eq!(david.get(&path).await.status, StatusCode::NOT_FOUND);
 }

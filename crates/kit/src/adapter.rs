@@ -98,9 +98,9 @@ where
     F: for<'a> ActionFn<'a>,
 {
     let (mut parts, body) = req.into_parts();
-    let path_params = RawPathParams::from_request_parts(&mut parts, &kit).await.map(|raw| {
-        raw.iter().map(|(k, v)| (k.to_string(), Param::Str(v.to_string()))).collect::<ParamMap>()
-    });
+    let path_params = RawPathParams::from_request_parts(&mut parts, &kit)
+        .await
+        .map(|raw| raw.iter().map(|(k, v)| (k.to_string(), Param::Str(v.to_string()))).collect::<ParamMap>());
     let original_method = parts.extensions.get::<OriginalMethod>().map(|m| m.0.clone()).unwrap_or(parts.method.clone());
     let parsed = match parts.extensions.remove::<ParsedBody>() {
         Some(parsed) => Ok(parsed),
@@ -121,19 +121,11 @@ where
         kit.clock().clone(),
     );
 
-    let failure = match (&path_params, &query_params, &body_params) {
-        (Err(_), _, _) => Some(Error::BadRequest("Invalid path parameters".into())),
-        (_, Err(e), _) | (_, _, Err(e)) => Some(clone_error(e)),
-        _ => None,
-    };
-    let mut ctx = Ctx::new(
-        kit,
-        request,
-        path_params.unwrap_or_default(),
-        query_params.unwrap_or_default(),
-        body_params.unwrap_or_default(),
-        cookies,
-    );
+    let (path_params, path_error) = split(path_params.map_err(|_| Error::BadRequest("Invalid path parameters".into())));
+    let (query_params, query_error) = split(query_params);
+    let (body_params, body_error) = split(body_params);
+    let failure = path_error.or(query_error).or(body_error);
+    let mut ctx = Ctx::new(kit, request, path_params, query_params, body_params, cookies);
     let result = match failure {
         Some(error) => Err(error),
         None => {
@@ -147,18 +139,16 @@ where
 }
 
 fn panic_error(panic: Box<dyn std::any::Any + Send>) -> Error {
-    let message = panic
-        .downcast_ref::<String>()
-        .map(String::as_str)
-        .or_else(|| panic.downcast_ref::<&str>().copied())
-        .unwrap_or("panic");
+    let message = panic.downcast_ref::<String>().map(String::as_str).or_else(|| panic.downcast_ref::<&str>().copied()).unwrap_or("panic");
     Error::internal(anyhow::anyhow!("action panicked: {message}"))
 }
 
-fn clone_error(error: &Error) -> Error {
-    match error {
-        Error::Status(status) => Error::Status(*status),
-        other => Error::BadRequest(other.to_string()),
+/// A parsed value and no error, or the default (so the error page still gets a context) and the
+/// error.
+fn split<T: Default>(result: Result<T>) -> (T, Option<Error>) {
+    match result {
+        Ok(value) => (value, None),
+        Err(error) => (T::default(), Some(error)),
     }
 }
 
@@ -278,8 +268,9 @@ async fn method_override(
     let media = request::media_type(req.headers().get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()));
     let form_data = match media.as_deref() {
         None => true,
-        Some(media) => ["application/x-www-form-urlencoded", "multipart/form-data", "multipart/related", "multipart/mixed"]
-            .contains(&media),
+        Some(media) => {
+            ["application/x-www-form-urlencoded", "multipart/form-data", "multipart/related", "multipart/mixed"].contains(&media)
+        }
     };
     let (mut parts, body) = req.into_parts();
     // Only form data can carry `_method`, so other bodies (JSON, a raw upload) are left for the
@@ -301,10 +292,11 @@ async fn method_override(
     let from_header = || parts.headers.get("x-http-method-override").and_then(|v| v.to_str().ok()).map(str::to_string);
     if let Some(method) = from_param.or_else(from_header).map(|m| m.to_uppercase())
         && OVERRIDABLE_METHODS.contains(&method.as_str())
-            && let Ok(method) = Method::from_bytes(method.as_bytes()) {
-                parts.extensions.insert(OriginalMethod(Method::POST));
-                parts.method = method;
-            }
+        && let Ok(method) = Method::from_bytes(method.as_bytes())
+    {
+        parts.extensions.insert(OriginalMethod(Method::POST));
+        parts.method = method;
+    }
     if let Some(parsed) = parsed {
         parts.extensions.insert(parsed);
     }
@@ -330,11 +322,8 @@ fn redirect_to_https(req: &axum::extract::Request) -> axum::response::Response {
         .unwrap_or_else(|| "localhost".into());
     let host = host.rsplit_once(':').filter(|(_, p)| p.bytes().all(|b| b.is_ascii_digit())).map(|(h, _)| h.to_string()).unwrap_or(host);
     let path = req.uri().path_and_query().map(|p| p.as_str()).unwrap_or("/");
-    let status = if matches!(*req.method(), Method::GET | Method::HEAD) {
-        StatusCode::MOVED_PERMANENTLY
-    } else {
-        StatusCode::PERMANENT_REDIRECT
-    };
+    let status =
+        if matches!(*req.method(), Method::GET | Method::HEAD) { StatusCode::MOVED_PERMANENTLY } else { StatusCode::PERMANENT_REDIRECT };
     let mut response = axum::response::Response::new(AxumBody::empty());
     *response.status_mut() = status;
     response.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("text/html"));
@@ -346,8 +335,7 @@ fn redirect_to_https(req: &axum::extract::Request) -> axum::response::Response {
 
 /// `ActionDispatch::SSL#flag_cookies_as_secure!`
 fn flag_cookies_as_secure(headers: &mut axum::http::HeaderMap) {
-    let cookies: Vec<String> =
-        headers.get_all(header::SET_COOKIE).iter().filter_map(|v| v.to_str().ok()).map(str::to_string).collect();
+    let cookies: Vec<String> = headers.get_all(header::SET_COOKIE).iter().filter_map(|v| v.to_str().ok()).map(str::to_string).collect();
     if cookies.is_empty() {
         return;
     }
@@ -368,11 +356,7 @@ pub async fn not_found(State(kit): State<Kit>, req: axum::extract::Request) -> a
         accept: req.headers().get(header::ACCEPT).and_then(|v| v.to_str().ok()),
         content_type: req.headers().get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()),
         path: req.uri().path(),
-        xhr: req
-            .headers()
-            .get("x-requested-with")
-            .and_then(|v| v.to_str().ok())
-            .is_some_and(|v| v.eq_ignore_ascii_case("xmlhttprequest")),
+        xhr: req.headers().get("x-requested-with").and_then(|v| v.to_str().ok()).is_some_and(|v| v.eq_ignore_ascii_case("xmlhttprequest")),
     };
     let format = format::formats(&input).ok().and_then(|f| f.first().copied());
     let head = req.method() == Method::HEAD;
@@ -380,12 +364,8 @@ pub async fn not_found(State(kit): State<Kit>, req: axum::extract::Request) -> a
 }
 
 /// Finish an app router: Rails-style 404s for unknown paths *and* unknown methods (Axum would say
-/// 405), the Kit state, the pre-routing middleware, and the configured request timeout.
+/// 405), the Kit state and the pre-routing middleware.
 pub fn app(router: Router<Kit>, kit: Kit) -> Router {
     let routed = router.fallback(not_found).method_not_allowed_fallback(not_found).with_state(kit.clone());
-    let mut app = Router::new().fallback_service(routed).layer(axum::middleware::from_fn_with_state(kit.clone(), rails_middleware));
-    if let Some(timeout) = kit.config().request_timeout {
-        app = app.layer(tower_http::timeout::TimeoutLayer::with_status_code(StatusCode::REQUEST_TIMEOUT, timeout));
-    }
-    app
+    Router::new().fallback_service(routed).layer(axum::middleware::from_fn_with_state(kit, rails_middleware))
 }

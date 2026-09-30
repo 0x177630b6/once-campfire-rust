@@ -112,8 +112,7 @@ pub async fn update(c: &mut Ctx) -> Result {
         .db
         .write(move |tx| {
             let granted = existing_user_ids(tx.conn(), &grantee_ids)?;
-            let revoked: Vec<i64> =
-                revised.user_ids(tx.conn())?.into_iter().filter(|id| !grantee_ids.contains(id)).collect();
+            let revoked: Vec<i64> = revised.user_ids(tx.conn())?.into_iter().filter(|id| !grantee_ids.contains(id)).collect();
             revised.revise(tx, &granted, &revoked)
         })
         .await

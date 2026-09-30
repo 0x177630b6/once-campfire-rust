@@ -36,27 +36,16 @@ impl Errors {
     }
 
     pub fn on(&self, attribute: &str) -> Vec<&str> {
-        self.0
-            .iter()
-            .filter(|(a, _)| *a == attribute)
-            .map(|(_, m)| m.as_str())
-            .collect()
+        self.0.iter().filter(|(a, _)| *a == attribute).map(|(_, m)| m.as_str()).collect()
     }
 
     /// `errors.full_messages`: "Endpoint must use HTTPS"
     pub fn full_messages(&self) -> Vec<String> {
-        self.0
-            .iter()
-            .map(|(attribute, message)| format!("{} {message}", humanize(attribute)))
-            .collect()
+        self.0.iter().map(|(attribute, message)| format!("{} {message}", humanize(attribute))).collect()
     }
 
     pub fn into_result(self) -> Result<()> {
-        if self.is_empty() {
-            Ok(())
-        } else {
-            Err(Error::RecordInvalid(self))
-        }
+        if self.is_empty() { Ok(()) } else { Err(Error::RecordInvalid(self)) }
     }
 }
 

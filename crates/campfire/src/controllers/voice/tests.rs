@@ -73,10 +73,7 @@ async fn the_page_wires_the_voice_controller() {
     let mut david = app.david();
 
     let room = david.get(&format!("/rooms/{ALL_TALK}")).await;
-    assert!(
-        room.text().contains(&format!(r#"href="/rooms/{ALL_TALK}/voice" data-turbo-frame="_top""#)),
-        "the composer's live button"
-    );
+    assert!(room.text().contains(&format!(r#"href="/rooms/{ALL_TALK}/voice" data-turbo-frame="_top""#)), "the composer's live button");
 
     let page = david.get(&voice_path(ALL_TALK)).await;
     assert_eq!(page.status, StatusCode::OK, "{}", page.text());
@@ -199,7 +196,9 @@ async fn ask_is_404_without_hermes_ask_url() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn ask_forwards_the_question_to_the_bridge_and_returns_the_answer() {
-    let reply = Route::new("POST", "*", "/ask/s3cret", 200).header("Content-Type", "application/json").body(r#"{"answer":"Appelez Marc au poste 12."}"#);
+    let reply = Route::new("POST", "*", "/ask/s3cret", 200)
+        .header("Content-Type", "application/json")
+        .body(r#"{"answer":"Appelez Marc au poste 12."}"#);
     let bridge = FakeServer::start(vec![reply]).await;
     let url = format!("http://{}/ask/s3cret", bridge.addr);
     let Some(app) = TestApp::boot_with(&[("GEMINI_API_KEY", "test-key"), ("HERMES_ASK_URL", url.as_str())]).await else { return };
@@ -221,7 +220,10 @@ async fn ask_forwards_the_question_to_the_bridge_and_returns_the_answer() {
     assert_eq!(received.len(), 1);
     assert_eq!(received[0].target, "/ask/s3cret");
     let forwarded: Value = serde_json::from_slice(&received[0].body).unwrap();
-    assert_eq!(forwarded, json!({ "room_id": ALL_TALK, "user_name": "David", "room_name": "All Talk", "question": "Qui appeler pour une fuite ?" }));
+    assert_eq!(
+        forwarded,
+        json!({ "room_id": ALL_TALK, "user_name": "David", "room_name": "All Talk", "question": "Qui appeler pour une fuite ?" })
+    );
 
     // Capped at MAX_QUESTION_CHARS characters.
     let long = "é".repeat(MAX_QUESTION_CHARS * 2);
@@ -411,7 +413,9 @@ fn the_report_is_escaped_markup_with_the_mention_first() {
 #[test]
 fn routes_come_after_the_rails_table() {
     use crate::controllers::recognize;
-    let found = |method: Method, path: &str| recognize(&method, path).unwrap().map(|(route, params)| (route.endpoint, params.str("room_id").map(str::to_string)));
+    let found = |method: Method, path: &str| {
+        recognize(&method, path).unwrap().map(|(route, params)| (route.endpoint, params.str("room_id").map(str::to_string)))
+    };
     assert_eq!(found(Method::GET, "/rooms/7/voice"), Some(("hermes/voice#show", Some("7".into()))));
     assert_eq!(found(Method::POST, "/rooms/7/voice/token"), Some(("hermes/voice#token", Some("7".into()))));
     assert_eq!(found(Method::POST, "/rooms/7/voice/report"), Some(("hermes/voice#report", Some("7".into()))));

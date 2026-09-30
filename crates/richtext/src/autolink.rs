@@ -8,7 +8,6 @@
 //! closed the attribute and turned the rest of its value into markup. With them escaped, every `<`
 //! and `>` in the text is a tag's, so auto_link only ever inserts links between tags.
 
-
 use regex::Regex;
 use std::sync::LazyLock;
 
@@ -25,9 +24,8 @@ static AUTO_LINK_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 /// `AUTO_EMAIL_RE` without its lookbehind, which is checked separately.
-static AUTO_EMAIL_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\A[a-zA-Z0-9_.!#$%+-]\.?[a-zA-Z0-9_.!#$%&'*/=?^`{|}~+-]*@[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)+").unwrap()
-});
+static AUTO_EMAIL_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\A[a-zA-Z0-9_.!#$%+-]\.?[a-zA-Z0-9_.!#$%&'*/=?^`{|}~+-]*@[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)+").unwrap());
 
 fn is_email_local_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || "_.!#$%&'*/=?^`{|}~+-".contains(c)
@@ -57,8 +55,13 @@ struct TagIndex {
 impl TagIndex {
     fn new(text: &str) -> Self {
         let bytes = text.as_bytes();
-        let mut index =
-            TagIndex { lts: Vec::new(), gts: Vec::new(), first_dangling_newline: None, open_anchors: Vec::new(), close_anchors: Vec::new() };
+        let mut index = TagIndex {
+            lts: Vec::new(),
+            gts: Vec::new(),
+            first_dangling_newline: None,
+            open_anchors: Vec::new(),
+            close_anchors: Vec::new(),
+        };
         // The first `<` since the last `>`
         let mut unclosed_lt: Option<usize> = None;
         for (i, &b) in bytes.iter().enumerate() {
@@ -195,10 +198,11 @@ fn auto_link_urls(text: &str) -> Result<String, ParseError> {
             punctuation.push(c);
             brackets.remove(c);
             if let Some(opening) = opening_bracket(c)
-                && brackets.count(opening) > brackets.count(c) {
-                    href.push(punctuation.pop().unwrap());
-                    break;
-                }
+                && brackets.count(opening) > brackets.count(c)
+            {
+                href.push(punctuation.pop().unwrap());
+                break;
+            }
         }
         let mut trailing_gt = "";
         if let Some(stripped) = href.strip_suffix("&gt;") {

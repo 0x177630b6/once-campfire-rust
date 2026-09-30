@@ -7,6 +7,15 @@ edition = "2024"
 license = "MIT"
 publish = false
 
+# Unsafe code only in the items that allow it with a reason (the libvips FFI, and the libc calls std
+# has no wrapper for), with a SAFETY comment on every unsafe block. The vendored html5ever doesn't
+# opt in.
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+undocumented_unsafe_blocks = "warn"
+
 [workspace.dependencies]
 rails_compat      = { path = "crates/rails_compat" }
 campfire_kit      = { path = "crates/kit" }
@@ -19,14 +28,19 @@ campfire_assets   = { path = "crates/assets" }
 campfire_views    = { path = "crates/views" }
 
 tokio        = { version = "1", features = ["full"] }
-axum         = { version = "0.8", features = ["ws", "multipart"] }
+# Router plus ConnectInfo (`tokio`) only: kit parses params and multipart itself, the front server
+# serves over hyper, and the cable does its own WebSocket upgrade and framing. Tests add `http1`
+# (for axum::serve) and `ws` in their dev-dependencies.
+axum         = { version = "0.8", default-features = false, features = ["tokio"] }
 tower        = "0.5"
-tower-http   = { version = "0.6", features = ["limit", "timeout", "fs"] }
 hyper        = "1"
 serde        = { version = "1", features = ["derive"] }
 serde_json   = { version = "1", features = ["preserve_order"] }
 serde_yaml   = "0.9"
-rusqlite     = { version = "0.37", features = ["bundled", "functions", "hooks", "serde_json"] }
+# Bundled SQLite 3.53, past 3.51.3's fix for the WAL-reset corruption bug, which the checkpointer
+# thread next to the writer (crates/db/src/database.rs) could hit. `cache` is the statement cache;
+# the other default feature only adds wasm crates to Cargo.lock.
+rusqlite     = { version = "0.40", default-features = false, features = ["bundled", "cache", "hooks"] }
 askama       = "0.14"
 jiff         = { version = "0.2", features = ["serde"] }
 thiserror    = "2"
@@ -42,7 +56,10 @@ pbkdf2       = "0.12"
 aes-gcm      = "0.10"
 rand         = "0.9"
 hex          = "0.4"
-html5ever    = "0.35"
+# The vendored 0.35 (crates/richtext/vendor/html5ever): a parsing fix backported, which the
+# differential corpus caught diverging from Gumbo, and hooks for enforcing Gumbo's limits while
+# parsing. The views parity tests use its tokenizer too.
+html5ever    = { path = "crates/richtext/vendor/html5ever" }
 bcrypt       = "0.17"
 uuid         = { version = "1", features = ["v4"] }
 percent-encoding = "2"

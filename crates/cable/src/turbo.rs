@@ -49,10 +49,7 @@ impl StreamsChannel {
 
 /// `params[:signed_stream_name]` verified with `verifier`. A missing or `null` name is simply
 /// unverified; any other non-string makes `MessageVerifier#verified` raise.
-pub fn verified_stream_name_from_params(
-    params: &Params,
-    verifier: impl Fn(&str) -> Option<String>,
-) -> ChannelResult<Option<String>> {
+pub fn verified_stream_name_from_params(params: &Params, verifier: impl Fn(&str) -> Option<String>) -> ChannelResult<Option<String>> {
     match params.get("signed_stream_name") {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(signed)) => Ok(verifier(signed)),

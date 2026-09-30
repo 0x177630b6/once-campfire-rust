@@ -19,6 +19,7 @@ pub mod marshal;
 pub mod paths;
 pub mod process;
 pub mod storage;
+#[rustfmt::skip]
 mod tables;
 pub mod variation;
 pub mod verifier;

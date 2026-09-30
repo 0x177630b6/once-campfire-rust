@@ -16,7 +16,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use super::html::{Html, Safe, escape};
-use super::tag::{Attrs, Value, attrs, content_tag, legacy_tag};
+use super::tag::{Attrs, Value, attrs, content_tag, legacy_tag, value_to_string};
 
 /// The hidden `_method` field (`method_tag`).
 pub fn method_tag(method: &str) -> Html {
@@ -91,10 +91,7 @@ impl FormWith {
 
     /// `form_with ... do |form|`'s builder methods, scoped to `object_name[...]`.
     fn builder(&self) -> FormBuilder {
-        FormBuilder {
-            object_name: self.object_name.clone().unwrap_or_default(),
-            multipart: self.multipart.clone(),
-        }
+        FormBuilder { object_name: self.object_name.clone().unwrap_or_default(), multipart: self.multipart.clone() }
     }
 
     /// `<form ...>` plus the `_method` hidden field (`html_options_for_form_with` +
@@ -223,7 +220,7 @@ impl FormBuilder {
     fn text_area(&self, method: &str, value: Option<&str>, mut options: Attrs) -> Html {
         self.add_default_name_and_id(method, &mut options);
         let content = match options.remove("value") {
-            Some(value) => escape(&value_string(&value)),
+            Some(value) => escape(&value_to_string(&value)),
             None => value.map(escape).unwrap_or_default(),
         };
         content_tag("textarea", &options, &content)
@@ -249,20 +246,11 @@ impl FormBuilder {
     }
 }
 
-fn value_string(value: &Value) -> String {
-    match value {
-        Value::Text(text) | Value::Safe(text) => text.clone(),
-        Value::Bool(flag) => flag.to_string(),
-    }
-}
-
 /// `object_name.gsub(/\]\[|[^-a-zA-Z0-9:.]/, "_").delete_suffix("_")`.
 fn sanitize_object_name(name: &str) -> String {
     let replaced = name.replace("][", "_");
-    let sanitized: String = replaced
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '-' | ':' | '.') { c } else { '_' })
-        .collect();
+    let sanitized: String =
+        replaced.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '-' | ':' | '.') { c } else { '_' }).collect();
     sanitized.strip_suffix('_').map(str::to_string).unwrap_or(sanitized)
 }
 
@@ -281,17 +269,14 @@ pub fn hidden_field_tag(name: &str, value: Option<&str>, options: Attrs) -> Html
 
 /// `sanitize_to_id`: `]` removed, other non-id characters become "_".
 fn sanitize_to_id(name: &str) -> String {
-    name.replace(']', "")
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | ':' | '.') { c } else { '_' })
-        .collect()
+    name.replace(']', "").chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | ':' | '.') { c } else { '_' }).collect()
 }
 
 /// `button_to(url, options) { content }`. `options` may carry `method` ("delete", "put",
 /// "patch", "post" or "get"), `form_class`, and the button's own attributes.
 pub fn button_to(url: &str, mut options: Attrs, content: &str) -> Html {
-    let method = options.remove("method").map(|value| value_string(&value)).unwrap_or_else(|| "post".into());
-    let form_class = options.remove("form_class").map(|value| value_string(&value)).unwrap_or_else(|| "button_to".into());
+    let method = options.remove("method").map(|value| value_to_string(&value)).unwrap_or_else(|| "post".into());
+    let form_class = options.remove("form_class").map(|value| value_to_string(&value)).unwrap_or_else(|| "button_to".into());
 
     let method_field = if matches!(method.as_str(), "delete" | "patch" | "put") { method_tag(&method).0 } else { String::new() };
     let form_method = if method == "get" { "get" } else { "post" };
