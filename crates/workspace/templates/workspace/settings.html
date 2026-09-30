@@ -77,7 +77,7 @@
           <tr><th scope="row">Delete or reassign a card</th><td></td><td></td><td>Never (fixed)</td></tr>
         </tbody>
       </table>
-      <p class="ws-muted" data-ws-autonomy-scope><strong>Hermes keeps its own Fizzy account.</strong> This dial applies to what Hermes proposes through Campfire, which is what its incident-report skill does by default. With its own account it can still change cards directly (its skill only does that when Campfire can’t be reached): those changes show in the Hermes tab as “direct”, and only the simple ones can be undone.</p>
+      <p class="ws-muted" data-ws-autonomy-scope><strong>Hermes keeps its own Fizzy account.</strong> This dial applies to what Hermes proposes through Campfire, which is what its incident-report skill does by default. With its own account it can still change cards directly (its skill only does that when Campfire can’t be reached), and its replies to @Hermes mentions in Fizzy comments are posted with that account by its bridge: neither goes through this dial (not even “Comment”). Those show in the Hermes tab as “direct”, and only the simple ones can be undone.</p>
       <label class="ws-field"><span class="ws-field__label">Hermes’s Fizzy user id</span><input class="input" type="text" name="hermes_fizzy_user_id" value="{{ hermes_user_id }}" maxlength="64" pattern="[A-Za-z0-9_\-]*" placeholder="{% if let Some(learned) = hermes_user_learned %}{{ learned }} (from HERMES_FIZZY_TOKEN){% else %}learned from HERMES_FIZZY_TOKEN{% endif %}"></label>
       <p class="ws-muted">For the Hermes tab to show what Hermes does directly in Fizzy. Leave it empty when Campfire holds Hermes’s token.</p>
     </section>

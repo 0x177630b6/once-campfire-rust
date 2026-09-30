@@ -624,6 +624,18 @@ pub async fn decide(c: &mut Ctx) -> Result {
     let Some(decision) = c.request_params.get("decision").and_then(Param::as_str).and_then(Decision::parse) else {
         return json_error(c, StatusCode::UNPROCESSABLE_ENTITY, "invalid_decision", "Decision must be confirm or dismiss.");
     };
+    // Only those who may see it (its room's members, the duty managers) may decide it.
+    if let Some(proposal) = workspace.proposals().get(&id) {
+        let (user_id, room_id) = (user.id, proposal.context.room_id);
+        let member = match room_id {
+            Some(room_id) => c.app().db.read(move |conn| Room::find_for_user(conn, user_id, room_id)).await.map_err(db_error)?.is_some(),
+            None => false,
+        };
+        let rooms: Vec<i64> = room_id.filter(|_| member).into_iter().collect();
+        if !workspace.sees_proposal(&viewer(&user), room_id, &rooms) {
+            return action_error(c, &ActionError::NotFound);
+        }
+    }
     let proposal = match workspace.decide(&FizzyHttp::new(), &viewer(&user), &id, decision).await {
         Ok(proposal) => proposal,
         Err(error) => return action_error(c, &error),
@@ -690,6 +702,9 @@ pub async fn bot_propose(c: &mut Ctx) -> Result {
     if !bot_user.is_bot() {
         return halt(concerns::head(StatusCode::FORBIDDEN));
     }
+    if let Some(refused) = refuse_other_bots(c, &workspace, &bot_user) {
+        return refused;
+    }
     let body = c.request_params.to_json();
     let raw = body.get("context").cloned().unwrap_or(Value::Null);
     let (app, reader) = (c.app().clone(), bot_user.clone());
@@ -707,11 +722,8 @@ pub async fn bot_propose(c: &mut Ctx) -> Result {
         }
         Ok(Proposed::Pending { mut proposal, duplicate }) => {
             if !duplicate && let Some(room_id) = proposal.context.room_id {
-                match post_draft(c, room_id, &proposal).await {
-                    Ok(message_id) => {
-                        workspace.set_draft_message(&proposal.id, message_id);
-                        proposal.draft_message_id = Some(message_id);
-                    }
+                match post_draft(c, &workspace, room_id, &proposal).await {
+                    Ok(message_id) => proposal.draft_message_id = Some(message_id),
                     Err(error) => tracing::warn!(%error, room_id, proposal = %proposal.id, "couldn't post a proposal's draft"),
                 }
             }
@@ -740,6 +752,27 @@ pub async fn bot_propose(c: &mut Ctx) -> Result {
     }
 }
 
+/// Refuses (403, logged) a bot that isn't Hermes's: proposals come from Hermes's bot only
+/// (`HERMES_BOT`, else `GEMINI_LIVE_VOICE_BOT`, else the only active bot; see
+/// `Workspace::hermes_bot_id`), so another bot on the instance can't propose nor read proposals.
+fn refuse_other_bots(c: &mut Ctx, workspace: &Workspace, bot: &User) -> Option<Result> {
+    let fallback = c.app().config.gemini_live.as_ref().and_then(|live| live.voice_bot.clone());
+    let hermes = workspace.hermes_bot_id(fallback.as_deref());
+    if hermes == Some(bot.id) {
+        return None;
+    }
+    tracing::warn!(
+        bot_id = bot.id,
+        hermes_bot = ?hermes,
+        "refused a proposal route call from a bot that isn't Hermes's (set HERMES_BOT to Hermes's bot id or name)"
+    );
+    Some(c.json(
+        StatusCode::FORBIDDEN,
+        &json!({ "status": "refused", "error": "not_hermes_bot",
+                 "message": "Campfire takes proposals from Hermes's bot only (HERMES_BOT is unset or names another bot)." }),
+    ))
+}
+
 /// `GET /hermes/:bot_key/workspace/proposals/:id` (bots only): a proposal's status, for Hermes.
 pub async fn bot_proposal(c: &mut Ctx) -> Result {
     let workspace = feature(c)?;
@@ -747,6 +780,9 @@ pub async fn bot_proposal(c: &mut Ctx) -> Result {
     let bot_user = require_current_user(c)?.clone();
     if !bot_user.is_bot() {
         return halt(concerns::head(StatusCode::FORBIDDEN));
+    }
+    if let Some(refused) = refuse_other_bots(c, &workspace, &bot_user) {
+        return refused;
     }
     let id = c.params.get("id").and_then(Param::as_str).unwrap_or("").to_string();
     let own = workspace.proposals().get(&id).is_some_and(|proposal| proposal.bot_id == bot_user.id);
@@ -757,11 +793,13 @@ pub async fn bot_proposal(c: &mut Ctx) -> Result {
 }
 
 /// The draft of a pending proposal, posted in its room as the bot (the current user of the bot
-/// route), without the bot webhooks.
-async fn post_draft(c: &mut Ctx, room_id: i64, proposal: &proposals::Proposal) -> Result<i64> {
+/// route), without the bot webhooks. The proposal knows its message before it's broadcast: only
+/// that message gets the buttons.
+async fn post_draft(c: &mut Ctx, workspace: &Workspace, room_id: i64, proposal: &proposals::Proposal) -> Result<i64> {
     let room = c.app().db.read(move |conn| Room::find(conn, room_id)).await.map_err(db_error)?;
     let body = proposals::draft_html(proposal, None);
     let message = messages::create_message(c, &room, MessageParams { body: Some(body), ..MessageParams::default() }).await?;
+    workspace.set_draft_message(&proposal.id, message.id);
     messages::broadcast_create(c, &room, &message).await?;
     Ok(message.id)
 }
@@ -787,10 +825,14 @@ fn checked_context(
         context.room_name = Some(Presenter::new(conn, app, None).room_view(&room, bot)?.display_name);
         context.room_id = Some(room.id);
     }
+    // The person: active, not a bot, and a member of that room (no room, no person: the
+    // proposal is then for nobody in particular).
     if let Some(user_id) = number("user_id")
+        && let Some(room_id) = context.room_id
         && let Ok(user) = User::find(conn, user_id)
         && user.is_active()
         && !user.is_bot()
+        && Room::find_for_user(conn, user.id, room_id)?.is_some()
     {
         context.user_id = Some(user.id);
         context.user_name = Some(user.name.clone());
@@ -802,8 +844,8 @@ fn checked_context(
         && context.user_id.is_none_or(|user_id| user_id == message.creator_id)
     {
         let creator = message.creator(conn)?;
-        // The message says who it's for, when it's a person's.
-        if !creator.is_bot() && creator.is_active() {
+        // The message says who it's for, when it's a person's who is still in the room.
+        if !creator.is_bot() && creator.is_active() && Room::find_for_user(conn, creator.id, room_id)?.is_some() {
             context.user_id = Some(creator.id);
             context.user_name = Some(creator.name.clone());
         }
@@ -958,6 +1000,21 @@ impl ChatSource for RoomMessages {
         Box::pin(async move {
             let reader = app.clone();
             reader.db.read(move |conn| recent_messages(conn, &app, &user, since)).await.map_err(|error| error.to_string())
+        })
+    }
+
+    fn room_ids(&self) -> BoxFuture<'_, std::result::Result<Vec<i64>, String>> {
+        let (app, user_id) = (self.app.clone(), self.user.id);
+        Box::pin(async move {
+            app.db
+                .read(move |conn| {
+                    let mut statement =
+                        conn.prepare_cached(r#"SELECT "memberships"."room_id" FROM "memberships" WHERE "memberships"."user_id" = ?"#)?;
+                    let rows = statement.query_map(rusqlite::params![user_id], |row| row.get(0))?;
+                    Ok(rows.collect::<rusqlite::Result<Vec<i64>>>()?)
+                })
+                .await
+                .map_err(|error| error.to_string())
         })
     }
 }
@@ -1123,6 +1180,16 @@ mod tests {
         assert!(!down.text().contains("t0k3n"));
         let status = on.anonymous().get(&format!("/hermes/{BENDER_KEY}/workspace/proposals/abc")).await;
         assert_eq!(status.status, StatusCode::NOT_FOUND);
+
+        // Only Hermes's bot may propose: HERMES_BOT names another one.
+        let Some(other) = TestApp::boot_with(&[ON[0], ON[1], ("HERMES_BOT", "Someone else")]).await else { return };
+        let refused = other
+            .anonymous()
+            .write(json_post(&format!("/hermes/{BENDER_KEY}/workspace/proposals"), &json!({"action": "close", "card": 1})))
+            .await;
+        assert_eq!((refused.status, refused.json()["error"].clone()), (StatusCode::FORBIDDEN, json!("not_hermes_bot")));
+        let status = other.anonymous().get(&format!("/hermes/{BENDER_KEY}/workspace/proposals/abc")).await;
+        assert_eq!(status.status, StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]

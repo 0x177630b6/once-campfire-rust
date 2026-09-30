@@ -4,7 +4,9 @@
 //!   (pending proposals, with Confirm / Dismiss), then its log ([`crate::hermes_log`]): its direct
 //!   Fizzy actions, marked "direct", what Campfire ran for it, marked "via Campfire", and, from the
 //!   viewer's own rooms, its drafts, questions and errors. Everyone signed in reads it (decision D4:
-//!   it's incident-board activity, which they all see anyway); filters by kind.
+//!   it's incident-board activity, which they all see anyway), except a proposal's details (pending,
+//!   or never filed), which only its room's members and the duty managers see
+//!   ([`Workspace::sees_proposal`]); filters by kind.
 //! - **Proposals** ([`Workspace::propose`], [`Workspace::decide`]): see [`crate::proposals`].
 //! - **Undo** ([`Workspace::undo`]): an action of the last 24 hours with a recorded way back
 //!   ([`Reverse`]), if nobody changed the card since; duty managers and the person it was for
@@ -45,6 +47,8 @@ const MARGIN: SignedDuration = SignedDuration::from_secs(2);
 /// Hermes's own follow-ups on a card it just created (tags, steps, a comment) don't count as
 /// "touched since".
 const CREATION_GRACE: SignedDuration = SignedDuration::from_mins(5);
+/// Pages of the incident board's feed undo reads, at most, to reach the action it takes back.
+const UNDO_FEED_PAGES: u32 = 10;
 /// Bot messages the Hermes tab shows from the viewer's rooms.
 const MESSAGES_WINDOW: SignedDuration = SignedDuration::from_hours(24);
 
@@ -78,6 +82,23 @@ impl Workspace {
     /// Hermes's Fizzy user: the settings', else `HERMES_FIZZY_TOKEN`'s.
     pub fn hermes_fizzy_user(&self) -> Option<String> {
         self.settings().hermes_fizzy_user_id.clone().or_else(|| self.fizzy_users.read().unwrap_or_else(|e| e.into_inner()).hermes.clone())
+    }
+
+    /// Hermes's Campfire bot, the only one whose proposals are taken: `HERMES_BOT` (an id or an
+    /// exact name), else `fallback` (the app passes `GEMINI_LIVE_VOICE_BOT`, the bot live voice
+    /// reports go to), else the only active bot. `None`: none matches, or several bots and nothing
+    /// says which (then proposals are refused).
+    pub fn hermes_bot_id(&self, fallback: Option<&str>) -> Option<i64> {
+        let bots = self.bots();
+        match self.config.hermes_bot.as_deref().or(fallback).map(str::trim).filter(|wanted| !wanted.is_empty()) {
+            Some(wanted) => match wanted.parse::<i64>() {
+                Ok(id) => bots.iter().find(|bot| bot.id == id),
+                Err(_) => bots.iter().find(|bot| bot.name == wanted),
+            }
+            .map(|bot| bot.id),
+            None if bots.len() == 1 => Some(bots[0].id),
+            None => None,
+        }
     }
 
     pub fn fizzy_users(&self) -> FizzyUsers {
@@ -250,25 +271,33 @@ impl Workspace {
             self.hermes_log.add(entry);
             return Ok(Proposed::Refused { message });
         }
-        // One card per confirmed live report: a second one asks first.
-        let report_used = self.proposals.all().iter().any(|p| {
-            p.action == "create"
-                && p.context.message_id.is_some()
-                && p.context.message_id == proposal.context.message_id
-                && p.status == Status::Done
+        // Run at once (Alone, or a confirmed live report), else wait. Decided and stored under the
+        // store's lock, so two proposals from one live report can't both run: one card per report
+        // (one running counts), a second one asks first.
+        let live_create = proposal.context.live_report && kind == ActionKind::Create;
+        let runs = self.proposals.update(now, |items| {
+            let report_used = live_create
+                && items.iter().any(|p| {
+                    p.action == "create"
+                        && p.context.message_id.is_some()
+                        && p.context.message_id == proposal.context.message_id
+                        && matches!(p.status, Status::Done | Status::Running)
+                });
+            let runs = dial == Dial::Alone || (live_create && !report_used);
+            let mut stored = proposal.clone();
+            if runs {
+                stored.status = Status::Running;
+            }
+            items.push(stored);
+            runs
         });
-        let confirmed_report = proposal.context.live_report && kind == ActionKind::Create && !report_used;
-        if dial == Dial::Alone || confirmed_report {
+        if runs {
             proposal.status = Status::Running;
-            let running = proposal.clone();
-            self.proposals.update(now, |items| items.push(running));
             return match self.run_proposal(http, &proposal, request, None).await {
                 Ok(done) => Ok(Proposed::Done { proposal: done }),
                 Err(error) => Err(error),
             };
         }
-        let pending = proposal.clone();
-        self.proposals.update(now, |items| items.push(pending));
         self.hermes_log.add(proposal_entry(&proposal, "proposed", now, Kind::Proposed, format!("Proposed: {}", proposal.summary)));
         Ok(Proposed::Pending { proposal, duplicate: false })
     }
@@ -639,33 +668,44 @@ impl Workspace {
             return Ok(Some("Someone changed the card from Campfire since; change it from the card instead.".into()));
         }
         let own: Vec<_> = self.journal.recent().into_iter().filter(|write| belongs(write.reference.as_deref())).collect();
+        // The board's feed, newest first, page after page until it reaches the action (or ends).
         let path = Client::activities_path(&writer.account, &writer.board.id, None);
-        let (activities, _): (Vec<Activity>, bool) = writer
-            .client
-            .get_page(&path, 1)
-            .await
-            .map_err(|_| ActionError::Fizzy("Fizzy can't be reached to check the card's history; nothing was undone.".into()))?;
         let hermes = self.hermes_fizzy_user();
         let grace = if matches!(reverse, Reverse::CloseCreated) { entry.at + CREATION_GRACE } else { since };
-        for activity in &activities {
-            let Some(at) = activity.created_at else { continue };
-            if hermes_log::activity_card(activity) != Some(card.number)
-                || at <= since
-                || entry.activity.as_deref() == Some(activity.id.as_str())
-            {
-                continue;
+        for page in 1..=UNDO_FEED_PAGES {
+            let (activities, next): (Vec<Activity>, bool) = writer
+                .client
+                .get_page(&path, page)
+                .await
+                .map_err(|_| ActionError::Fizzy("Fizzy can't be reached to check the card's history; nothing was undone.".into()))?;
+            let mut reached = false;
+            for activity in &activities {
+                let Some(at) = activity.created_at else { continue };
+                if at <= since {
+                    reached = true;
+                    continue;
+                }
+                if hermes_log::activity_card(activity) != Some(card.number) || entry.activity.as_deref() == Some(activity.id.as_str()) {
+                    continue;
+                }
+                let creator = activity.creator.clone().unwrap_or_default();
+                if hermes.as_deref() == Some(creator.id.as_str()) && at <= grace {
+                    continue;
+                }
+                if hermes_log::made_by_campfire(activity, &own, true) {
+                    continue;
+                }
+                let who = if creator.name.trim().is_empty() { "Someone".to_string() } else { creator.name };
+                return Ok(Some(format!("{who} changed the card in Fizzy since; change it from the card instead.")));
             }
-            let creator = activity.creator.clone().unwrap_or_default();
-            if hermes.as_deref() == Some(creator.id.as_str()) && at <= grace {
-                continue;
+            if reached || !next {
+                return Ok(None);
             }
-            if hermes_log::made_by_campfire(activity, &own, true) {
-                continue;
-            }
-            let who = if creator.name.trim().is_empty() { "Someone".to_string() } else { creator.name };
-            return Ok(Some(format!("{who} changed the card in Fizzy since; change it from the card instead.")));
         }
-        Ok(None)
+        Err(ActionError::invalid(
+            "cannot_undo",
+            "There's been too much activity on the incident board since to check that nobody changed the card; change it from the card instead.",
+        ))
     }
 
     /// The pending proposals, newest first.
@@ -697,10 +737,18 @@ impl Workspace {
     pub async fn hermes_page(&self, viewer: &Viewer, filter: &str, source: &dyn ChatSource) -> Result<HermesPage, String> {
         let now = self.now();
         let messages = source.recent_messages(now - MESSAGES_WINDOW).await?;
-        Ok(self.hermes_view(viewer, filter, &messages, now))
+        let rooms = source.room_ids().await?;
+        Ok(self.hermes_view(viewer, filter, &messages, &rooms, now))
     }
 
-    fn hermes_view(&self, viewer: &Viewer, filter: &str, messages: &[ChatMessage], now: Timestamp) -> HermesPage {
+    /// Whether `viewer` may see a proposal's details (its text, the person, the room): the members
+    /// of its room (`rooms`: the viewer's) and the duty managers. Without a room (no context from
+    /// the bridge, a Fizzy comment): the duty managers only.
+    pub fn sees_proposal(&self, viewer: &Viewer, room_id: Option<i64>, rooms: &[i64]) -> bool {
+        self.settings().is_duty_manager(viewer) || room_id.is_some_and(|room| rooms.contains(&room))
+    }
+
+    fn hermes_view(&self, viewer: &Viewer, filter: &str, messages: &[ChatMessage], rooms: &[i64], now: Timestamp) -> HermesPage {
         let filter = FILTERS.iter().find(|(key, _)| *key == filter).map(|(key, _)| *key).unwrap_or("all");
         let snapshot = self.snapshot();
         let settings = self.settings();
@@ -711,6 +759,13 @@ impl Workspace {
         let mut items: Vec<LogItem> = Vec::new();
         for entry in &entries {
             if !(filter == "all" || entry.kind.filter() == filter) {
+                continue;
+            }
+            // What never became a card (proposed, refused, failed, dismissed…) carries the
+            // proposal's text: its room's members and the duty managers only.
+            let unfiled =
+                matches!(entry.kind, Kind::Proposed | Kind::Refused | Kind::Failed | Kind::Dismissed | Kind::Expired | Kind::Superseded);
+            if unfiled && entry.proposal.is_some() && !self.sees_proposal(viewer, entry.room_id, rooms) {
                 continue;
             }
             let undone = undos.get(entry.id.as_str()).copied();
@@ -726,6 +781,7 @@ impl Workspace {
             items.push(LogItem {
                 id: entry.id.clone(),
                 at: entry.at.to_string(),
+                sort_at: entry.at,
                 via: match entry.via {
                     Via::Direct => "direct",
                     Via::Campfire => "via Campfire",
@@ -761,6 +817,7 @@ impl Workspace {
             items.push(LogItem {
                 id: format!("m-{}", message.id),
                 at: message.created_at.to_string(),
+                sort_at: message.created_at,
                 via: "in Campfire",
                 tone: "chat",
                 failed: kind == "failures",
@@ -775,7 +832,8 @@ impl Workspace {
                 undone_by: None,
             });
         }
-        items.sort_by(|a, b| b.at.cmp(&a.at).then_with(|| b.id.cmp(&a.id)));
+        // By time, not by the text of it (whose fractional seconds vary in length).
+        items.sort_by(|a, b| b.sort_at.cmp(&a.sort_at).then_with(|| b.id.cmp(&a.id)));
         items.truncate(hermes_log::MAX_SHOWN);
         let hermes_known = self.hermes_fizzy_user().is_some();
         HermesPage {
@@ -788,7 +846,7 @@ impl Workspace {
                 })
                 .collect(),
             filtered: filter != "all",
-            pending: self.pending_items(viewer),
+            pending: self.pending_items(viewer, rooms),
             items,
             direct_unknown: !hermes_known,
             shared_token: self.shares_hermes_token(),
@@ -803,13 +861,15 @@ impl Workspace {
     }
 
     /// Pending proposals as the Hermes tab and Home list them, with buttons for those `viewer` may
-    /// decide.
-    pub fn pending_items(&self, viewer: &Viewer) -> Vec<PendingItem> {
+    /// decide: those of the viewer's `rooms`, and all of them for duty managers
+    /// ([`Workspace::sees_proposal`]); the others aren't listed.
+    pub fn pending_items(&self, viewer: &Viewer, rooms: &[i64]) -> Vec<PendingItem> {
         let settings = self.settings();
         let can_decide = |proposal: &Proposal| settings.permits(&Act::ConfirmDraft { reporter_id: proposal.context.user_id }, viewer);
         let bots = self.bots();
         self.pending_proposals()
             .into_iter()
+            .filter(|proposal| self.sees_proposal(viewer, proposal.context.room_id, rooms))
             .map(|proposal| {
                 let message_url = match (proposal.context.room_id, proposal.draft_message_id) {
                     (Some(room), Some(message)) => Some(format!("/rooms/{room}/@{message}")),
@@ -917,6 +977,7 @@ fn proposal_entry(proposal: &Proposal, event: &str, at: Timestamp, kind: Kind, t
     entry.for_name = proposal.context.user_name.clone();
     entry.source = proposal.context.source_label();
     entry.proposal = Some(proposal.id.clone());
+    entry.room_id = proposal.context.room_id;
     entry
 }
 
@@ -966,6 +1027,8 @@ pub struct PendingItem {
 pub struct LogItem {
     pub id: String,
     pub at: String,
+    /// `at`, to sort by.
+    pub sort_at: Timestamp,
     /// "direct", "via Campfire", "in Campfire".
     pub via: &'static str,
     pub tone: &'static str,

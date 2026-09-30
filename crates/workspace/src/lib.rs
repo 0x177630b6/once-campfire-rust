@@ -61,6 +61,9 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 pub trait ChatSource: Send + Sync {
     /// The messages of the viewer's rooms created since `since`, bodies included.
     fn recent_messages(&self, since: Timestamp) -> BoxFuture<'_, Result<Vec<ChatMessage>, String>>;
+    /// The rooms the viewer is a member of (a proposal's details are for its room's members and
+    /// the duty managers).
+    fn room_ids(&self) -> BoxFuture<'_, Result<Vec<i64>, String>>;
 }
 
 /// The workspace's state, shared by the poll task, the render hooks and the routes.
@@ -298,11 +301,12 @@ impl Workspace {
         let snapshot = self.snapshot();
         let chipped = chips::decorate(body_html, &self.config, &snapshot);
         let buttons = self.bot(creator_id).and_then(|bot| match proposals::marker_in(body_html) {
-            // A proposal's draft: its buttons decide that proposal (a marker alone does nothing).
+            // A proposal's draft: its buttons decide that proposal. A marker alone does nothing:
+            // only the message Campfire posted for it, by its bot, gets them.
             Some(id) => self
                 .proposals
                 .get(&id)
-                .filter(|proposal| proposal.bot_id == bot.id)
+                .filter(|proposal| proposal.bot_id == bot.id && proposal.draft_message_id == Some(message_id))
                 .map(|proposal| drafts::proposal_buttons(&proposal, &bot, drafts::Place::Room)),
             None => drafts::detect(body_html).is_some().then(|| drafts::buttons(message_id, &bot, None)),
         });
@@ -346,7 +350,8 @@ impl Workspace {
     pub async fn home(&self, viewer: &Viewer, source: &dyn ChatSource, now: Timestamp) -> Result<HomeView, String> {
         let messages = source.recent_messages(now - drafts::DRAFT_TTL - SignedDuration::from_mins(5)).await?;
         let mut view = home::build(&self.config, &self.snapshot(), viewer, &messages, &self.bots(), now);
-        view.proposals = self.pending_items(viewer);
+        let rooms = source.room_ids().await?;
+        view.proposals = self.pending_items(viewer, &rooms);
         Ok(view)
     }
 

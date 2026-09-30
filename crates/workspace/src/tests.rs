@@ -492,6 +492,12 @@ impl ChatSource for Messages {
         let messages = self.0.iter().filter(|message| message.created_at >= since).cloned().collect();
         Box::pin(async move { Ok(messages) })
     }
+
+    /// The viewer is a member of the rooms of these messages.
+    fn room_ids(&self) -> BoxFuture<'_, Result<Vec<i64>, String>> {
+        let rooms = self.0.iter().map(|message| message.room_id).collect::<BTreeSet<_>>().into_iter().collect();
+        Box::pin(async move { Ok(rooms) })
+    }
 }
 
 #[tokio::test]
@@ -1273,6 +1279,15 @@ async fn a_confirmed_proposal_runs_as_hermes_and_says_who_confirmed() {
     // The draft Campfire posts as the bot gets buttons that decide this proposal; the same
     // marker from a person gets nothing.
     let draft = crate::proposals::draft_html(&proposal, None);
+    assert!(
+        workspace.decorate_message(100, 9, &draft).is_none_or(|html| !html.contains("data-ws-proposal")),
+        "not before Campfire posted it"
+    );
+    workspace.set_draft_message(&id, 100);
+    assert!(
+        workspace.decorate_message(102, 9, &draft).is_none_or(|html| !html.contains("data-ws-proposal")),
+        "the same marker in another message of the bot gets nothing"
+    );
     let decorated = workspace.decorate_message(100, 9, &draft).unwrap();
     assert!(decorated.contains(&format!(r#"data-ws-proposal="{id}""#)), "{decorated}");
     assert!(decorated.contains(&format!(r#"data-ws-draft-url="/workspace/hermes/proposals/{id}/decision""#)));
@@ -1589,11 +1604,11 @@ async fn the_hermes_tab_lists_pending_proposals_and_filters_the_log() {
 
     let questions = workspace.hermes_page(&maya(), "questions", &Messages(vec![question.clone()])).await.unwrap();
     assert_eq!(questions.items.len(), 1);
-    let comments = workspace.hermes_page(&maya(), "comments", &Messages(vec![question])).await.unwrap();
+    let comments = workspace.hermes_page(&maya(), "comments", &Messages(vec![question.clone()])).await.unwrap();
     assert!(comments.items.iter().all(|item| item.text.starts_with("Commented")) && comments.items.len() == 1);
 
     // Home lists it to confirm too, and the page asks for its state.
-    let home = workspace.home(&maya(), &Messages(Vec::new()), now()).await.unwrap();
+    let home = workspace.home(&maya(), &Messages(vec![question.clone()]), now()).await.unwrap();
     assert_eq!(home.proposals.len(), 1);
     let states = workspace.proposal_states(&[id.clone(), "zzz".into()]);
     assert_eq!(states[&id]["status"], "pending");
@@ -1642,4 +1657,144 @@ async fn what_campfire_ran_for_hermes_isn_t_logged_twice_as_direct() {
     let entries = workspace.hermes_log().entries();
     assert_eq!(entries.len(), 1, "{entries:?}");
     assert_eq!(entries[0].via, Via::Campfire);
+}
+
+fn live_report() -> SourceMessage {
+    SourceMessage {
+        id: 55,
+        room_id: 3,
+        creator_id: 5,
+        creator_is_bot: false,
+        created_at: now() - SignedDuration::from_mins(2),
+        body_html: format!("<p>{LIVE_REPORT_OPENING}.</p><p>Chute dans le hall</p>"),
+    }
+}
+
+#[tokio::test]
+async fn a_live_report_being_filed_counts_as_used() {
+    let (fizzy, workspace, _) = phase2(departments(), true).await;
+    // A card from this report is being filed right now (Running).
+    let create = json!({"action": "create", "title": "Chute — hall"});
+    let first = workspace.propose(&fizzy, &hermes_bot(), &create, for_maya(), Some(live_report())).await.unwrap();
+    let first = done(first);
+    workspace.proposals().update(now(), |items| {
+        items.iter_mut().find(|p| p.id == first.id).unwrap().status = Status::Running;
+    });
+    let second = json!({"action": "create", "title": "Chute (2)"});
+    let second = workspace.propose(&fizzy, &hermes_bot(), &second, for_maya(), Some(live_report())).await.unwrap();
+    assert!(matches!(second, Proposed::Pending { .. }), "a running card from the same report counts");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_proposals_from_one_live_report_file_one_card() {
+    let (fizzy, workspace, _) = phase2(departments(), true).await;
+    let (fizzy, workspace) = (std::sync::Arc::new(fizzy), std::sync::Arc::new(workspace));
+    let tasks: Vec<_> = (0..8)
+        .map(|n| {
+            let (fizzy, workspace) = (fizzy.clone(), workspace.clone());
+            tokio::spawn(async move {
+                let body = json!({"action": "create", "title": format!("Chute — hall ({n})")});
+                workspace.propose(&*fizzy, &hermes_bot(), &body, for_maya(), Some(live_report())).await.unwrap()
+            })
+        })
+        .collect();
+    let mut filed = 0;
+    for task in tasks {
+        if matches!(task.await.unwrap(), Proposed::Done { .. }) {
+            filed += 1;
+        }
+    }
+    assert_eq!(filed, 1, "one card per confirmed live report, the others ask first");
+    assert_eq!(workspace.pending_proposals().len(), 7);
+}
+
+#[tokio::test]
+async fn proposals_details_are_for_their_room_and_the_duty_managers() {
+    let settings = Settings { duty_managers: Some(vec![1]), ..departments() };
+    let (fizzy, workspace, _) = phase2(settings, true).await;
+    let in_room = pending_id(propose(&fizzy, &workspace, json!({"action": "create", "title": "Guest fell — Room 12"})).await.unwrap());
+    workspace.decide(&fizzy, &manager(), &in_room, Decision::Dismiss).await.unwrap();
+    let pending = pending_id(propose(&fizzy, &workspace, json!({"action": "create", "title": "Leak — Room 3"})).await.unwrap());
+    // No context (the bridge couldn't say which call it was): no room, no person.
+    let roomless = json!({"action": "create", "title": "Roomless"});
+    let roomless = pending_id(workspace.propose(&fizzy, &hermes_bot(), &roomless, Context::default(), None).await.unwrap());
+    let in_front_desk = |id: i64| ChatMessage {
+        id,
+        room_id: 3,
+        room_name: "front-desk".into(),
+        url: format!("/rooms/3/@{id}"),
+        creator_id: 5,
+        creator_name: "Maya".into(),
+        creator_is_bot: false,
+        created_at: now(),
+        body_html: "<p>hi</p>".into(),
+    };
+    let text = |page: &crate::hermes::HermesPage| askama::Template::render(page).unwrap();
+
+    // Maya is in room 3: its proposals, not the roomless one.
+    let page = workspace.hermes_page(&maya(), "all", &Messages(vec![in_front_desk(1)])).await.unwrap();
+    assert_eq!(page.pending.iter().map(|item| item.id.clone()).collect::<Vec<_>>(), [pending]);
+    let html = text(&page);
+    assert!(html.contains("Dismissed: Create a card: Guest fell — Room 12") && !html.contains("Roomless"), "{html}");
+
+    // Karim isn't in room 3 and isn't a duty manager: nothing of them, on the tab or Home.
+    let page = workspace.hermes_page(&karim(), "all", &Messages(Vec::new())).await.unwrap();
+    assert!(page.pending.is_empty());
+    let html = text(&page);
+    assert!(!html.contains("Guest fell") && !html.contains("Leak") && !html.contains("Roomless"), "{html}");
+    assert!(workspace.home(&karim(), &Messages(Vec::new()), now()).await.unwrap().proposals.is_empty());
+    assert!(!workspace.sees_proposal(&karim(), Some(3), &[]) && workspace.sees_proposal(&karim(), Some(3), &[3]));
+
+    // A duty manager sees them all, the roomless one too.
+    let page = workspace.hermes_page(&manager(), "all", &Messages(Vec::new())).await.unwrap();
+    assert_eq!(page.pending.len(), 2);
+    assert!(page.pending.iter().any(|item| item.id == roomless));
+}
+
+#[tokio::test]
+async fn only_hermes_s_bot_may_propose() {
+    let (_, workspace, _) = phase2(departments(), true).await;
+    assert_eq!(workspace.hermes_bot_id(None), Some(9), "the only active bot");
+    let other = Bot { id: 12, name: "Deploy bot".into(), sgid: "sg2".into() };
+    workspace.set_bots(vec![hermes_bot(), other]);
+    assert_eq!(workspace.hermes_bot_id(None), None, "several bots and nothing says which: refused");
+    assert_eq!(workspace.hermes_bot_id(Some("Hermes")), Some(9), "the live voice report's bot");
+    assert_eq!(workspace.hermes_bot_id(Some("12")), Some(12));
+    assert_eq!(workspace.hermes_bot_id(Some("Nobody")), None);
+    let configured = Workspace::new(config_with(&[("HERMES_BOT", "9")]));
+    configured.set_bots(vec![Bot { id: 12, name: "Deploy bot".into(), sgid: "sg2".into() }, hermes_bot()]);
+    assert_eq!(configured.hermes_bot_id(Some("Deploy bot")), Some(9), "HERMES_BOT first");
+}
+
+#[tokio::test]
+async fn undo_reads_the_feed_back_to_the_action_or_refuses() {
+    let (fizzy, workspace, clock) = phase2(all_alone(), true).await;
+    let severity = done(propose(&fizzy, &workspace, json!({"action": "severity", "card": 12, "severity": "high"})).await.unwrap());
+    let id = format!("p-{}-done", severity.id);
+    *clock.lock().unwrap() = now() + SignedDuration::from_hours(1);
+    let page = |at: &str, card: u64, who: &str| {
+        json!([{"id": format!("x{at}{card}"), "action": "comment_created", "created_at": at,
+            "eventable_type": "Card", "eventable": {"number": card}, "creator": {"id": format!("fz-{who}"), "name": who}}])
+    };
+    let next = |page: u32| Some(format!("<http://localhost:8484{BOARD_FEED}&page={page}>; rel=\"next\""));
+    let set = |page_number: u32, body: Value, link: Option<String>| {
+        let path = if page_number == 1 { BOARD_FEED.to_string() } else { format!("{BOARD_FEED}&page={page_number}") };
+        fizzy.replies.lock().unwrap().insert(path, (200, body, link));
+    };
+    // Ten busy pages about other cards, none reaching the action: too much to check.
+    for n in 1..=10 {
+        set(n, page("2026-09-30T09:30:00Z", 40 + n as u64, "Karim"), next(n + 1));
+    }
+    let busy = workspace.undo(&fizzy, &manager(), &id).await.unwrap_err();
+    assert_eq!(busy.code(), "cannot_undo");
+    assert!(busy.message().contains("too much activity"), "{busy}");
+    // The change on card 12 is on page 2: found.
+    set(2, page("2026-09-30T09:20:00Z", 12, "Karim"), next(3));
+    let touched = workspace.undo(&fizzy, &manager(), &id).await.unwrap_err();
+    assert_eq!(touched.code(), "changed_since");
+    // Page 2 reaches back before the action, nothing on card 12 since: undone.
+    set(2, page("2026-09-30T08:00:00Z", 12, "Karim"), next(3));
+    fizzy.requests.lock().unwrap().clear();
+    workspace.undo(&fizzy, &manager(), &id).await.unwrap();
+    assert!(!fizzy.paths().iter().any(|path| path.ends_with("&page=3")), "no further than needed");
 }

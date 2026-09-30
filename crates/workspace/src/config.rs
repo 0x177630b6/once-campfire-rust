@@ -10,6 +10,7 @@
 //! | `FIZZY_POLL_S` | `30` | Seconds between polls (at least 5) |
 //! | `WORKSPACE_INCIDENT_BOARD` | `Incident Log` | The incident board, by name or id |
 //! | `CAMPFIRE_PUBLIC_URL` | unset | Campfire as browsers reach it, for the link to the message a card was created from (unset: the message's path, as text) |
+//! | `HERMES_BOT` | unset | Hermes's Campfire bot, by user id or exact name: the only bot whose proposals Campfire takes (`POST /hermes/:bot_key/workspace/proposals`). Unset: `GEMINI_LIVE_VOICE_BOT` when set, else the instance's only active bot; with several bots and neither set, proposals are refused (403) |
 //! | `HERMES_FIZZY_TOKEN` | unset | Hermes's own Fizzy token (`write`): what Campfire runs for Hermes (its proposals, the undo of its comments) is written under Hermes's name, and the Hermes log learns Hermes's Fizzy user from it. Unset: those writes use `FIZZY_TOKEN` |
 //!
 //! The settings administrators edit in the app ([`crate::settings`]) are in
@@ -61,6 +62,9 @@ pub struct WorkspaceConfig {
     pub campfire_url: Option<String>,
     /// `HERMES_FIZZY_TOKEN`: Hermes's own Fizzy token, for what Campfire runs for Hermes (phase 2).
     pub hermes_token: Option<Secret>,
+    /// `HERMES_BOT`: Hermes's Campfire bot (a user id or an exact name), the only one that may
+    /// propose (phase 2).
+    pub hermes_bot: Option<String>,
 }
 
 /// A configuration error. It never quotes `FIZZY_TOKEN`.
@@ -107,6 +111,7 @@ impl WorkspaceConfig {
                 .join("workspace.json"),
             campfire_url,
             hermes_token: present("HERMES_FIZZY_TOKEN").map(Secret::new),
+            hermes_bot: present("HERMES_BOT"),
         }))
     }
 

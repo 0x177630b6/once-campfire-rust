@@ -148,6 +148,10 @@ pub struct Entry {
     pub target: Option<String>,
     #[serde(default)]
     pub proposal: Option<String>,
+    /// For a proposal's entry: the room it came from (its details are for that room's members and
+    /// the duty managers). `None`: no room, or an entry older than this field.
+    #[serde(default)]
+    pub room_id: Option<i64>,
     /// The Fizzy activity, for a direct entry.
     #[serde(default)]
     pub activity: Option<String>,
@@ -172,6 +176,7 @@ impl Entry {
             no_undo: None,
             target: None,
             proposal: None,
+            room_id: None,
             activity: None,
         }
     }

@@ -458,10 +458,7 @@ impl ProposalStore {
             matches!(proposal.status, Status::Pending | Status::Running)
                 || now.duration_since(proposal.decided_at.unwrap_or(proposal.created_at)) <= KEEP_DECIDED
         });
-        if items.len() > MAX_KEPT {
-            items.sort_by_key(|proposal| std::cmp::Reverse(proposal.created_at));
-            items.truncate(MAX_KEPT);
-        }
+        evict(&mut items);
         if let Err(error) = crate::store::write_json_atomically(&self.path, &File { proposals: items.clone() }) {
             *self.error.lock().unwrap_or_else(|e| e.into_inner()) = Some(format!("couldn't write {}: {error}", self.path.display()));
         }
@@ -472,6 +469,21 @@ impl ProposalStore {
     pub fn take_error(&self) -> Option<String> {
         self.error.lock().unwrap_or_else(|e| e.into_inner()).take()
     }
+}
+
+/// Past [`MAX_KEPT`], forgets the decided proposals decided longest ago; never a pending or running
+/// one (the Hermes log keeps what happened to the others).
+fn evict(items: &mut Vec<Proposal>) {
+    let open = |proposal: &Proposal| matches!(proposal.status, Status::Pending | Status::Running);
+    let excess = items.len().saturating_sub(MAX_KEPT);
+    if excess == 0 {
+        return;
+    }
+    let mut decided: Vec<(Timestamp, String)> =
+        items.iter().filter(|p| !open(p)).map(|p| (p.decided_at.unwrap_or(p.created_at), p.id.clone())).collect();
+    decided.sort();
+    let dropped: std::collections::HashSet<String> = decided.into_iter().take(excess).map(|(_, id)| id).collect();
+    items.retain(|proposal| open(proposal) || !dropped.contains(&proposal.id));
 }
 
 #[cfg(test)]
@@ -600,6 +612,39 @@ mod tests {
         assert!(!is_confirmed_live_report(&typed, Some(5), now));
         let quoted = SourceMessage { body_html: format!("<p>He said: {LIVE_REPORT_OPENING}</p>"), ..message };
         assert!(!is_confirmed_live_report(&quoted, Some(5), now), "only at the start");
+    }
+
+    #[test]
+    fn eviction_drops_decided_proposals_first_never_pending_ones() {
+        let at: Timestamp = "2026-09-30T09:00:00Z".parse().unwrap();
+        let proposal = |id: String, status: Status, minutes: i64| Proposal {
+            id,
+            created_at: at + SignedDuration::from_mins(minutes),
+            status,
+            action: "close".into(),
+            card: Some(12),
+            request: json!({"action": "close", "card": 12}),
+            summary: "Close #12".into(),
+            details: Vec::new(),
+            context: Context::default(),
+            bot_id: 9,
+            bot_name: "Hermes".into(),
+            draft_message_id: None,
+            decided_at: (status != Status::Pending).then(|| at + SignedDuration::from_mins(minutes)),
+            decided_by_id: None,
+            decided_by_name: None,
+            result_card: None,
+            result_url: None,
+            message: None,
+        };
+        // The oldest are pending; decided ones fill the rest, and one more.
+        let mut items: Vec<Proposal> = (0..3).map(|n| proposal(format!("pending{n}"), Status::Pending, n)).collect();
+        items.extend((0..MAX_KEPT - 1).map(|n| proposal(format!("done{n}"), Status::Done, 10 + n as i64)));
+        evict(&mut items);
+        assert_eq!(items.len(), MAX_KEPT);
+        assert!((0..3).all(|n| items.iter().any(|p| p.id == format!("pending{n}"))), "pending ones are never dropped");
+        assert!(!items.iter().any(|p| p.id == "done0" || p.id == "done1"), "the oldest decided ones go");
+        assert!(items.iter().any(|p| p.id == "done2"));
     }
 
     #[test]
