@@ -587,6 +587,10 @@ impl Workspace {
         let writer = self.writer_as(http, actor, identity, Purpose { via: "undo", reference: Some(entry.id.clone()) })?;
         let _lock = self.lock_card(number).await;
         let card = writer.card(number).await?;
+        // Phase 2.7: a card the actor may not see is as good as missing.
+        if !self.settings().card_visible(&card.tags, &self.audience_of(actor)) {
+            return Err(ActionError::NotFound);
+        }
         if let Some(reason) = self.touched_since(&writer, &entry, &reverse, &card).await? {
             return Err(ActionError::invalid("changed_since", reason));
         }
@@ -738,6 +742,7 @@ impl Workspace {
         let now = self.now();
         let messages = source.recent_messages(now - MESSAGES_WINDOW).await?;
         let rooms = source.room_ids().await?;
+        self.set_rooms_of(viewer.id, rooms.iter().copied());
         Ok(self.hermes_view(viewer, filter, &messages, &rooms, now))
     }
 
@@ -748,11 +753,42 @@ impl Workspace {
         self.settings().is_duty_manager(viewer) || room_id.is_some_and(|room| rooms.contains(&room))
     }
 
+    /// [`Workspace::sees_proposal`], and (phase 2.7) the card it's about, or the departments it would
+    /// give a new card, visible to `viewer` (`rooms`: theirs).
+    pub fn proposal_visible(&self, viewer: &Viewer, proposal: &Proposal, rooms: &[i64]) -> bool {
+        if !self.sees_proposal(viewer, proposal.context.room_id, rooms) {
+            return false;
+        }
+        let settings = self.settings();
+        let audience = settings.audience(viewer, rooms.iter().copied());
+        if audience.all {
+            return true;
+        }
+        match proposal.card {
+            Some(number) => self.sees_card(&audience, number),
+            None => settings.card_visible(&crate::visibility::proposed_tags(&proposal.request), &audience),
+        }
+    }
+
+    /// Whether every member of `room_id` may see `proposal` (phase 2.7): its draft, which shows the
+    /// card's title or the report, is posted there only then; otherwise it waits in the Hermes tab.
+    pub fn proposal_visible_to_room(&self, proposal: &Proposal, room_id: i64) -> bool {
+        if !self.settings().visibility.restricts() {
+            return true;
+        }
+        let directory = self.directory();
+        directory.members_of(room_id).into_iter().filter_map(|id| directory.viewer(id)).all(|member| {
+            let rooms: Vec<i64> = directory.rooms_of(member.id).into_iter().collect();
+            self.proposal_visible(&member, proposal, &rooms)
+        })
+    }
+
     fn hermes_view(&self, viewer: &Viewer, filter: &str, messages: &[ChatMessage], rooms: &[i64], now: Timestamp) -> HermesPage {
         let filter = FILTERS.iter().find(|(key, _)| *key == filter).map(|(key, _)| *key).unwrap_or("all");
         let snapshot = self.snapshot();
         let settings = self.settings();
         let card_url = |number: u64| crate::chips::card_link(&self.config, &snapshot, number);
+        let audience = settings.audience(viewer, rooms.iter().copied());
         let entries = self.hermes_log.entries();
         let undos: std::collections::HashMap<&str, &Entry> =
             entries.iter().filter(|entry| entry.kind == Kind::Undone).filter_map(|entry| Some((entry.target.as_deref()?, entry))).collect();
@@ -766,6 +802,17 @@ impl Workspace {
             let unfiled =
                 matches!(entry.kind, Kind::Proposed | Kind::Refused | Kind::Failed | Kind::Dismissed | Kind::Expired | Kind::Superseded);
             if unfiled && entry.proposal.is_some() && !self.sees_proposal(viewer, entry.room_id, rooms) {
+                continue;
+            }
+            // Phase 2.7: nothing about a card the viewer may not see, nor about a proposal for one.
+            if let Some(number) = entry.card
+                && !self.sees_card(&audience, number)
+            {
+                continue;
+            }
+            if let Some(proposal) = entry.proposal.as_deref().and_then(|id| self.proposals.get(id))
+                && !self.proposal_visible(viewer, &proposal, rooms)
+            {
                 continue;
             }
             let undone = undos.get(entry.id.as_str()).copied();
@@ -869,7 +916,7 @@ impl Workspace {
         let bots = self.bots();
         self.pending_proposals()
             .into_iter()
-            .filter(|proposal| self.sees_proposal(viewer, proposal.context.room_id, rooms))
+            .filter(|proposal| self.proposal_visible(viewer, proposal, rooms))
             .map(|proposal| {
                 let message_url = match (proposal.context.room_id, proposal.draft_message_id) {
                     (Some(room), Some(message)) => Some(format!("/rooms/{room}/@{message}")),

@@ -349,6 +349,9 @@ static HERMES_ROUTES: LazyLock<Vec<Route>> = LazyLock::new(|| {
             .defaults(BOT_DEFAULTS),
         get("/hermes/:bot_key/workspace/proposals/:id(.:format)", "hermes/workspace#bot_proposal", workspace::bot_proposal)
             .defaults(BOT_DEFAULTS),
+        // Phase 2.6: the end-of-shift handover.
+        get("/workspace/handover(.:format)", "hermes/workspace#handover", workspace::handover),
+        post("/workspace/handover(.:format)", "hermes/workspace#post_handover", workspace::post_handover),
     ]
 });
 

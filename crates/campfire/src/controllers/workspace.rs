@@ -18,7 +18,10 @@
 //! - phase 2: `GET /workspace/hermes` (the Hermes tab), `GET /workspace/hermes/proposals.json`,
 //!   `POST /workspace/hermes/proposals/:id/decision`, `POST /workspace/hermes/actions/:id/undo`,
 //!   and, for Hermes through its bridge, `POST /hermes/:bot_key/workspace/proposals` and
-//!   `GET /hermes/:bot_key/workspace/proposals/:id` (bots only).
+//!   `GET /hermes/:bot_key/workspace/proposals/:id` (bots only);
+//! - phase 2.5–2.7: the alerts (Hermes's direct messages and room notices, posted from the poll task,
+//!   [`deliver_alerts`]), `GET`/`POST /workspace/handover` (the end-of-shift handover), and the
+//!   people, rooms and memberships the visibility and the alerts need ([`load_directory`]).
 //!
 //! All answer 404 while the workspace is off (no `FIZZY_URL`/`FIZZY_TOKEN`), and run
 //! `ApplicationController`'s chain (session only and no bots, except the bot route;
@@ -29,13 +32,14 @@ use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use askama::Template;
-use campfire_db::{Message, Room, User};
+use campfire_db::{Message, NewMessage, Room, User};
 use campfire_kit::{Ctx, Error, Param, Result, StatusCode, format, halt};
 use campfire_richtext::uri;
 use campfire_views::helpers as h;
 use campfire_views::layouts::Application;
 use campfire_views::{ViewContext, hermes::WorkspaceHooks};
 use campfire_workspace::actions::{CardSource, Change, NewCard};
+use campfire_workspace::alerts::{Delivery, To};
 use campfire_workspace::drafts::{self, Decision};
 use campfire_workspace::fizzy::{self, HttpResponse};
 use campfire_workspace::hermes::{self, Proposed};
@@ -51,7 +55,7 @@ use crate::concerns::{self, Before, before_actions, require_current_user};
 use crate::controllers::messages::{self, MessageParams};
 use crate::controllers::presenters::Presenter;
 use crate::controllers::presenters::accounts::attachable_sgid;
-use crate::controllers::presenters::page::db_error;
+use crate::controllers::presenters::page::{self as presenter_page, Rendered, db_error};
 use crate::controllers::presenters::view_context::{find_template, page_in_any_format};
 use crate::integrations::net::Network;
 use crate::integrations::net::http::{self, Body, Endpoint, Timeouts};
@@ -123,10 +127,12 @@ async fn poll_loop(app: Weak<AppState>, workspace: Arc<Workspace>) {
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut last_ok: Option<bool> = None;
     let mut last_lookup_errors: Vec<String> = Vec::new();
+    let weak = app.clone();
     loop {
         interval.tick().await;
         let Some(app) = app.upgrade() else { return };
         refresh_bots(&app, &workspace).await;
+        load_directory(&app, &workspace).await;
         let now = app.clock.now();
         drop(app);
         match workspace.poll(&http, now).await {
@@ -149,11 +155,144 @@ async fn poll_loop(app: Weak<AppState>, workspace: Arc<Workspace>) {
             tracing::warn!(errors = %lookup_errors.join("; "), "some Fizzy lookups failed; retrying at the next poll");
         }
         last_lookup_errors = lookup_errors;
-        // The write log, the Hermes log, the proposals: said once per failure.
+        // Phase 2.5: what this poll found to alert about.
+        if let Some(app) = weak.upgrade() {
+            deliver_alerts(&app, &workspace).await;
+        }
+        // The write log, the Hermes log, the proposals, the alerts sent: said once per failure.
         for error in workspace.take_storage_errors() {
             tracing::warn!(%error, "a workspace file couldn't be read or written");
         }
     }
+}
+
+/// The active people, the rooms and who is in which (one query each), for the visibility (phase
+/// 2.7: what the layout's room panel may show can't wait on the database) and the alerts' recipients.
+async fn load_directory(app: &App, workspace: &Workspace) {
+    let result = app
+        .db
+        .read(|conn| {
+            let mut directory = campfire_workspace::Directory::default();
+            for user in User::active_ordered_without_bots(conn)? {
+                directory.people.insert(user.id, (user.name.clone(), user.is_administrator()));
+            }
+            for room in Room::all(conn)? {
+                let name = room.name.clone().filter(|name| !name.trim().is_empty()).unwrap_or_else(|| format!("Room {}", room.id));
+                directory.rooms.insert(room.id, name);
+            }
+            let mut statement = conn.prepare_cached(r#"SELECT "memberships"."user_id", "memberships"."room_id" FROM "memberships""#)?;
+            let rows = statement.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))?;
+            for row in rows {
+                let (user, room) = row?;
+                directory.memberships.entry(user).or_default().insert(room);
+            }
+            Ok(directory)
+        })
+        .await;
+    match result {
+        Ok(directory) => workspace.set_directory(directory),
+        Err(error) => tracing::warn!(%error, "could not read the rooms and people for the workspace"),
+    }
+}
+
+/// Posts the alerts the last poll found (phase 2.5), as Hermes's bot: a person's in their direct
+/// room with the bot (created if needed), a notice in its room. Like a bot's reply to a webhook
+/// (`integrations::jobs`): `Message::create` (which queues Campfire's Web Push), then the broadcast.
+async fn deliver_alerts(app: &App, workspace: &Workspace) {
+    let fallback = app.config.gemini_live.as_ref().and_then(|live| live.voice_bot.clone());
+    let bot_id = workspace.hermes_bot_id(fallback.as_deref());
+    let deliveries = match workspace.take_alerts(bot_id) {
+        Ok(deliveries) => deliveries,
+        Err(dropped) => {
+            tracing::warn!(dropped, "workspace alerts not sent: no Hermes bot to send them (set HERMES_BOT)");
+            return;
+        }
+    };
+    let Some(bot_id) = bot_id else { return };
+    for delivery in deliveries {
+        match post_alert(app, bot_id, &delivery).await {
+            Ok(message_id) => tracing::info!(to = ?delivery.to, message_id, what = %delivery.summary, "workspace alert sent"),
+            Err(error) => tracing::warn!(%error, to = ?delivery.to, "a workspace alert couldn't be sent"),
+        }
+    }
+}
+
+async fn post_alert(app: &App, bot_id: i64, delivery: &Delivery) -> anyhow::Result<i64> {
+    let (room, created) = match delivery.to {
+        To::Room(room_id) => (app.db.read(move |conn| Room::find(conn, room_id)).await?, false),
+        To::Person(user_id) => {
+            app.db
+                .write(move |tx| {
+                    let existing = Room::find_direct_for(tx.conn(), &[bot_id, user_id])?;
+                    match existing {
+                        Some(room) => Ok((room, false)),
+                        None => Ok((Room::find_or_create_direct_for(tx, &[bot_id, user_id], bot_id)?, true)),
+                    }
+                })
+                .await?
+        }
+    };
+    if created {
+        broadcast_direct_room(app, &room).await?;
+    }
+    let body = messages::canonicalize_body(app, delivery.html.clone(), None).await.map_err(|error| anyhow::anyhow!("{error:?}"))?;
+    let room_id = room.id;
+    let message = app
+        .db
+        .write(move |tx| {
+            Message::create(
+                tx,
+                NewMessage { room_id, creator_id: bot_id, client_message_id: None, body: Some(body), attachment_blob_id: None },
+            )
+        })
+        .await?;
+    let id = message.id;
+    let (render_app, render_room) = (app.clone(), room.clone());
+    app.db
+        .read(move |conn| {
+            let presenter = Presenter::new(conn, &render_app, None);
+            let view = presenter.message(&message)?;
+            let account = campfire_db::Account::first(conn)?;
+            let html = presenter_page::render_detached(&render_app, account.as_ref(), |ctx| campfire_views::messages::message(ctx, &view));
+            let partials = Rendered { message: Some(html), ..Rendered::default() };
+            render_app.broadcasts.message_create(conn, &render_room, &message, &partials)
+        })
+        .await?;
+    Ok(id)
+}
+
+/// A new direct room in its members' sidebars (`broadcast_create_room`), rendered without a request.
+async fn broadcast_direct_room(app: &App, room: &Room) -> anyhow::Result<()> {
+    let (render_app, room) = (app.clone(), room.clone());
+    app.db
+        .read(move |conn| {
+            let presenter = Presenter::new(conn, &render_app, None);
+            let account = campfire_db::Account::first(conn)?;
+            let mut partials = Rendered::default();
+            for membership in campfire_db::Membership::for_room(conn, room.id)? {
+                let direct = presenter.sidebar_direct(&membership)?;
+                let html =
+                    presenter_page::render_detached(&render_app, account.as_ref(), |ctx| campfire_views::users::direct_room(ctx, &direct));
+                partials.direct_rooms.push((membership.id, html));
+            }
+            render_app.broadcasts.direct_room_create(conn, &room, &partials)
+        })
+        .await?;
+    Ok(())
+}
+
+/// The rooms `user` is in, read now, for what they may see (phase 2.7).
+async fn refresh_rooms(c: &Ctx, workspace: &Workspace, user: &User) -> Result<()> {
+    let user_id = user.id;
+    let rooms = c.app().db.read(move |conn| room_ids_of(conn, user_id)).await.map_err(db_error)?;
+    workspace.set_rooms_of(user_id, rooms);
+    Ok(())
+}
+
+fn room_ids_of(conn: &campfire_db::Connection, user_id: i64) -> campfire_db::Result<Vec<i64>> {
+    let mut statement = conn.prepare_cached(r#"SELECT "memberships"."room_id" FROM "memberships" WHERE "memberships"."user_id" = ?"#)?;
+    let rows = statement.query_map(rusqlite::params![user_id], |row| row.get(0))?;
+    Ok(rows.collect::<rusqlite::Result<Vec<i64>>>()?)
 }
 
 /// The active bots, which post the drafts, with their mention sgids.
@@ -263,6 +402,8 @@ fn viewer(user: &User) -> Viewer {
 pub async fn cards(c: &mut Ctx) -> Result {
     let workspace = feature(c)?;
     before_actions(c, Before::default()).await?;
+    let user = require_current_user(c)?.clone();
+    refresh_rooms(c, &workspace, &user).await?;
     let numbers: Vec<u64> = c
         .params
         .get("numbers")
@@ -272,7 +413,9 @@ pub async fn cards(c: &mut Ctx) -> Result {
         .filter_map(|number| number.trim().parse().ok())
         .take(MAX_CHIPS)
         .collect();
-    c.json(StatusCode::OK, &json!({ "cards": workspace.chips(&numbers) }))
+    // Per viewer (phase 2.7); `visibility` tells the page to turn the chips left out back into links.
+    let visibility = workspace.settings().visibility.mode.as_str();
+    c.json(StatusCode::OK, &json!({ "cards": workspace.chips_for(&viewer(&user), &numbers), "visibility": visibility }))
 }
 
 pub async fn reply(c: &mut Ctx) -> Result {
@@ -337,6 +480,7 @@ pub async fn board(c: &mut Ctx) -> Result {
         None => Vec::new(),
     };
     let filter = BoardFilter::parse(c.params.get("dept").and_then(Param::as_str), &severities, &workspace.settings());
+    refresh_rooms(c, &workspace, &user).await?;
     let content = workspace.board(&viewer(&user), &filter).render().map_err(Error::internal)?;
     page(c, StatusCode::OK, "Board", content).await
 }
@@ -352,6 +496,7 @@ pub async fn card(c: &mut Ctx) -> Result {
     if !fragment {
         find_template(c, &format::HTML)?;
     }
+    refresh_rooms(c, &workspace, &user).await?;
     let sheet = workspace.card_sheet(&FizzyHttp::new(), &viewer(&user), number).await;
     let (status, html) = match sheet {
         Ok(sheet) => (StatusCode::OK, sheet.render().map_err(Error::internal)?),
@@ -450,7 +595,7 @@ pub async fn create_card(c: &mut Ctx) -> Result {
             }
         }
     }
-    let chip = workspace.chip(created.card.number);
+    let chip = workspace.chip_for(&viewer(&user), created.card.number);
     c.json(
         StatusCode::CREATED,
         &json!({ "number": created.card.number, "url": created.url, "chip": chip, "message_id": posted, "warning": warning }),
@@ -471,6 +616,7 @@ pub async fn change_card(c: &mut Ctx) -> Result {
         Some(Err(error)) => return action_error(c, &error),
         Some(Ok(change)) => change,
     };
+    refresh_rooms(c, &workspace, &user).await?;
     let (http, viewer) = (FizzyHttp::new(), viewer(&user));
     if let Err(error) = workspace.change_card(&http, &viewer, number, change).await {
         return action_error(c, &error);
@@ -479,7 +625,7 @@ pub async fn change_card(c: &mut Ctx) -> Result {
         Ok(sheet) => Some(sheet.render().map_err(Error::internal)?),
         Err(_) => None,
     };
-    c.json(StatusCode::OK, &json!({ "number": number, "sheet": sheet, "chip": workspace.chip(number) }))
+    c.json(StatusCode::OK, &json!({ "number": number, "sheet": sheet, "chip": workspace.chip_for(&viewer, number) }))
 }
 
 /// `GET /workspace/rooms/:room_id/panel`: the room's cards panel (fragment), `204` when the room
@@ -491,6 +637,7 @@ pub async fn panel(c: &mut Ctx) -> Result {
     let room_id: i64 = c.params.get("room_id").and_then(Param::as_str).and_then(|id| id.parse().ok()).ok_or(Error::NotFound)?;
     let user_id = user.id;
     c.app().db.read(move |conn| Room::find_for_user(conn, user_id, room_id)).await.map_err(db_error)?.ok_or(Error::NotFound)?;
+    refresh_rooms(c, &workspace, &user).await?;
     match workspace.room_panel(&viewer(&user), room_id) {
         Some(panel) => {
             let html = panel.render().map_err(Error::internal)?;
@@ -546,13 +693,25 @@ pub async fn update_settings(c: &mut Ctx) -> Result {
     if let Some(managers) = &mut settings.duty_managers {
         managers.retain(|id| directory.people.iter().any(|(person, ..)| person == id));
     }
+    if settings.handover.room_id.is_some_and(|id| !directory.rooms.iter().any(|(room, _)| *room == id)) {
+        settings.handover.room_id = None;
+    }
+    let visibility_before = workspace.settings().visibility.mode;
     match workspace.settings_store().save(settings) {
         Ok(saved) => {
+            // Message HTML is cached for every viewer with the chips as they were rendered: when
+            // the visibility changes, render it all again (restricted = links only marked).
+            if saved.visibility.mode != visibility_before {
+                c.app().fragment_cache.clear();
+            }
             let user_id = require_current_user(c)?.id;
             tracing::info!(
                 user_id,
                 departments = saved.departments.len(),
                 policy = saved.confirm_policy.as_str(),
+                visibility = saved.visibility.mode.as_str(),
+                alerts = saved.notifications.enabled,
+                handover_room = ?saved.handover.room_id,
                 "workspace settings saved"
             );
             c.json(StatusCode::OK, &json!({ "ok": true }))
@@ -585,6 +744,52 @@ pub async fn bot_settings(c: &mut Ctx) -> Result {
         .collect();
     let body = pages::bot_settings(workspace.config(), &workspace.snapshot(), &settings, &directory.rooms, &managers);
     c.json(StatusCode::OK, &body)
+}
+
+// --- Phase 2.6: the handover ----------------------------------------------------------------------
+
+/// `GET /workspace/handover` (duty managers): the summary to edit and post.
+pub async fn handover(c: &mut Ctx) -> Result {
+    let workspace = feature(c)?;
+    before_actions(c, Before::default()).await?;
+    find_template(c, &format::HTML)?;
+    let user = require_current_user(c)?.clone();
+    refresh_rooms(c, &workspace, &user).await?;
+    let (status, content) = match workspace.handover_page(&viewer(&user)) {
+        Ok(view) => (StatusCode::OK, view.render().map_err(Error::internal)?),
+        Err(error) => (status_of(&error), format!(r#"<section class="ws-home ws-sheet-page">{}</section>"#, notice(&error.message()))),
+    };
+    page(c, status, "Handover", content).await
+}
+
+/// `POST /workspace/handover` `{"text"}` (duty managers): posts the handover in the handover room as
+/// the person, like a message they type (`create_message`, `broadcast_create`; no bot webhooks: it
+/// isn't a question for Hermes). `201 {"message_id", "url", "message"}`; `403`; `422 no_room`,
+/// `not_a_member`, `blank_text`, `text_too_long`.
+pub async fn post_handover(c: &mut Ctx) -> Result {
+    let workspace = feature(c)?;
+    before_actions(c, Before::default()).await?;
+    let user = require_current_user(c)?.clone();
+    refresh_rooms(c, &workspace, &user).await?;
+    let text = c.request_params.get("text").and_then(Param::as_str).unwrap_or("").to_string();
+    let viewer = viewer(&user);
+    let (room_id, body) = match workspace.handover_message(&viewer, &text) {
+        Ok(checked) => checked,
+        Err(error) => return action_error(c, &error),
+    };
+    let user_id = user.id;
+    let Some(room) = c.app().db.read(move |conn| Room::find_for_user(conn, user_id, room_id)).await.map_err(db_error)? else {
+        return action_error(
+            c,
+            &ActionError::invalid("not_a_member", "You aren’t a member of the handover room, so you can’t post there."),
+        );
+    };
+    let message = messages::create_message(c, &room, MessageParams { body: Some(body), ..MessageParams::default() }).await?;
+    messages::broadcast_create(c, &room, &message).await?;
+    workspace.handover_posted(&viewer);
+    tracing::info!(user_id, room_id, message_id = message.id, "posted the handover");
+    let url = campfire_routes::room_at_message(room.id, message.id);
+    c.json(StatusCode::CREATED, &json!({ "message_id": message.id, "url": url, "message": "Handover posted." }))
 }
 
 // --- Phase 2: Hermes -----------------------------------------------------------------------------
@@ -624,15 +829,13 @@ pub async fn decide(c: &mut Ctx) -> Result {
     let Some(decision) = c.request_params.get("decision").and_then(Param::as_str).and_then(Decision::parse) else {
         return json_error(c, StatusCode::UNPROCESSABLE_ENTITY, "invalid_decision", "Decision must be confirm or dismiss.");
     };
-    // Only those who may see it (its room's members, the duty managers) may decide it.
+    // Only those who may see it (its room's members, the duty managers; and, phase 2.7, the card
+    // it's about) may decide it.
     if let Some(proposal) = workspace.proposals().get(&id) {
-        let (user_id, room_id) = (user.id, proposal.context.room_id);
-        let member = match room_id {
-            Some(room_id) => c.app().db.read(move |conn| Room::find_for_user(conn, user_id, room_id)).await.map_err(db_error)?.is_some(),
-            None => false,
-        };
-        let rooms: Vec<i64> = room_id.filter(|_| member).into_iter().collect();
-        if !workspace.sees_proposal(&viewer(&user), room_id, &rooms) {
+        let user_id = user.id;
+        let rooms = c.app().db.read(move |conn| room_ids_of(conn, user_id)).await.map_err(db_error)?;
+        workspace.set_rooms_of(user_id, rooms.iter().copied());
+        if !workspace.proposal_visible(&viewer(&user), &proposal, &rooms) {
             return action_error(c, &ActionError::NotFound);
         }
     }
@@ -646,7 +849,14 @@ pub async fn decide(c: &mut Ctx) -> Result {
         let room = c.app().db.read(move |conn| Room::find_for_user(conn, user_id, room_id)).await.map_err(db_error)?;
         if let Some(room) = room {
             let link = h::escape(&url);
-            let what = if proposal.action == "create" { "Filed Hermes’s proposal".to_string() } else { h::escape(&proposal.summary) };
+            let what = if proposal.action == "create" {
+                "Filed Hermes’s proposal".to_string()
+            } else if workspace.proposal_visible_to_room(&proposal, room_id) {
+                h::escape(&proposal.summary)
+            } else {
+                // Phase 2.7: the summary names a card some of the room's members may not see.
+                "Confirmed Hermes’s proposal".to_string()
+            };
             let body = format!(r#"<p>{what}: <a href="{link}">{link}</a></p>"#);
             let posted = async {
                 let message = messages::create_message(c, &room, MessageParams { body: Some(body), ..MessageParams::default() }).await?;
@@ -659,7 +869,7 @@ pub async fn decide(c: &mut Ctx) -> Result {
         }
     }
     tracing::info!(user_id = user.id, proposal = %proposal.id, status = proposal.status.as_str(), "decided a Hermes proposal");
-    let chip = proposal.result_card.and_then(|number| workspace.chip(number));
+    let chip = proposal.result_card.and_then(|number| workspace.chip_for(&viewer(&user), number));
     let message = match (&proposal.status, proposal.result_card) {
         (proposals::Status::Done, Some(number)) if proposal.action == "create" => format!("Card #{number} filed."),
         (proposals::Status::Done, _) => "Done.".to_string(),
@@ -680,10 +890,11 @@ pub async fn undo(c: &mut Ctx) -> Result {
     before_actions(c, Before::default()).await?;
     let user = require_current_user(c)?.clone();
     let id = c.params.get("id").and_then(Param::as_str).unwrap_or("").to_string();
+    refresh_rooms(c, &workspace, &user).await?;
     match workspace.undo(&FizzyHttp::new(), &viewer(&user), &id).await {
         Ok(entry) => {
             tracing::info!(user_id = user.id, entry = %id, card = ?entry.card, "undid one of Hermes's actions");
-            let chip = entry.card.and_then(|number| workspace.chip(number));
+            let chip = entry.card.and_then(|number| workspace.chip_for(&viewer(&user), number));
             c.json(StatusCode::OK, &json!({ "ok": true, "message": "Undone.", "chip": chip }))
         }
         Err(error) => action_error(c, &error),
@@ -721,7 +932,9 @@ pub async fn bot_propose(c: &mut Ctx) -> Result {
             c.json(StatusCode::CREATED, &hermes::proposal_json(&proposal))
         }
         Ok(Proposed::Pending { mut proposal, duplicate }) => {
-            if !duplicate && let Some(room_id) = proposal.context.room_id {
+            // Phase 2.7: not in a room some of whose members may not see what it's about.
+            let room = proposal.context.room_id.filter(|room| workspace.proposal_visible_to_room(&proposal, *room));
+            if !duplicate && let Some(room_id) = room {
                 match post_draft(c, &workspace, room_id, &proposal).await {
                     Ok(message_id) => proposal.draft_message_id = Some(message_id),
                     Err(error) => tracing::warn!(%error, room_id, proposal = %proposal.id, "couldn't post a proposal's draft"),
@@ -883,6 +1096,11 @@ fn settings_json(mut params: Value) -> Value {
     if let Some(managers) = params.get_mut("duty_managers") {
         numbers(managers);
     }
+    if let Some(room) = params.get_mut("handover").and_then(|handover| handover.get_mut("room_id"))
+        && let Some(text) = room.as_str().map(str::trim)
+    {
+        *room = text.parse::<i64>().map(|id| json!(id)).unwrap_or(Value::Null);
+    }
     params
 }
 
@@ -1005,17 +1223,7 @@ impl ChatSource for RoomMessages {
 
     fn room_ids(&self) -> BoxFuture<'_, std::result::Result<Vec<i64>, String>> {
         let (app, user_id) = (self.app.clone(), self.user.id);
-        Box::pin(async move {
-            app.db
-                .read(move |conn| {
-                    let mut statement =
-                        conn.prepare_cached(r#"SELECT "memberships"."room_id" FROM "memberships" WHERE "memberships"."user_id" = ?"#)?;
-                    let rows = statement.query_map(rusqlite::params![user_id], |row| row.get(0))?;
-                    Ok(rows.collect::<rusqlite::Result<Vec<i64>>>()?)
-                })
-                .await
-                .map_err(|error| error.to_string())
-        })
+        Box::pin(async move { app.db.read(move |conn| room_ids_of(conn, user_id)).await.map_err(|error| error.to_string()) })
     }
 }
 
@@ -1315,12 +1523,19 @@ mod tests {
         assert_eq!(endpoint(Method::POST, "/hermes/1-abc/workspace/proposals"), Some("hermes/workspace#bot_propose"));
         assert_eq!(endpoint(Method::GET, "/hermes/1-abc/workspace/proposals/k3x9"), Some("hermes/workspace#bot_proposal"));
         assert_eq!(param(Method::GET, "/hermes/1-abc/workspace/proposals/k3x9", "id").as_deref(), Some("k3x9"));
+
+        // Phase 2.6.
+        assert_eq!(endpoint(Method::GET, "/workspace/handover"), Some("hermes/workspace#handover"));
+        assert_eq!(endpoint(Method::POST, "/workspace/handover"), Some("hermes/workspace#post_handover"));
     }
 
     #[test]
     fn settings_ids_become_numbers() {
         let json = settings_json(json!({"departments": [{"name": "A", "tag": "a", "rooms": ["3", 4]}], "duty_managers": ["5"]}));
         assert_eq!(json, json!({"departments": [{"name": "A", "tag": "a", "rooms": [3, 4]}], "duty_managers": [5]}));
+        let handover = settings_json(json!({"handover": {"room_id": " 12 "}}));
+        assert_eq!(handover, json!({"handover": {"room_id": 12}}));
+        assert_eq!(settings_json(json!({"handover": {"room_id": ""}})), json!({"handover": {"room_id": null}}));
         assert_eq!(id_param(Some(&Param::Str(" 12 ".into()))), Some(12));
         assert_eq!(id_param(Some(&Param::Str("-1".into()))), None);
     }

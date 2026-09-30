@@ -551,8 +551,8 @@ fn scratch_store(settings: Settings) -> SettingsStore {
 fn departments() -> Settings {
     Settings {
         departments: vec![
-            Department { name: "Engineering".into(), tag: "engineering".into(), rooms: vec![3] },
-            Department { name: "Security".into(), tag: "security".into(), rooms: vec![4] },
+            Department { name: "Engineering".into(), tag: "engineering".into(), rooms: vec![3], restricted: false },
+            Department { name: "Security".into(), tag: "security".into(), rooms: vec![4], restricted: false },
         ],
         ..Settings::default()
     }
@@ -1069,6 +1069,24 @@ async fn the_settings_page_and_the_bot_view() {
     assert!(html.contains(r#"name="autonomy-close" value="ask_first" aria-label="Close a card: Ask first" checked"#));
     assert!(html.contains("Delete or reassign a card") && html.contains("Never (fixed)"));
     assert!(html.contains("Hermes keeps its own Fizzy account.") && html.contains("fz-hermes (from HERMES_FIZZY_TOKEN)"));
+    // Phase 2.5–2.7: visibility (everyone by default, with the honest note), alerts, the handover.
+    assert!(html.contains(r#"name="visibility_mode" value="everyone" checked"#), "{html}");
+    assert!(html.contains("This only hides cards in Campfire") && html.contains("Anyone with a Fizzy login sees the whole board"));
+    assert!(html.contains("Only administrators can create rooms"));
+    assert!(html.contains(r#"<input type="checkbox" name="restricted">"#), "{html}");
+    assert!(html.contains(r#"name="alerts_enabled" checked"#) && html.contains(r#"name="alert_severities" value="critical" checked"#));
+    assert!(
+        html.contains(r#"name="alert_severities" value="medium">"#)
+            && html.contains(r#"name="new_reminder_min" min="0" max="1440" value="15""#)
+    );
+    assert!(html.contains(r#"<option value="" selected>None yet"#) && html.contains(r#"<option value="3">engineering</option>"#), "{html}");
+    assert!(html.contains(r#"name="shift_ends" value="07:00, 15:00, 23:00""#) && html.contains(r#"name="time_zone" value="Europe/Paris""#));
+    assert!(!html.contains("No department is marked restricted"));
+    let mut restricting = departments();
+    restricting.visibility.mode = crate::visibility::Mode::ByDepartmentRoom;
+    let page = crate::pages::settings_page(workspace.config(), &snapshot, &restricting, &rooms, &[], &[], None);
+    let html = askama::Template::render(&page).unwrap();
+    assert!(html.contains("No department is marked restricted"), "a restriction that hides nothing says so");
 
     let broken = crate::pages::settings_page(
         workspace.config(),
@@ -1088,7 +1106,10 @@ async fn the_settings_page_and_the_bot_view() {
 
     let json = crate::pages::bot_settings(workspace.config(), &snapshot, &workspace.settings(), &rooms, &[(1, "Ann".into())]);
     assert_eq!(json["incident_board"], "Incident Log");
-    assert_eq!(json["departments"][0], json!({"name": "Engineering", "tag": "engineering", "rooms": [{"id": 3, "name": "engineering"}]}));
+    assert_eq!(
+        json["departments"][0],
+        json!({"name": "Engineering", "tag": "engineering", "restricted": false, "rooms": [{"id": 3, "name": "engineering"}]})
+    );
     assert_eq!(json["severity_tags"], json!(["sev-low", "sev-medium", "sev-high", "sev-critical"]));
     assert_eq!(json["duty_managers"], json!([{"id": 1, "name": "Ann"}]));
     assert_eq!(json["confirm_policy"], "anyone");
@@ -1798,3 +1819,5 @@ async fn undo_reads_the_feed_back_to_the_action_or_refuses() {
     workspace.undo(&fizzy, &manager(), &id).await.unwrap();
     assert!(!fizzy.paths().iter().any(|path| path.ends_with("&page=3")), "no further than needed");
 }
+
+mod phase2b;

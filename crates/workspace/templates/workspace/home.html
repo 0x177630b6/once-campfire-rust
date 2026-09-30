@@ -60,6 +60,17 @@
     {%- endfor %}
   </section>
 
+  {%- if !no_department.is_empty() %}
+  <section class="ws-section" aria-labelledby="ws-no-department">
+    <h2 id="ws-no-department" class="ws-section__title">No department <span class="ws-section__hint">open cards to sort</span> <span class="ws-count">{{ no_department.len() }}</span></h2>
+    <ul class="ws-cards">
+      {%- for card in no_department %}
+      {% include "workspace/_card.html" %}
+      {%- endfor %}
+    </ul>
+  </section>
+  {%- endif %}
+
   <section class="ws-section" aria-labelledby="ws-mentions">
     <h2 id="ws-mentions" class="ws-section__title">Mentions <span class="ws-count">{{ mentions.len() }}</span></h2>
     {%- if mentions.is_empty() %}
@@ -77,7 +88,8 @@
   </section>
 
   <section class="ws-section" aria-labelledby="ws-handover">
-    <h2 id="ws-handover" class="ws-section__title">Handover <span class="ws-section__hint">changed in the last 12&nbsp;h</span> <span class="ws-count">{{ handover.len() }}</span></h2>
+    <h2 id="ws-handover" class="ws-section__title">Handover <span class="ws-section__hint">changed in the last 12&nbsp;h</span> <span class="ws-count">{{ handover.len() }}</span>
+      {%- if let Some(url) = handover_url %} <a class="ws-section__link" href="{{ url }}" data-ws-prepare-handover>Prepare handover</a>{% endif %}</h2>
     {%- if handover.is_empty() %}
     <p class="ws-empty">No incident changed in the last 12 hours.</p>
     {%- else %}

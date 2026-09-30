@@ -27,6 +27,7 @@ use crate::fizzy::{Card, CardState, Column, Comment, Severity};
 use crate::home::FizzyStatus;
 use crate::html;
 use crate::settings::{ActionKind, Dial, Policy, Settings};
+use crate::visibility::{Mode, Untagged};
 
 pub const BOARD_PATH: &str = "/workspace/board";
 pub const SETTINGS_PATH: &str = "/workspace/settings";
@@ -189,17 +190,19 @@ pub struct BoardView {
     pub can_create: bool,
 }
 
-pub fn board(
-    config: &WorkspaceConfig,
-    snapshot: &Snapshot,
-    settings: &Settings,
-    filter: &BoardFilter,
-    administrator: bool,
-    can_change: bool,
-    can_create: bool,
-) -> BoardView {
+/// Who is looking at the board: what they may see (phase 2.7) and do.
+#[derive(Clone, Copy)]
+pub struct Viewing<'a> {
+    pub visible: &'a dyn Fn(&Card) -> bool,
+    pub administrator: bool,
+    pub can_change: bool,
+    pub can_create: bool,
+}
+
+pub fn board(config: &WorkspaceConfig, snapshot: &Snapshot, settings: &Settings, filter: &BoardFilter, viewing: &Viewing<'_>) -> BoardView {
+    let Viewing { visible, administrator, can_change, can_create } = *viewing;
     let cards = |numbers: &[u64]| -> Vec<&Card> {
-        numbers.iter().filter_map(|number| snapshot.card(*number)).filter(|card| filter.keeps(card)).collect()
+        numbers.iter().filter_map(|number| snapshot.card(*number)).filter(|card| filter.keeps(card) && visible(card)).collect()
     };
     let open = cards(&snapshot.open);
     let sorted = |mut cards: Vec<&Card>| {
@@ -307,7 +310,14 @@ pub struct RoomPanel {
 }
 
 /// `None` when the room isn't linked to any department (no panel).
-pub fn room_panel(config: &WorkspaceConfig, snapshot: &Snapshot, settings: &Settings, room_id: i64, can_create: bool) -> Option<RoomPanel> {
+pub fn room_panel(
+    config: &WorkspaceConfig,
+    snapshot: &Snapshot,
+    settings: &Settings,
+    room_id: i64,
+    visible: &dyn Fn(&Card) -> bool,
+    can_create: bool,
+) -> Option<RoomPanel> {
     let departments = settings.departments_of_room(room_id);
     if departments.is_empty() {
         return None;
@@ -316,7 +326,7 @@ pub fn room_panel(config: &WorkspaceConfig, snapshot: &Snapshot, settings: &Sett
         .open
         .iter()
         .filter_map(|number| snapshot.card(*number))
-        .filter(|card| !card.closed && departments.iter().any(|department| card.has_tag(&department.tag)))
+        .filter(|card| !card.closed && departments.iter().any(|department| card.has_tag(&department.tag)) && visible(card))
         .collect();
     cards.sort_by_key(|card| (Reverse(card.severity()), Reverse(card.last_active_at), card.number));
     Some(RoomPanel {
@@ -505,6 +515,8 @@ pub struct DepartmentRow {
     pub name: String,
     pub tag: String,
     pub rooms: Vec<Choice>,
+    /// Phase 2.7: only its rooms' members see its cards (with visibility by department room).
+    pub restricted: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Template)]
@@ -528,6 +540,22 @@ pub struct SettingsPage {
     pub hermes_user_id: String,
     /// The one learned from `HERMES_FIZZY_TOKEN`, if any (the app sets it).
     pub hermes_user_learned: Option<String>,
+    /// Phase 2.7: who sees which cards.
+    pub visibility_modes: Vec<Choice>,
+    pub untagged: Vec<Choice>,
+    /// Visibility is restricted but no department is marked restricted: it hides nothing.
+    pub restricts_nothing: bool,
+    /// Phase 2.5: alerts and reminders.
+    pub alerts_enabled: bool,
+    pub alert_severities: Vec<Choice>,
+    pub alert_department_rooms: bool,
+    pub new_reminder_min: u32,
+    pub draft_reminder_min: u32,
+    /// Phase 2.6: the handover room (the first choice is "none"), shift ends, time zone.
+    pub handover_rooms: Vec<Choice>,
+    pub shift_ends: String,
+    pub time_zone: String,
+    pub handover_reminder: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -561,6 +589,7 @@ pub fn settings_page(
                 name: department.name.clone(),
                 tag: department.tag.clone(),
                 rooms: room_choices(&department.rooms),
+                restricted: department.restricted,
             })
             .collect(),
         blank_rooms: room_choices(&[]),
@@ -585,6 +614,29 @@ pub fn settings_page(
             .collect(),
         hermes_user_id: settings.hermes_fizzy_user_id.clone().unwrap_or_default(),
         hermes_user_learned: None,
+        visibility_modes: Mode::ALL
+            .iter()
+            .map(|mode| Choice::new(mode.as_str(), mode.label(), *mode == settings.visibility.mode))
+            .collect(),
+        untagged: Untagged::ALL
+            .iter()
+            .map(|untagged| Choice::new(untagged.as_str(), untagged.label(), *untagged == settings.visibility.untagged))
+            .collect(),
+        restricts_nothing: settings.visibility.restricts() && !settings.has_restricted_departments(),
+        alerts_enabled: settings.notifications.enabled,
+        alert_severities: Severity::ALL
+            .iter()
+            .map(|severity| Choice::new(severity.as_str(), severity.as_str(), settings.notifications.alerts_on(Some(*severity))))
+            .collect(),
+        alert_department_rooms: settings.notifications.department_rooms,
+        new_reminder_min: settings.notifications.new_reminder_min,
+        draft_reminder_min: settings.notifications.draft_reminder_min,
+        handover_rooms: std::iter::once(Choice::new("", "None yet (the handover can’t be posted)", settings.handover.room_id.is_none()))
+            .chain(rooms.iter().map(|(id, name)| Choice::new(id.to_string(), name.clone(), settings.handover.room_id == Some(*id))))
+            .collect(),
+        shift_ends: settings.handover.shift_ends.join(", "),
+        time_zone: settings.handover.time_zone.clone(),
+        handover_reminder: settings.handover.reminder,
     }
 }
 
@@ -604,6 +656,7 @@ pub fn bot_settings(
         "departments": settings.departments.iter().map(|department| json!({
             "name": department.name,
             "tag": department.tag,
+            "restricted": department.restricted,
             "rooms": department.rooms.iter().map(|id| json!({ "id": id, "name": room_name(id) })).collect::<Vec<_>>(),
         })).collect::<Vec<_>>(),
         "duty_managers": managers.iter().map(|(id, name)| json!({ "id": id, "name": name })).collect::<Vec<_>>(),

@@ -320,6 +320,11 @@ impl Workspace {
             Some(card) if card.board.as_ref().is_some_and(|on| on.id == board.id) => card,
             _ => return Err(ActionError::NotFound),
         };
+        // Phase 2.7: a card the viewer may not see is as good as missing.
+        if !self.settings().card_visible(&card.tags, &self.audience_of(viewer)) {
+            self.remember(card);
+            return Err(ActionError::NotFound);
+        }
         let (comments, earlier_comments) = client.latest_comments(&account, number, SHEET_COMMENTS).await.map_err(unavailable)?;
         self.remember(card.clone());
         let snapshot = self.snapshot();
@@ -342,6 +347,14 @@ impl Workspace {
         let writer = self.writer(http, actor)?;
         // One write sequence per card at a time, its error read-back included.
         let _lock = self.lock_card(number).await;
+        // Phase 2.7: a card the actor may not see is as good as missing (checked on a fresh read).
+        let settings = self.settings();
+        if settings.visibility.restricts() {
+            let audience = self.audience_of(actor);
+            if !audience.all && !settings.card_visible(&writer.card(number).await?.tags, &audience) {
+                return Err(ActionError::NotFound);
+            }
+        }
         let result = self.apply(&writer, number, change).await;
         match &result {
             Ok(card) => self.remember(card.clone()),

@@ -494,7 +494,7 @@ mod tests {
 
     fn settings() -> Settings {
         Settings {
-            departments: vec![Department { name: "Front desk".into(), tag: "front-desk".into(), rooms: vec![3] }],
+            departments: vec![Department { name: "Front desk".into(), tag: "front-desk".into(), rooms: vec![3], restricted: false }],
             ..Settings::default()
         }
     }

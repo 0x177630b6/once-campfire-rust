@@ -1,0 +1,25 @@
+{#- Hermes fork: the end-of-shift handover (campfire_workspace::handover), duty managers only.
+    hermes/workspace.js posts the text as JSON to {{ action }}. -#}
+<section class="ws-home ws-handover" aria-labelledby="ws-handover-title">
+  <h1 id="ws-handover-title" class="ws-board__title">Handover</h1>
+  {%- if stale %}
+  <p class="ws-notice" role="status"><strong>Boards unavailable.</strong> This summary is from the last time Fizzy answered.</p>
+  {%- endif %}
+  <p class="ws-muted">Built from the board for the shift ending <strong>{{ shift_end }}</strong>, since {{ since }}{% if let Some(at) = last_posted %} (the last handover was posted <time datetime="{{ at }}" data-local-time-target="datetime"></time>{% if let Some(by) = last_posted_by %} by {{ by }}{% endif %}){% endif %}. Edit it, then post it: it’s posted under your name. Nothing is changed in Fizzy.</p>
+  {%- if left_out > 0 %}
+  <p class="ws-notice" role="note">{{ left_out }} {% if left_out == 1 %}item isn’t{% else %}items aren’t{% endif %} listed: not every member of the handover room may see {% if left_out == 1 %}it{% else %}them{% endif %} (restricted departments). They’re on the board.</p>
+  {%- endif %}
+  {%- if let Some(reason) = blocked %}
+  <p class="ws-notice" role="alert">{{ reason }}{% if let Some(url) = settings_url %} <a class="ws-link" href="{{ url }}">Workspace settings</a>{% endif %}</p>
+  {%- endif %}
+
+  <form class="ws-form" data-ws-handover-form action="{{ action }}" method="post">
+    <label class="ws-field ws-field--wide"><span class="ws-field__label">Handover{% if let Some(room) = room_name %} for {{ room }}{% endif %}</span>
+      <textarea class="input ws-textarea ws-handover__text" name="text" rows="18" maxlength="10000">{{ text }}</textarea>
+    </label>
+    <div class="ws-form__actions">
+      <button type="submit" class="btn btn--reversed ws-btn"{% if !can_post %} disabled{% endif %}>{% if let Some(room) = room_name %}Post to {{ room }}{% else %}Post{% endif %}</button>
+    </div>
+    <p class="ws-sheet__status" role="status" data-ws-status></p>
+  </form>
+</section>

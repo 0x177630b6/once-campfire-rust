@@ -12,29 +12,40 @@
 //!
 //! ```json
 //! {
-//!   "version": 2,
-//!   "departments": [{"name": "Engineering", "tag": "engineering", "rooms": [3, 7]}],
+//!   "version": 3,
+//!   "departments": [{"name": "Engineering", "tag": "engineering", "rooms": [3, 7], "restricted": false}],
 //!   "duty_managers": [1, 5],
 //!   "confirm_policy": "anyone",
 //!   "autonomy": {"create": "ask_first", "comment": "alone", "tag": "alone", "move": "ask_first",
 //!                "close": "ask_first", "step": "ask_first"},
-//!   "hermes_fizzy_user_id": null
+//!   "hermes_fizzy_user_id": null,
+//!   "visibility": {"mode": "everyone", "untagged": "everyone"},
+//!   "notifications": {"enabled": true, "severities": ["critical", "high"], "department_rooms": true,
+//!                     "new_reminder_min": 15, "draft_reminder_min": 10},
+//!   "handover": {"room_id": null, "shift_ends": ["07:00", "15:00", "23:00"], "time_zone": "Europe/Paris",
+//!                "reminder": true}
 //! }
 //! ```
 //!
 //! `duty_managers` absent (or `null`) means Campfire's administrators. Version 2 (phase 2) added
 //! `autonomy` (what Hermes may do alone when it proposes through Campfire, [`Autonomy`]) and
 //! `hermes_fizzy_user_id` (Hermes's Fizzy user, for its log; `null` = learned from
-//! `HERMES_FIZZY_TOKEN`). A version 1 file loads with their defaults; the next save writes version 2.
+//! `HERMES_FIZZY_TOKEN`). Version 3 (phase 2.5–2.7) added a department's `restricted`, `visibility`
+//! ([`crate::visibility`]), `notifications` ([`crate::alerts`]) and `handover`
+//! ([`crate::handover`]). An older file loads with the defaults of what it lacks (nothing changes:
+//! everyone sees every card, no handover room); the next save writes version 3.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 
 use serde::{Deserialize, Serialize};
 
+pub use crate::alerts::Notifications;
+pub use crate::handover::HandoverSettings;
 use crate::home::Viewer;
+pub use crate::visibility::Visibility;
 
-pub const SETTINGS_VERSION: u32 = 2;
+pub const SETTINGS_VERSION: u32 = 3;
 pub const MAX_FIZZY_ID_CHARS: usize = 64;
 pub const MAX_DEPARTMENTS: usize = 50;
 pub const MAX_NAME_CHARS: usize = 60;
@@ -59,6 +70,15 @@ pub struct Settings {
     /// Hermes's Fizzy user id, for its log; `None` = learned from `HERMES_FIZZY_TOKEN` (version 2).
     #[serde(default)]
     pub hermes_fizzy_user_id: Option<String>,
+    /// Who sees which cards in Campfire (version 3, phase 2.7).
+    #[serde(default)]
+    pub visibility: Visibility,
+    /// Alerts and reminders (version 3, phase 2.5).
+    #[serde(default)]
+    pub notifications: Notifications,
+    /// The end-of-shift handover (version 3, phase 2.6).
+    #[serde(default)]
+    pub handover: HandoverSettings,
 }
 
 /// A file without `version` is a version 1 file.
@@ -75,6 +95,9 @@ impl Default for Settings {
             confirm_policy: Policy::default(),
             autonomy: Autonomy::default(),
             hermes_fizzy_user_id: None,
+            visibility: Visibility::default(),
+            notifications: Notifications::default(),
+            handover: HandoverSettings::default(),
         }
     }
 }
@@ -212,6 +235,10 @@ pub struct Department {
     /// Campfire room ids whose cards panel shows this department's cards.
     #[serde(default)]
     pub rooms: Vec<i64>,
+    /// With `visibility.mode` = `by_department_room`, only the members of its rooms (and the duty
+    /// managers and administrators) see its cards (version 3, phase 2.7).
+    #[serde(default)]
+    pub restricted: bool,
 }
 
 /// Who may confirm a Hermes draft and act on incident cards. The one place this is decided
@@ -256,6 +283,7 @@ impl Policy {
     pub fn permits(self, act: &Act, actor: &Viewer, duty_manager: bool) -> bool {
         match (self, act) {
             (_, Act::Undo { for_user_id }) => duty_manager || *for_user_id == Some(actor.id),
+            (_, Act::Handover) => duty_manager,
             (Policy::Anyone, _) => true,
             (_, _) if duty_manager => true,
             (Policy::DutyManagersOnly, _) => false,
@@ -282,6 +310,8 @@ pub enum Act {
     Undo {
         for_user_id: Option<i64>,
     },
+    /// Prepare and post the end-of-shift handover (phase 2.6): duty managers, whatever the policy.
+    Handover,
 }
 
 impl Act {
@@ -292,6 +322,7 @@ impl Act {
                 "Only the person who reported it or a duty manager can confirm this draft."
             }
             (Act::Undo { .. }, _) => "Only duty managers and the person it was done for can undo this.",
+            (Act::Handover, _) => "Only duty managers prepare and post the handover.",
             (_, _) => "Only duty managers can do this.",
         }
     }
@@ -338,9 +369,15 @@ impl Settings {
     /// What a settings file that exists but can't be used means: nobody but the duty managers
     /// (Campfire's administrators, since no one is listed) may act, and no departments, until an
     /// administrator saves the settings again. A policy the owner tightened must not silently
-    /// loosen to `anyone` because the file got damaged.
+    /// loosen to `anyone` because the file got damaged. Likewise the visibility: with no department
+    /// known, every card is "untagged", and only the duty managers see them (phase 2.7).
     pub fn fail_closed() -> Self {
-        Self { confirm_policy: Policy::DutyManagersOnly, autonomy: Autonomy::ask_first(), ..Self::default() }
+        Self {
+            confirm_policy: Policy::DutyManagersOnly,
+            autonomy: Autonomy::ask_first(),
+            visibility: Visibility::closed(),
+            ..Self::default()
+        }
     }
 
     /// The settings cleaned up (trimmed, tags normalized, duplicates of room and user ids dropped),
@@ -397,6 +434,8 @@ impl Settings {
         {
             return invalid(format!("“{id}” isn't a Fizzy user id (letters, digits, “-” and “_”)."));
         }
+        self.notifications = self.notifications.validated()?;
+        self.handover = self.handover.validated()?;
         self.version = SETTINGS_VERSION;
         Ok(self)
     }
@@ -507,7 +546,7 @@ mod tests {
     }
 
     fn department(name: &str, tag: &str, rooms: &[i64]) -> Department {
-        Department { name: name.into(), tag: tag.into(), rooms: rooms.to_vec() }
+        Department { name: name.into(), tag: tag.into(), rooms: rooms.to_vec(), restricted: false }
     }
 
     use crate::store::scratch_dir;
@@ -721,7 +760,7 @@ mod tests {
         next.hermes_fizzy_user_id = Some(" 03hermes ".into());
         store.save(next).unwrap();
         let json: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        assert_eq!(json["version"], 2, "the next save upgrades it");
+        assert_eq!(json["version"], 3, "the next save upgrades it");
         assert_eq!(json["autonomy"]["close"], "never");
         assert_eq!(json["autonomy"]["move"], "ask_first");
         assert_eq!(json["hermes_fizzy_user_id"], "03hermes");
@@ -737,6 +776,58 @@ mod tests {
         let broken = SettingsStore::open(&path);
         assert!(broken.load_error().is_some());
         assert_eq!(broken.get().autonomy, Autonomy::ask_first());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_version_two_file_loads_with_the_phase_2b_defaults() {
+        let dir = scratch_dir("v2");
+        let path = dir.join("workspace.json");
+        std::fs::write(
+            &path,
+            r#"{"version": 2, "departments": [{"name": "Security", "tag": "security", "rooms": [4]}], "confirm_policy": "anyone",
+                "autonomy": {"create": "alone"}, "hermes_fizzy_user_id": null}"#,
+        )
+        .unwrap();
+        let store = SettingsStore::open(&path);
+        assert_eq!(store.load_error(), None);
+        let settings = store.get();
+        assert!(!settings.departments[0].restricted, "not restricted until an administrator says so");
+        assert_eq!(settings.visibility, Visibility::default(), "everyone sees every card, as before");
+        assert_eq!(settings.notifications, Notifications::default());
+        assert!(settings.notifications.enabled && settings.notifications.severities == ["critical", "high"]);
+        assert_eq!((settings.notifications.new_reminder_min, settings.notifications.draft_reminder_min), (15, 10));
+        assert_eq!(settings.handover, HandoverSettings::default());
+        assert_eq!(settings.handover.room_id, None, "no handover room: nothing is posted or reminded");
+        assert_eq!(settings.handover.shift_ends, ["07:00", "15:00", "23:00"]);
+        assert_eq!(settings.autonomy.create, Dial::Alone, "version 2 values are kept");
+
+        let mut next = (*settings).clone();
+        next.departments[0].restricted = true;
+        next.visibility.mode = crate::visibility::Mode::ByDepartmentRoom;
+        next.handover.room_id = Some(4);
+        next.notifications.severities = vec!["critical".into()];
+        store.save(next).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(json["version"], 3);
+        assert_eq!(json["departments"][0]["restricted"], true);
+        assert_eq!(json["visibility"], serde_json::json!({"mode": "by_department_room", "untagged": "everyone"}));
+        assert_eq!(json["handover"]["room_id"], 4);
+        assert_eq!(json["notifications"]["severities"], serde_json::json!(["critical"]));
+        assert_eq!(SettingsStore::open(&path).get(), store.get());
+
+        // Invalid phase 2b values don't validate: the file fails closed (only duty managers see cards).
+        for broken in [
+            r#"{"version": 3, "visibility": {"mode": "secret"}}"#,
+            r#"{"version": 3, "handover": {"time_zone": "Nowhere/Land"}}"#,
+            r#"{"version": 3, "handover": {"shift_ends": ["7h"]}}"#,
+            r#"{"version": 3, "notifications": {"severities": ["urgent"]}}"#,
+        ] {
+            std::fs::write(&path, broken).unwrap();
+            let store = SettingsStore::open(&path);
+            assert!(store.load_error().is_some(), "{broken}");
+            assert_eq!(store.get().visibility, Visibility::closed(), "{broken}");
+        }
         std::fs::remove_dir_all(dir).unwrap();
     }
 

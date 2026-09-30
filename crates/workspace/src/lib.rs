@@ -13,7 +13,9 @@
 //! - [`cache`] and [`fizzy`]: the in-memory picture of Fizzy, refreshed by polling its JSON API;
 //! - phase 2, supervising Hermes: [`journal`] (the durable write log), [`hermes_log`] (what Hermes
 //!   did, direct or through Campfire), [`proposals`] (Hermes asks, Campfire decides by the dial) and
-//!   [`hermes`] (the Hermes tab, proposals' decisions, undo).
+//!   [`hermes`] (the Hermes tab, proposals' decisions, undo); [`alerts`] (critical incidents and
+//!   reminders, as Hermes's direct messages), [`handover`] (the end-of-shift summary, in
+//!   [`shifts`]) and [`visibility`] (restricted departments' cards).
 //!
 //! This crate knows nothing of Campfire's own crates, so upstream merges can't break it and its
 //! tests run anywhere (`cargo test -p campfire_workspace`). The app plugs it in through a thin
@@ -22,11 +24,13 @@
 //! messages, the bots ([`drafts::Bot`]), and the rendering hooks.
 
 pub mod actions;
+pub mod alerts;
 pub mod cache;
 pub mod chips;
 pub mod config;
 pub mod drafts;
 pub mod fizzy;
+pub mod handover;
 pub mod hermes;
 pub mod hermes_log;
 pub mod home;
@@ -36,7 +40,9 @@ pub mod overlay;
 pub mod pages;
 pub mod proposals;
 pub mod settings;
+pub mod shifts;
 mod store;
+pub mod visibility;
 pub mod writes;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -53,6 +59,7 @@ pub use config::{ConfigError, WorkspaceConfig};
 pub use drafts::{Bot, ChatMessage};
 pub use home::{HomeView, Viewer};
 pub use settings::{Act, Policy, Settings, SettingsStore};
+pub use visibility::{Audience, Directory};
 pub use writes::{ActionError, TokenSource, WriteRecord};
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -90,6 +97,14 @@ pub struct Workspace {
     proposals: proposals::ProposalStore,
     /// The Fizzy users behind the tokens, once learned.
     fizzy_users: RwLock<hermes::FizzyUsers>,
+    /// People, rooms and memberships, as the app last read them (phase 2.5 and 2.7).
+    directory: RwLock<Arc<Directory>>,
+    /// What alerts were sent (`notified.json`), and the last handover.
+    notified: alerts::NotifiedStore,
+    /// When the first poll since the start ran: it records alerts without sending them.
+    alerts_primed: Mutex<Option<Timestamp>>,
+    /// Alerts detected and claimed, waiting for the app to deliver them.
+    outbox: Mutex<Vec<alerts::Event>>,
     clock: Box<dyn Fn() -> Timestamp + Send + Sync>,
 }
 
@@ -123,6 +138,7 @@ impl Workspace {
         let journal = journal::ActionLog::open(config.storage_file("actions.jsonl"));
         let hermes_log = hermes_log::HermesLog::open(config.storage_file("hermes-log.jsonl"), Timestamp::now());
         let proposals = proposals::ProposalStore::open(config.storage_file("proposals.json"));
+        let notified = alerts::NotifiedStore::open(config.storage_file("notified.json"));
         Self {
             config,
             snapshot: RwLock::new(Arc::new(Snapshot::default())),
@@ -137,6 +153,10 @@ impl Workspace {
             hermes_log,
             proposals,
             fizzy_users: RwLock::new(hermes::FizzyUsers::default()),
+            directory: RwLock::new(Arc::new(Directory::default())),
+            notified,
+            alerts_primed: Mutex::new(None),
+            outbox: Mutex::new(Vec::new()),
             clock: Box::new(Timestamp::now),
         }
     }
@@ -172,7 +192,10 @@ impl Workspace {
     /// The storage errors since the last call (write log, Hermes log, proposals), for the app to
     /// log.
     pub fn take_storage_errors(&self) -> Vec<String> {
-        [self.journal.take_error(), self.hermes_log.take_error(), self.proposals.take_error()].into_iter().flatten().collect()
+        [self.journal.take_error(), self.hermes_log.take_error(), self.proposals.take_error(), self.notified.take_error()]
+            .into_iter()
+            .flatten()
+            .collect()
     }
 
     /// Waits until nobody else is writing to card `number`, then holds it until the returned
@@ -291,15 +314,88 @@ impl Workspace {
                 kept
             }
         };
-        *self.snapshot.write().unwrap_or_else(|e| e.into_inner()) = Arc::new(next);
+        let next = Arc::new(next);
+        *self.snapshot.write().unwrap_or_else(|e| e.into_inner()) = next.clone();
+        if result.is_ok() {
+            self.detect_alerts(&previous, &next, now);
+        }
         result.map(|_| ())
+    }
+
+    /// Phase 2.5: what should alert after this poll, claimed in `notified.json` (so never twice)
+    /// and queued for the app ([`Workspace::take_alerts`]). The first poll since the start only
+    /// records.
+    fn detect_alerts(&self, previous: &Snapshot, next: &Snapshot, now: Timestamp) {
+        let mut primed = self.alerts_primed.lock().unwrap_or_else(|e| e.into_inner());
+        let events = alerts::detect(previous, next, &self.settings(), &self.proposals.all(), now, *primed);
+        let fresh = self.notified.claim(events, now);
+        match *primed {
+            None => *primed = Some(now),
+            Some(_) => self.outbox.lock().unwrap_or_else(|e| e.into_inner()).extend(fresh),
+        }
+    }
+
+    /// The alerts detected since the last call, as messages: one per person or room, posted by
+    /// `bot_id` (Hermes's bot). `None`: no bot to post them; they're dropped (and counted).
+    pub fn take_alerts(&self, bot_id: Option<i64>) -> Result<Vec<alerts::Delivery>, usize> {
+        let events = std::mem::take(&mut *self.outbox.lock().unwrap_or_else(|e| e.into_inner()));
+        let Some(bot_id) = bot_id else { return if events.is_empty() { Ok(Vec::new()) } else { Err(events.len()) } };
+        let (snapshot, settings, directory, proposals) = (self.snapshot(), self.settings(), self.directory(), self.proposals.all());
+        let plan = alerts::Plan {
+            config: &self.config,
+            snapshot: &snapshot,
+            settings: &settings,
+            directory: &directory,
+            proposals: &proposals,
+            bot_id,
+        };
+        Ok(alerts::plan(&events, &plan))
+    }
+
+    pub fn notified(&self) -> &alerts::NotifiedStore {
+        &self.notified
+    }
+
+    /// People, rooms and memberships (the app reads them every poll).
+    pub fn set_directory(&self, directory: Directory) {
+        *self.directory.write().unwrap_or_else(|e| e.into_inner()) = Arc::new(Directory { loaded: true, ..directory });
+    }
+
+    pub fn directory(&self) -> Arc<Directory> {
+        self.directory.read().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// The rooms a user is in, as a request just read them (fresher than the last poll's).
+    pub fn set_rooms_of(&self, user_id: i64, rooms: impl IntoIterator<Item = i64>) {
+        let mut directory = self.directory.write().unwrap_or_else(|e| e.into_inner());
+        let mut next = (**directory).clone();
+        next.memberships.insert(user_id, rooms.into_iter().collect());
+        *directory = Arc::new(next);
+    }
+
+    /// What `viewer` may see (phase 2.7), from the rooms they're a member of.
+    pub fn audience_of(&self, viewer: &Viewer) -> Audience {
+        self.settings().audience(viewer, self.directory().rooms_of(viewer.id))
+    }
+
+    /// Whether `audience` may see card `number` of the picture. A card the picture doesn't have is
+    /// hidden while visibility is restricted (it can't be checked).
+    pub fn sees_card(&self, audience: &Audience, number: u64) -> bool {
+        let settings = self.settings();
+        if audience.all || !settings.visibility.restricts() {
+            return true;
+        }
+        self.snapshot().card(number).is_some_and(|card| settings.card_visible(&card.tags, audience))
     }
 
     /// The render hook for a message body: card chips, and the draft buttons on a bot's draft.
     /// `None` leaves the body as it is.
     pub fn decorate_message(&self, message_id: i64, creator_id: i64, body_html: &str) -> Option<String> {
         let snapshot = self.snapshot();
-        let chipped = chips::decorate(body_html, &self.config, &snapshot);
+        // Message HTML is cached and shared by every viewer: while visibility is restricted, the
+        // links are only marked, and the page fills them in from `cards.json`, per viewer.
+        let fill = !self.settings().visibility.restricts();
+        let chipped = chips::decorate(body_html, &self.config, &snapshot, fill);
         let buttons = self.bot(creator_id).and_then(|bot| match proposals::marker_in(body_html) {
             // A proposal's draft: its buttons decide that proposal. A marker alone does nothing:
             // only the message Campfire posted for it, by its bot, gets them.
@@ -311,7 +407,7 @@ impl Workspace {
             None => drafts::detect(body_html).is_some().then(|| drafts::buttons(message_id, &bot, None)),
         });
         if let Some(unknown) = chipped.as_deref().map(unknown_cards) {
-            self.want(unknown);
+            self.want(unknown.into_iter().filter(|number| snapshot.card(*number).is_none()).collect());
         }
         match (chipped, buttons) {
             (None, None) => None,
@@ -319,9 +415,24 @@ impl Workspace {
         }
     }
 
+    /// The chips `viewer` may see among `numbers` (phase 2.7); a hidden card gets none, like an
+    /// unknown one.
+    pub fn chips_for(&self, viewer: &Viewer, numbers: &[u64]) -> BTreeMap<u64, String> {
+        let audience = self.audience_of(viewer);
+        let mut chips = self.chips(numbers);
+        chips.retain(|number, _| self.sees_card(&audience, *number));
+        chips
+    }
+
+    /// A card's chip for `viewer`, for the page to swap in after a change.
+    pub fn chip_for(&self, viewer: &Viewer, number: u64) -> Option<String> {
+        self.chips_for(viewer, &[number]).remove(&number)
+    }
+
     /// The chips of the incident-board cards the workspace knows among `numbers`; the others are
-    /// fetched at the next poll (and a card on another board never gets one).
-    pub fn chips(&self, numbers: &[u64]) -> BTreeMap<u64, String> {
+    /// fetched at the next poll (and a card on another board never gets one). Everyone's: the
+    /// routes use [`Workspace::chips_for`].
+    pub(crate) fn chips(&self, numbers: &[u64]) -> BTreeMap<u64, String> {
         let snapshot = self.snapshot();
         let mut chips = BTreeMap::new();
         let mut unknown = Vec::new();
@@ -349,21 +460,43 @@ impl Workspace {
     /// The Home page for `viewer`.
     pub async fn home(&self, viewer: &Viewer, source: &dyn ChatSource, now: Timestamp) -> Result<HomeView, String> {
         let messages = source.recent_messages(now - drafts::DRAFT_TTL - SignedDuration::from_mins(5)).await?;
-        let mut view = home::build(&self.config, &self.snapshot(), viewer, &messages, &self.bots(), now);
         let rooms = source.room_ids().await?;
+        self.set_rooms_of(viewer.id, rooms.iter().copied());
+        let (snapshot, settings) = (self.snapshot(), self.settings());
+        let mut view = home::build(&self.config, &snapshot, viewer, &messages, &self.bots(), now);
+        let audience = self.audience_of(viewer);
+        view.retain_cards(|number| self.sees_card(&audience, number));
         view.proposals = self.pending_items(viewer, &rooms);
+        if settings.is_duty_manager(viewer) {
+            view.handover_url = Some(handover::HANDOVER_PATH.into());
+            // Decision D3: cards with no department, for the duty managers to sort.
+            if !settings.departments.is_empty() {
+                view.no_department = snapshot
+                    .open
+                    .iter()
+                    .filter_map(|number| snapshot.card(*number))
+                    .filter(|card| !card.closed && settings.departments_of(&card.tags).is_empty())
+                    .map(|card| home::card_item(&self.config, &snapshot, card))
+                    .collect();
+            }
+        }
         Ok(view)
     }
 
     /// The board page, from the last poll.
     pub fn board(&self, viewer: &Viewer, filter: &pages::BoardFilter) -> pages::BoardView {
         let (can_change, can_create) = (self.may(&Act::ChangeCard, viewer), self.may(&Act::CreateCard, viewer));
-        pages::board(&self.config, &self.snapshot(), &self.settings(), filter, viewer.administrator, can_change, can_create)
+        let (settings, audience) = (self.settings(), self.audience_of(viewer));
+        let visible = |card: &Card| settings.card_visible(&card.tags, &audience);
+        let viewing = pages::Viewing { visible: &visible, administrator: viewer.administrator, can_change, can_create };
+        pages::board(&self.config, &self.snapshot(), &settings, filter, &viewing)
     }
 
     /// A room's cards panel; `None` when the room isn't linked to a department.
     pub fn room_panel(&self, viewer: &Viewer, room_id: i64) -> Option<pages::RoomPanel> {
-        pages::room_panel(&self.config, &self.snapshot(), &self.settings(), room_id, self.may(&Act::CreateCard, viewer))
+        let (settings, audience) = (self.settings(), self.audience_of(viewer));
+        let visible = |card: &Card| settings.card_visible(&card.tags, &audience);
+        pages::room_panel(&self.config, &self.snapshot(), &settings, room_id, &visible, self.may(&Act::CreateCard, viewer))
     }
 
     /// The new-card form, prefilled from a message's text and its room's department.
@@ -371,8 +504,9 @@ impl Workspace {
         pages::new_card_form(&self.config, &self.snapshot(), &self.settings(), room_id, message_text, source)
     }
 
-    /// A card's chip, for the page to swap in after a change.
-    pub fn chip(&self, number: u64) -> Option<String> {
+    /// A card's chip, whoever looks (tests; the routes use [`Workspace::chip_for`]).
+    #[cfg(test)]
+    pub(crate) fn chip(&self, number: u64) -> Option<String> {
         self.chips(&[number]).remove(&number)
     }
 }

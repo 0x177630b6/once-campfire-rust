@@ -67,8 +67,10 @@ pub fn card_link(config: &WorkspaceConfig, snapshot: &Snapshot, number: u64) -> 
 }
 
 /// `html` with its card links turned into chips (or marked for the page to fill in), or `None`
-/// when it has none.
-pub fn decorate(html: &str, config: &WorkspaceConfig, snapshot: &Snapshot) -> Option<String> {
+/// when it has none. `fill: false` (visibility restricted, phase 2.7) only marks them all: message
+/// HTML is shared by every viewer, and the page fills each chip in from `cards.json`, which answers
+/// per viewer (a hidden card stays a plain link).
+pub fn decorate(html: &str, config: &WorkspaceConfig, snapshot: &Snapshot, fill: bool) -> Option<String> {
     static ANCHOR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?is)<a\b([^>]*)>(.*?)</a\s*>").unwrap());
     static HREF: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?i)\bhref\s*=\s*"([^"]*)""#).unwrap());
     if !html.contains("/cards/") {
@@ -84,7 +86,7 @@ pub fn decorate(html: &str, config: &WorkspaceConfig, snapshot: &Snapshot) -> Op
             return caps[0].to_string();
         }
         changed = true;
-        match snapshot.card(number) {
+        match snapshot.card(number).filter(|_| fill) {
             Some(card) => {
                 let original = HREF.captures(attributes).map(|href| decode_entities(&href[1])).unwrap_or_default();
                 let link = card_link(config, snapshot, number).unwrap_or(original);
@@ -179,7 +181,7 @@ mod tests {
             r#"<div class="lexxy-content">Filed: <a target="_blank" href="http://localhost:8484/897/cards/12">http://localhost:8484/897/cards/12</a>"#,
             r#" and <a href="http://fizzy/897/cards/99">#99</a>, see <a href="https://example.com">x</a></div>"#
         );
-        let out = decorate(html, &config(), &snapshot()).unwrap();
+        let out = decorate(html, &config(), &snapshot(), true).unwrap();
         assert!(out.contains(r#"<a class="ws-chip ws-cc--lime" href="https://192.168.0.114:8444/897/cards/12" target="_blank" rel="noopener" data-ws-card="12""#), "{out}");
         assert!(out.contains(r#"<span class="ws-chip__title">Lift B &lt;out&gt; of service</span><span class="ws-sev ws-sev--high">high</span><span class="ws-chip__state">In progress</span>"#), "{out}");
         assert!(out.contains(r#"<a data-ws-card="99" href="http://fizzy/897/cards/99">#99</a>"#), "{out}");
@@ -189,9 +191,18 @@ mod tests {
 
     #[test]
     fn leaves_other_messages_alone() {
-        assert_eq!(decorate("<p>no links</p>", &config(), &snapshot()), None);
-        assert_eq!(decorate(r#"<a href="https://example.com/cards/1">x</a>"#, &config(), &snapshot()), None);
-        let chip = decorate(r#"<a href="http://fizzy/897/cards/12">x</a>"#, &config(), &snapshot()).unwrap();
-        assert_eq!(decorate(&chip, &config(), &snapshot()), None, "idempotent");
+        assert_eq!(decorate("<p>no links</p>", &config(), &snapshot(), true), None);
+        assert_eq!(decorate(r#"<a href="https://example.com/cards/1">x</a>"#, &config(), &snapshot(), true), None);
+        let chip = decorate(r#"<a href="http://fizzy/897/cards/12">x</a>"#, &config(), &snapshot(), true).unwrap();
+        assert_eq!(decorate(&chip, &config(), &snapshot(), true), None, "idempotent");
+    }
+
+    #[test]
+    fn restricted_visibility_only_marks_links() {
+        let html = r#"<p>See <a href="http://fizzy/897/cards/12">http://fizzy/897/cards/12</a></p>"#;
+        let marked = decorate(html, &config(), &snapshot(), false).unwrap();
+        assert_eq!(marked, r#"<p>See <a data-ws-card="12" href="http://fizzy/897/cards/12">http://fizzy/897/cards/12</a></p>"#);
+        assert!(!marked.contains("Lift B"), "no card data in the shared HTML");
+        assert_eq!(decorate(&marked, &config(), &snapshot(), false), None, "idempotent");
     }
 }

@@ -22,6 +22,7 @@
             <label class="ws-tag-toggle"><input type="checkbox" name="rooms" value="{{ room.value }}"{% if room.selected %} checked{% endif %}><span>{{ room.label }}</span></label>
             {%- endfor %}
           </fieldset>
+          <label class="ws-radio"><input type="checkbox" name="restricted"{% if department.restricted %} checked{% endif %}> Restricted: with visibility by department room (below), only the members of its linked rooms see its cards</label>
           <button type="button" class="btn ws-btn ws-btn--small" data-ws-remove-department>Remove</button>
         </li>
         {%- endfor %}
@@ -37,6 +38,7 @@
             <label class="ws-tag-toggle"><input type="checkbox" name="rooms" value="{{ room.value }}"><span>{{ room.label }}</span></label>
             {%- endfor %}
           </fieldset>
+          <label class="ws-radio"><input type="checkbox" name="restricted"> Restricted: with visibility by department room (below), only the members of its linked rooms see its cards</label>
           <button type="button" class="btn ws-btn ws-btn--small" data-ws-remove-department>Remove</button>
         </li>
       </template>
@@ -80,6 +82,55 @@
       <p class="ws-muted" data-ws-autonomy-scope><strong>Hermes keeps its own Fizzy account.</strong> This dial applies to what Hermes proposes through Campfire, which is what its incident-report skill does by default. With its own account it can still change cards directly (its skill only does that when Campfire can’t be reached), and its replies to @Hermes mentions in Fizzy comments are posted with that account by its bridge: neither goes through this dial (not even “Comment”). Those show in the Hermes tab as “direct”, and only the simple ones can be undone.</p>
       <label class="ws-field"><span class="ws-field__label">Hermes’s Fizzy user id</span><input class="input" type="text" name="hermes_fizzy_user_id" value="{{ hermes_user_id }}" maxlength="64" pattern="[A-Za-z0-9_\-]*" placeholder="{% if let Some(learned) = hermes_user_learned %}{{ learned }} (from HERMES_FIZZY_TOKEN){% else %}learned from HERMES_FIZZY_TOKEN{% endif %}"></label>
       <p class="ws-muted">For the Hermes tab to show what Hermes does directly in Fizzy. Leave it empty when Campfire holds Hermes’s token.</p>
+    </section>
+
+    <section class="ws-section" aria-labelledby="ws-settings-visibility">
+      <h2 id="ws-settings-visibility" class="ws-section__title">Who sees which cards</h2>
+      {%- for mode in visibility_modes %}
+      <label class="ws-radio"><input type="radio" name="visibility_mode" value="{{ mode.value }}"{% if mode.selected %} checked{% endif %}> {{ mode.label }}</label>
+      {%- endfor %}
+      <fieldset class="ws-dept__rooms"><legend class="ws-field__label">Cards with no department</legend>
+        {%- for choice in untagged %}
+        <label class="ws-radio"><input type="radio" name="visibility_untagged" value="{{ choice.value }}"{% if choice.selected %} checked{% endif %}> {{ choice.label }}</label>
+        {%- endfor %}
+      </fieldset>
+      {%- if restricts_nothing %}
+      <p class="ws-notice" role="note">No department is marked restricted: everyone still sees every card that has a department.</p>
+      {%- endif %}
+      <p class="ws-muted" data-ws-visibility-scope><strong>This only hides cards in Campfire</strong> (Home, the board, room panels, card chips and sheets, mentions, the Hermes tab, alerts, the handover). Anyone with a Fizzy login sees the whole board in Fizzy itself. A room’s members are whoever was added to it, so turn on Campfire’s “Only administrators can create rooms” (Account settings): otherwise anyone can create a room, and whoever an administrator links it to a department grants its members that department’s cards.</p>
+    </section>
+
+    <section class="ws-section" aria-labelledby="ws-settings-alerts">
+      <h2 id="ws-settings-alerts" class="ws-section__title">Alerts</h2>
+      <label class="ws-radio"><input type="checkbox" name="alerts_enabled"{% if alerts_enabled %} checked{% endif %}> Alert the duty managers (a direct message from Hermes, with a phone notification where Campfire’s push is set up)</label>
+      <fieldset class="ws-dept__rooms"><legend class="ws-field__label">When a card is filed as, or raised to</legend>
+        {%- for severity in alert_severities %}
+        <label class="ws-tag-toggle"><input type="checkbox" name="alert_severities" value="{{ severity.value }}"{% if severity.selected %} checked{% endif %}><span>{{ severity.label }}</span></label>
+        {%- endfor %}
+      </fieldset>
+      <label class="ws-radio"><input type="checkbox" name="alert_department_rooms"{% if alert_department_rooms %} checked{% endif %}> Also a short notice in the rooms of the card’s departments (Hermes must be a member)</label>
+      <div class="ws-sheet__fields">
+        <label class="ws-field"><span class="ws-field__label">Remind if still in New after (minutes, 0 = never)</span><input class="input" type="number" name="new_reminder_min" min="0" max="1440" value="{{ new_reminder_min }}"></label>
+        <label class="ws-field"><span class="ws-field__label">Remind about a waiting Hermes proposal after (minutes, 0 = never)</span><input class="input" type="number" name="draft_reminder_min" min="0" max="1440" value="{{ draft_reminder_min }}"></label>
+      </div>
+      <p class="ws-muted">A waiting proposal first reminds the person it’s for, then, as long again later, the duty managers. Nothing is sent twice, and nothing already there when Campfire starts is alerted. Alerts follow “Who sees which cards”.</p>
+    </section>
+
+    <section class="ws-section" aria-labelledby="ws-settings-handover">
+      <h2 id="ws-settings-handover" class="ws-section__title">Handover</h2>
+      <label class="ws-field"><span class="ws-field__label">Posted in</span>
+        <select class="input ws-select" name="handover_room">
+          {%- for room in handover_rooms %}
+          <option value="{{ room.value }}"{% if room.selected %} selected{% endif %}>{{ room.label }}</option>
+          {%- endfor %}
+        </select>
+      </label>
+      <div class="ws-sheet__fields">
+        <label class="ws-field"><span class="ws-field__label">Shifts end at</span><input class="input" type="text" name="shift_ends" value="{{ shift_ends }}" placeholder="07:00, 15:00, 23:00"></label>
+        <label class="ws-field"><span class="ws-field__label">Time zone</span><input class="input" type="text" name="time_zone" value="{{ time_zone }}" placeholder="Europe/Paris" maxlength="64"></label>
+      </div>
+      <label class="ws-radio"><input type="checkbox" name="handover_reminder"{% if handover_reminder %} checked{% endif %}> Remind the duty managers at each shift end (once a room is set)</label>
+      <p class="ws-muted">Duty managers prepare it from Home: a summary built from the board, which they edit and post under their own name. Nothing is written to Fizzy.</p>
     </section>
 
     <div class="ws-form__actions">

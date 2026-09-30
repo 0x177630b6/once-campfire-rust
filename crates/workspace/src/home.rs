@@ -114,6 +114,24 @@ pub struct HomeView {
     pub board_page: String,
     /// Administrators only.
     pub settings_url: Option<String>,
+    /// Duty managers: "Prepare handover" (phase 2.6).
+    pub handover_url: Option<String>,
+    /// Duty managers: open cards with no department (decision D3), while departments are set.
+    pub no_department: Vec<CardItem>,
+}
+
+impl HomeView {
+    /// Keeps only the cards `visible` lets through (phase 2.7): open incidents, mentions, handover.
+    pub fn retain_cards(&mut self, visible: impl Fn(u64) -> bool) {
+        for group in &mut self.open {
+            group.cards.retain(|card| visible(card.number));
+        }
+        self.open.retain(|group| !group.cards.is_empty());
+        self.open_count = self.open.iter().map(|group| group.cards.len()).sum();
+        self.mentions.retain(|mention| visible(mention.card_number));
+        self.handover.retain(|card| visible(card.number));
+        self.no_department.retain(|card| visible(card.number));
+    }
 }
 
 pub fn build(
@@ -148,6 +166,8 @@ pub fn build(
         retry_seconds: config.poll_interval.as_secs(),
         board_page: crate::pages::BOARD_PATH.into(),
         settings_url: viewer.administrator.then(|| crate::pages::SETTINGS_PATH.into()),
+        handover_url: None,
+        no_department: Vec::new(),
     }
 }
 
