@@ -66,23 +66,72 @@ export function changeBody(kind, { value, checked, checkedValues = [], stepId } 
   return null
 }
 
+// "07:00, 15:00 23:00" → [ "07:00", "15:00", "23:00" ] (the server validates them).
+export function shiftEnds(text) {
+  return String(text || "").split(/[\s,;]+/).map(value => value.trim()).filter(Boolean)
+}
+
+// A whole number of minutes from a number field; empty or invalid → `fallback`.
+function minutes(value, fallback) {
+  const number = Number(String(value ?? "").trim())
+  return String(value ?? "").trim() !== "" && Number.isInteger(number) && number >= 0 ? number : fallback
+}
+
 // The settings form as POST /workspace/settings reads it. `autonomy` maps action → dial; ids are
-// numbers.
-export function settingsBody({ departments = [], listed = false, managers = [], policy, autonomy = {}, hermesUserId = "" } = {}) {
+// numbers. Phase 2.5–2.7: `visibility`, `notifications`, `handover`.
+export function settingsBody({
+  departments = [], listed = false, managers = [], policy, autonomy = {}, hermesUserId = "",
+  visibility = {}, notifications = {}, handover = {}
+} = {}) {
+  const room = Number(handover.room)
   return {
     departments: departments.map(department => ({
       name: department.name,
       tag: department.tag,
-      rooms: (department.rooms || []).map(Number).filter(Number.isFinite)
+      rooms: (department.rooms || []).map(Number).filter(Number.isFinite),
+      restricted: Boolean(department.restricted)
     })),
     duty_managers: listed ? managers.map(Number).filter(Number.isFinite) : null,
     confirm_policy: policy || "anyone",
     autonomy: { ...autonomy },
-    hermes_fizzy_user_id: String(hermesUserId || "").trim() || null
+    hermes_fizzy_user_id: String(hermesUserId || "").trim() || null,
+    visibility: { mode: visibility.mode || "everyone", untagged: visibility.untagged || "everyone" },
+    notifications: {
+      enabled: Boolean(notifications.enabled),
+      severities: [ ...(notifications.severities || []) ],
+      department_rooms: Boolean(notifications.departmentRooms),
+      new_reminder_min: minutes(notifications.newReminder, 15),
+      draft_reminder_min: minutes(notifications.draftReminder, 10)
+    },
+    handover: {
+      room_id: String(handover.room ?? "").trim() !== "" && Number.isInteger(room) && room > 0 ? room : null,
+      shift_ends: shiftEnds(handover.shiftEnds),
+      time_zone: String(handover.timeZone || "").trim(),
+      reminder: Boolean(handover.reminder)
+    }
   }
+}
+
+// Phase 2.7: with visibility restricted, `cards.json` only has the cards the viewer may see. The
+// chips on the page whose number isn't in the reply (a card now hidden from them, in a page
+// rendered before) become plain links again. Otherwise nothing changes.
+export function chipsToHide(chipNumbers, reply = {}) {
+  if (reply?.visibility !== "by_department_room") return []
+  const cards = reply?.cards || {}
+  return [ ...new Set(chipNumbers.map(String)) ].filter(number => !(number in cards))
+}
+
+export const MAX_HANDOVER_CHARS = 10_000
+
+// What's wrong with a handover's text before posting it, or null.
+export function handoverProblem(text) {
+  const value = String(text ?? "")
+  if (!value.trim()) return "The handover is empty."
+  if ([ ...value ].length > MAX_HANDOVER_CHARS) return `The handover is too long (${MAX_HANDOVER_CHARS} characters at most).`
+  return null
 }
 
 globalThis.HermesWorkspace = {
   SIGNED_OUT, UNREACHABLE, MAX_CHIPS, hash, chipNumbers, proposalIds, replyProblem, draftBusyText, draftSentText,
-  proposalStateText, changeBody, settingsBody
+  proposalStateText, changeBody, settingsBody, shiftEnds, chipsToHide, MAX_HANDOVER_CHARS, handoverProblem
 }

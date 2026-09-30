@@ -21,6 +21,9 @@
 //   when the policy lets the viewer create cards (`[data-ws-viewer][data-ws-can-create]`).
 // - A failed change in the sheet shows the error and keeps what was typed in the comment box.
 // - Settings: the departments rows (add / remove) and the form, posted as JSON.
+// - Visibility (phase 2.7): with restricted departments, message HTML only marks card links, and the
+//   chips come from `cards.json`, which answers per viewer; a chip it leaves out becomes a plain link.
+// - Handover (phase 2.6): the handover page's text is posted as JSON to /workspace/handover.
 // - Hermes (phase 2): a Hermes proposal's draft (`[data-ws-proposal]`) has the same buttons, posting
 //   to the proposal's decision route; its state (filed, dismissed, timed out) comes from
 //   GET /workspace/hermes/proposals.json, since the buttons live in the cached message HTML. The
@@ -78,14 +81,28 @@ async function refreshChips() {
   if (numbers.length === 0) return
 
   const url = document.querySelector(".ws-tabbar")?.dataset.wsCardsUrl || CARDS_URL
-  let cards
+  let reply, cards
   try {
     const response = await fetch(`${url}?numbers=${numbers.join(",")}`, { credentials: "same-origin", headers: { "Accept": "application/json" } })
     // Signed out: the session check redirects to the sign-in page, which fetch follows (200, HTML).
     if (!response.ok || response.redirected) return
-    cards = (await response.json())?.cards || {}
+    reply = await response.json()
+    cards = reply?.cards || {}
   } catch {
     return // Fizzy or the network is down: links stay as they are
+  }
+
+  // Visibility restricted (phase 2.7): a chip of a card this viewer may not see (in a page rendered
+  // before) goes back to being a plain link.
+  const shown = [ ...document.querySelectorAll("a.ws-chip[data-ws-card]") ].map(chip => chip.dataset.wsCard)
+  for (const number of logic.chipsToHide(shown, reply)) {
+    for (const chip of document.querySelectorAll(`a.ws-chip[data-ws-card="${number}"]`)) {
+      const link = document.createElement("a")
+      link.href = chip.getAttribute("href") || "#"
+      link.dataset.wsCard = number
+      link.textContent = link.href
+      chip.replaceWith(link)
+    }
   }
 
   for (const link of document.querySelectorAll("a[data-ws-card]")) {
@@ -466,6 +483,9 @@ onEvent("submit", event => {
   } else if (form.matches?.("[data-ws-settings-form]")) {
     event.preventDefault()
     saveSettings(form)
+  } else if (form.matches?.("[data-ws-handover-form]")) {
+    event.preventDefault()
+    postHandover(form)
   }
 })
 
@@ -649,8 +669,11 @@ async function saveSettings(form) {
   const departments = [ ...form.querySelectorAll("[data-ws-departments] [data-ws-department]") ].map(row => ({
     name: row.querySelector("input[name=name]").value,
     tag: row.querySelector("input[name=tag]").value,
-    rooms: [ ...row.querySelectorAll("input[name=rooms]:checked") ].map(input => input.value)
+    rooms: [ ...row.querySelectorAll("input[name=rooms]:checked") ].map(input => input.value),
+    restricted: Boolean(row.querySelector("input[name=restricted]")?.checked)
   }))
+  const checked = name => Boolean(form.querySelector(`input[name=${name}]`)?.checked)
+  const value = name => form.elements[name]?.value ?? ""
   const autonomy = {}
   for (const row of form.querySelectorAll("[data-ws-autonomy]")) {
     const checked = row.querySelector("input[type=radio]:checked")
@@ -662,7 +685,24 @@ async function saveSettings(form) {
     managers: [ ...form.querySelectorAll("input[name=duty_managers]:checked") ].map(input => input.value),
     policy: form.querySelector("input[name=confirm_policy]:checked")?.value,
     autonomy,
-    hermesUserId: form.querySelector("input[name=hermes_fizzy_user_id]")?.value
+    hermesUserId: form.querySelector("input[name=hermes_fizzy_user_id]")?.value,
+    visibility: {
+      mode: form.querySelector("input[name=visibility_mode]:checked")?.value,
+      untagged: form.querySelector("input[name=visibility_untagged]:checked")?.value
+    },
+    notifications: {
+      enabled: checked("alerts_enabled"),
+      severities: [ ...form.querySelectorAll("input[name=alert_severities]:checked") ].map(input => input.value),
+      departmentRooms: checked("alert_department_rooms"),
+      newReminder: value("new_reminder_min"),
+      draftReminder: value("draft_reminder_min")
+    },
+    handover: {
+      room: value("handover_room"),
+      shiftEnds: value("shift_ends"),
+      timeZone: value("time_zone"),
+      reminder: checked("handover_reminder")
+    }
   })
   const submit = form.querySelector("[type=submit]")
   submit.disabled = true
@@ -674,6 +714,24 @@ async function saveSettings(form) {
     showStatus(form, error.message, "error")
   } finally {
     submit.disabled = false
+  }
+}
+
+// --- Handover (phase 2.6) ---------------------------------------------------------------------------
+
+async function postHandover(form) {
+  const text = form.elements.text?.value ?? ""
+  const problem = logic.handoverProblem(text)
+  if (problem) return showStatus(form, problem, "error")
+  const submit = form.querySelector("[type=submit]")
+  submit.disabled = true
+  showStatus(form, "Posting…")
+  try {
+    const data = await postJSON(form.action, { text })
+    showStatus(form, data.message || "Posted.", "ok")
+  } catch (error) {
+    submit.disabled = false
+    showStatus(form, error.message, "error")
   }
 }
 

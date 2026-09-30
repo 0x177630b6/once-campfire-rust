@@ -68,17 +68,49 @@ test("the settings form as the server reads it", () => {
     managers: [ "5", "1" ],
     policy: "author_or_duty_manager",
     autonomy: { create: "ask_first", close: "never" },
-    hermesUserId: "  03hermes "
+    hermesUserId: "  03hermes ",
+    visibility: { mode: "by_department_room", untagged: "duty_managers" },
+    notifications: { enabled: true, severities: [ "critical" ], departmentRooms: false, newReminder: "20", draftReminder: "" },
+    handover: { room: "12", shiftEnds: "06:00, 14:00 22:00", timeZone: " Europe/Paris ", reminder: true }
   })
   assert.deepEqual(body, {
-    departments: [ { name: "Engineering", tag: "#Engineering", rooms: [ 3, 7 ] } ],
+    departments: [ { name: "Engineering", tag: "#Engineering", rooms: [ 3, 7 ], restricted: false } ],
     duty_managers: [ 5, 1 ],
     confirm_policy: "author_or_duty_manager",
     autonomy: { create: "ask_first", close: "never" },
-    hermes_fizzy_user_id: "03hermes"
+    hermes_fizzy_user_id: "03hermes",
+    visibility: { mode: "by_department_room", untagged: "duty_managers" },
+    notifications: { enabled: true, severities: [ "critical" ], department_rooms: false, new_reminder_min: 20, draft_reminder_min: 10 },
+    handover: { room_id: 12, shift_ends: [ "06:00", "14:00", "22:00" ], time_zone: "Europe/Paris", reminder: true }
   })
   const defaults = logic.settingsBody({ managers: [ "5" ] })
   assert.equal(defaults.duty_managers, null, "not listed: the administrators")
   assert.equal(defaults.confirm_policy, "anyone")
   assert.equal(defaults.hermes_fizzy_user_id, null)
+  assert.deepEqual(defaults.visibility, { mode: "everyone", untagged: "everyone" })
+  assert.equal(defaults.handover.room_id, null, "no room picked")
+  assert.equal(logic.settingsBody({ handover: { room: "x" } }).handover.room_id, null)
+  assert.equal(logic.settingsBody({ notifications: { newReminder: "-3" } }).notifications.new_reminder_min, 15)
+  assert.equal(logic.settingsBody({ departments: [ { name: "S", tag: "s", restricted: "on" } ] }).departments[0].restricted, true)
+})
+
+test("shift ends are split on commas and spaces", () => {
+  assert.deepEqual(logic.shiftEnds("07:00,15:00  23:00;"), [ "07:00", "15:00", "23:00" ])
+  assert.deepEqual(logic.shiftEnds(""), [])
+  assert.deepEqual(logic.shiftEnds(undefined), [])
+})
+
+test("with restricted visibility, chips the reply leaves out become plain links", () => {
+  const reply = { visibility: "by_department_room", cards: { 12: "<a class=\"ws-chip\">…</a>" } }
+  assert.deepEqual(logic.chipsToHide([ "12", "13", 13 ], reply), [ "13" ])
+  assert.deepEqual(logic.chipsToHide([ "12", "13" ], { cards: {} }), [], "everyone: unknown cards keep what they show")
+  assert.deepEqual(logic.chipsToHide([ "13" ], undefined), [])
+})
+
+test("a handover is checked before it's posted", () => {
+  assert.equal(logic.handoverProblem("  \n "), "The handover is empty.")
+  assert.equal(logic.handoverProblem(undefined), "The handover is empty.")
+  assert.match(logic.handoverProblem("x".repeat(logic.MAX_HANDOVER_CHARS + 1)), /too long/)
+  assert.equal(logic.handoverProblem("é".repeat(logic.MAX_HANDOVER_CHARS)), null, "characters, not bytes")
+  assert.equal(logic.handoverProblem("Handover: all quiet."), null)
 })
