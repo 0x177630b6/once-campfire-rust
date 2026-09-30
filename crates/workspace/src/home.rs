@@ -3,7 +3,8 @@
 //! - **To confirm**: Hermes drafts in the user's rooms that nobody answered yet ([`drafts::pending`]).
 //! - **Open incidents**: the incident board's cards that aren't closed, by column ("New" first,
 //!   "Monitoring" last), most severe first, then oldest first.
-//! - **Mentions**: Fizzy comments that @mention the user (matched by email address), last 7 days.
+//! - **Mentions**: comments on the incident board's cards that @mention the user (matched by email
+//!   address), last 7 days.
 //! - **Handover**: incident cards that changed in the last 12 hours, closed ones included.
 //!
 //! Every card links to Fizzy. The page renders from the last poll; while Fizzy is unreachable it
@@ -191,7 +192,11 @@ fn groups(config: &WorkspaceConfig, snapshot: &Snapshot, cards: &[&Card]) -> Vec
     groups
 }
 
+/// Matched by email address, which Campfire users can change without verification: someone who
+/// takes a colleague's address sees their mentions. Hence incident-board cards only, whose content
+/// the workspace shows every signed-in user anyway (docs/hermes-workspace.md).
 fn mentions(config: &WorkspaceConfig, snapshot: &Snapshot, viewer: &Viewer, now: Timestamp) -> Vec<MentionItem> {
+    let Some(board) = snapshot.board.as_ref() else { return Vec::new() };
     let Some(email) = viewer.email.as_deref().map(|email| email.trim().to_lowercase()).filter(|email| !email.is_empty()) else {
         return Vec::new();
     };
@@ -199,6 +204,7 @@ fn mentions(config: &WorkspaceConfig, snapshot: &Snapshot, viewer: &Viewer, now:
     snapshot
         .mentions
         .iter()
+        .filter(|mention| mention.board_id == board.id)
         .filter(|mention| mention.mentioned.iter().any(|id| ids.contains(id.as_str())) && !ids.contains(mention.author_id.as_str()))
         .filter(|mention| now.duration_since(mention.created_at) <= crate::cache::MENTION_RETENTION)
         .take(MAX_MENTIONS)
@@ -232,7 +238,7 @@ fn handover(config: &WorkspaceConfig, snapshot: &Snapshot, now: Timestamp) -> Ve
 mod tests {
     use super::*;
     use crate::cache::Mention;
-    use crate::fizzy::{Board, Column, UserRef};
+    use crate::fizzy::{Board, BoardRef, Column, UserRef};
 
     fn config() -> WorkspaceConfig {
         WorkspaceConfig::from_lookup(|name| match name {
@@ -255,6 +261,7 @@ mod tests {
             title: title.into(),
             tags: tags.iter().map(|tag| tag.to_string()).collect(),
             column: column.map(|name| Column { id: name.into(), name: name.into(), color: None }),
+            board: Some(BoardRef { id: "b1".into(), name: "Incident Log".into() }),
             created_at: Some(now() - SignedDuration::from_hours(hours_ago + 1)),
             last_active_at: Some(now() - SignedDuration::from_hours(hours_ago)),
             ..Card::default()
@@ -296,6 +303,7 @@ mod tests {
             Mention {
                 id: "a2".into(),
                 card_number: 11,
+                board_id: "b1".into(),
                 board_name: "Incident Log".into(),
                 author_id: "fz-sophie".into(),
                 author_name: "Sophie".into(),
@@ -306,6 +314,7 @@ mod tests {
             Mention {
                 id: "a1".into(),
                 card_number: 12,
+                board_id: "b1".into(),
                 board_name: "Incident Log".into(),
                 author_id: "fz-maya".into(),
                 author_name: "Maya".into(),
@@ -341,6 +350,15 @@ mod tests {
         assert_eq!(home.mentions[0].card_title, "Noise complaint — room 1204");
         let nobody = Viewer { email: None, ..maya() };
         assert!(build(&config(), &snapshot(), &nobody, &[], &[], now()).mentions.is_empty());
+    }
+
+    #[test]
+    fn mentions_on_other_boards_are_not_shown() {
+        let mut snapshot = snapshot();
+        for mention in &mut snapshot.mentions {
+            mention.board_id = "b2".into();
+        }
+        assert!(build(&config(), &snapshot, &maya(), &[], &[], now()).mentions.is_empty());
     }
 
     #[test]

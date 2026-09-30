@@ -1,6 +1,7 @@
 //! Card chips: a link to a Fizzy card (`…/<account>/cards/<n>`) in a message becomes a small
 //! Fizzy-style card showing its number, title, severity and column, at render time. The stored
-//! message is never changed. A card the workspace doesn't know yet keeps its plain link, marked
+//! message is never changed. Only incident-board cards become chips ([`Snapshot::card`]). A card
+//! the workspace doesn't know yet (or that is on another board) keeps its plain link, marked
 //! with `data-ws-card` so the page can swap in the chip once Fizzy has been asked
 //! (`hermes/workspace.js`, `GET /workspace/cards.json`), which is also how chips in cached message
 //! fragments stay current.

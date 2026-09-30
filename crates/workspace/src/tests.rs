@@ -84,6 +84,12 @@ fn card(number: u64, title: &str, tags: &[&str], column: Option<&str>) -> Value 
     })
 }
 
+/// `card` on another board than the incident board.
+fn elsewhere(mut card: Value) -> Value {
+    card["board"] = json!({"id": "b2", "name": "Engineering"});
+    card
+}
+
 fn mention_sgid(user_id: &str) -> String {
     base64::engine::general_purpose::STANDARD.encode(format!(r#"{{"_rails":{{"data":"gid://fizzy/User/{user_id}"}}}}"#))
 }
@@ -112,14 +118,30 @@ fn fizzy() -> FakeFizzy {
                 "creator": {"id": "fz-karim", "name": "Karim"}
             },
             {
+                "id": "act3", "action": "comment_created", "created_at": "2026-09-30T08:20:00Z",
+                "url": "http://localhost:8484/897/cards/40",
+                "eventable_type": "Comment",
+                "eventable": {"body": {"plain_text": "@Maya salary review draft attached", "html": format!(
+                    r#"<p><action-text-attachment content-type="application/vnd.actiontext.mention" sgid="{}--x"></action-text-attachment> salary review draft attached</p>"#,
+                    mention_sgid("fz-maya"))}, "card": {"id": "id40", "url": "http://localhost:8484/897/cards/40"}},
+                "board": {"id": "b2", "name": "Engineering"},
+                "creator": {"id": "fz-karim", "name": "Karim"}
+            },
+            {
                 "id": "act1", "action": "card_triaged", "created_at": "2026-09-30T08:00:00Z",
-                "eventable_type": "Card", "eventable": card(40, "Ice machine, 5th floor", &["sev-medium"], Some("Doing")),
+                "eventable_type": "Card", "eventable": elsewhere(card(40, "Ice machine, 5th floor", &["sev-medium"], Some("Doing"))),
                 "board": {"id": "b2", "name": "Engineering"}
+            },
+            {
+                "id": "act0", "action": "card_triaged", "created_at": "2026-09-30T07:00:00Z",
+                "eventable_type": "Card", "eventable": card(41, "Broken window, bar", &["sev-low"], Some("In progress")),
+                "board": {"id": "b1", "name": "Incident Log"}
             }
         ]),
     );
     fizzy.reply("/897/users/fz-maya.json", json!({"id": "fz-maya", "name": "Maya", "email_address": "Maya@Hotel.test"}));
     fizzy.reply("/897/cards/77.json", card(77, "Pool pump knocking", &[], Some("In progress")));
+    fizzy.reply("/897/cards/78.json", elsewhere(card(78, "Payroll export", &[], Some("Doing"))));
     fizzy
 }
 
@@ -133,9 +155,11 @@ async fn a_poll_builds_the_picture() {
     assert_eq!(snapshot.account.as_deref(), Some("897"));
     assert_eq!(snapshot.board.as_ref().unwrap().id, "b1");
     assert_eq!(snapshot.open, vec![13, 12], "both pages");
-    assert_eq!(snapshot.card(40).unwrap().title, "Ice machine, 5th floor", "cards from the activity feed");
+    assert_eq!(snapshot.card(41).unwrap().title, "Broken window, bar", "incident cards from the activity feed");
+    assert!(snapshot.card(40).is_none() && !snapshot.cards.contains_key(&40), "not other boards' cards");
     assert_eq!(snapshot.origins, vec!["http://localhost:8484".to_string()]);
-    assert_eq!(snapshot.mentions.len(), 1);
+    assert_eq!(snapshot.mentions.len(), 1, "not other boards' mentions");
+    assert_eq!(snapshot.mentions[0].card_number, 12);
     assert_eq!(snapshot.emails.get("fz-maya").map(String::as_str), Some("maya@hotel.test"));
     assert_eq!(snapshot.last_success, Some(now()));
 
@@ -162,6 +186,56 @@ async fn chips_ask_for_unknown_cards_and_the_next_poll_fetches_them() {
     workspace.poll(&fizzy, now()).await.unwrap();
     assert!(fizzy.paths().contains(&"/897/cards/77.json".to_string()));
     assert!(workspace.chips(&[77])[&77].contains("Pool pump knocking"));
+}
+
+#[tokio::test]
+async fn cards_on_other_boards_never_become_chips() {
+    let fizzy = fizzy();
+    let workspace = Workspace::new(config());
+    workspace.poll(&fizzy, now()).await.unwrap();
+    assert!(workspace.chips(&[40, 78]).is_empty());
+
+    workspace.poll(&fizzy, now()).await.unwrap();
+    let asked = |path: &str| fizzy.paths().iter().filter(|asked| *asked == path).count();
+    assert_eq!((asked("/897/cards/40.json"), asked("/897/cards/78.json")), (1, 1));
+    assert!(workspace.chips(&[40, 78]).is_empty());
+    let link = r#"<a href="http://fizzy/897/cards/78">#78</a>"#;
+    assert_eq!(
+        workspace.decorate_message(1, 5, link).unwrap(),
+        r#"<a data-ws-card="78" href="http://fizzy/897/cards/78">#78</a>"#,
+        "a plain link"
+    );
+
+    workspace.poll(&fizzy, now() + SignedDuration::from_mins(1)).await.unwrap();
+    assert_eq!(asked("/897/cards/78.json"), 1, "not asked again right away");
+}
+
+#[tokio::test]
+async fn one_failed_lookup_does_not_fail_the_poll() {
+    let fizzy = fizzy();
+    fizzy.replies.lock().unwrap().insert("/897/cards/76.json".into(), (500, json!({"status": 500}), None));
+    fizzy.replies.lock().unwrap().insert("/897/users/fz-maya.json".into(), (500, json!({"status": 500}), None));
+    let workspace = Workspace::new(config());
+    workspace.poll(&fizzy, now()).await.unwrap();
+    workspace.chips(&[76, 77]);
+    fizzy.reply("/897/cards.json?board_ids%5B%5D=b1&indexed_by=not_now", json!([card(14, "Wet floor sign missing", &[], None)]));
+
+    workspace.poll(&fizzy, now() + SignedDuration::from_secs(30)).await.unwrap();
+    let snapshot = workspace.snapshot();
+    assert!(!snapshot.is_stale());
+    assert_eq!(snapshot.open, vec![13, 12, 14], "the lists still refresh");
+    assert!(snapshot.card(77).is_some(), "the other lookups still happen");
+    assert_eq!(snapshot.lookup_errors, vec!["card 76: Fizzy answered 500".to_string(), "user fz-maya: Fizzy answered 500".to_string()]);
+    assert!(snapshot.lookup_errors.iter().all(|error| !error.contains(TOKEN)));
+
+    // Both are asked again next poll.
+    fizzy.reply("/897/cards/76.json", card(76, "Sauna heater tripped", &[], None));
+    fizzy.reply("/897/users/fz-maya.json", json!({"id": "fz-maya", "name": "Maya", "email_address": "maya@hotel.test"}));
+    workspace.poll(&fizzy, now() + SignedDuration::from_secs(60)).await.unwrap();
+    let snapshot = workspace.snapshot();
+    assert!(workspace.chips(&[76])[&76].contains("Sauna heater tripped"));
+    assert_eq!(snapshot.emails.get("fz-maya").map(String::as_str), Some("maya@hotel.test"));
+    assert!(snapshot.lookup_errors.is_empty());
 }
 
 #[tokio::test]

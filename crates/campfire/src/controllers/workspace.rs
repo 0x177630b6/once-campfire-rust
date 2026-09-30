@@ -72,12 +72,14 @@ pub async fn start(app: &App) {
 }
 
 /// Polls every `FIZZY_POLL_S` for as long as the app lives. Logs when Fizzy goes up or down, not
-/// on every failed poll.
+/// on every failed poll, and single card or user lookups that failed when they change (they're
+/// retried every poll).
 async fn poll_loop(app: Weak<AppState>, workspace: Arc<Workspace>) {
     let http = FizzyHttp { net: Network::system() };
     let mut interval = tokio::time::interval(workspace.config().poll_interval);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut last_ok: Option<bool> = None;
+    let mut last_lookup_errors: Vec<String> = Vec::new();
     loop {
         interval.tick().await;
         let Some(app) = app.upgrade() else { return };
@@ -98,6 +100,12 @@ async fn poll_loop(app: Weak<AppState>, workspace: Arc<Workspace>) {
             }
             Err(error) => tracing::debug!(%error, "could not poll Fizzy"),
         }
+        // Never carry the token (`FizzyError`).
+        let lookup_errors = workspace.snapshot().lookup_errors.clone();
+        if !lookup_errors.is_empty() && lookup_errors != last_lookup_errors {
+            tracing::warn!(errors = %lookup_errors.join("; "), "some Fizzy lookups failed; retrying at the next poll");
+        }
+        last_lookup_errors = lookup_errors;
     }
 }
 

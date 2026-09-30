@@ -86,7 +86,8 @@ impl Workspace {
     }
 
     /// One poll of Fizzy. On failure the previous picture stays, marked with the error (which
-    /// never contains the token); a missing board is looked up again next time.
+    /// never contains the token); a missing board is looked up again next time. A single card or
+    /// user lookup that fails isn't a failure: it's in [`Snapshot::lookup_errors`] and retried.
     pub async fn poll(&self, http: &dyn fizzy::HttpClient, now: Timestamp) -> Result<(), fizzy::FizzyError> {
         let client = fizzy::Client::new(http, &self.config);
         let previous = self.snapshot();
@@ -126,8 +127,8 @@ impl Workspace {
         }
     }
 
-    /// The chips of the cards the workspace knows among `numbers`; the others are fetched at the
-    /// next poll.
+    /// The chips of the incident-board cards the workspace knows among `numbers`; the others are
+    /// fetched at the next poll (and a card on another board never gets one).
     pub fn chips(&self, numbers: &[u64]) -> BTreeMap<u64, String> {
         let snapshot = self.snapshot();
         let mut chips = BTreeMap::new();

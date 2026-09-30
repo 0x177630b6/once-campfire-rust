@@ -2,17 +2,21 @@
 //!
 //! Fizzy can't send webhooks to private addresses, so the app polls every `FIZZY_POLL_S`: the
 //! incident board's open, "Not Now" and recently closed cards, its columns, page 1 of
-//! `/activities` (card changes on every board, and comments that @mention people), the users those
-//! mentions name (for their email address, once each), and the few cards chips asked for that
-//! nothing else brought in. A poll that fails keeps the previous picture and records the error, so
-//! chips and the Home page keep working (marked stale) while Fizzy is down.
+//! `/activities` (card changes, and comments that @mention people), the users those mentions name
+//! (for their email address, once each), and the few cards chips asked for that nothing else
+//! brought in. A poll that fails keeps the previous picture and records the error, so chips and the
+//! Home page keep working (marked stale) while Fizzy is down.
+//!
+//! Only the incident board is kept: the token may see other boards (activities are account-wide,
+//! and a chip can ask for any card number), but a card or mention from another board never enters
+//! the picture, so it can't reach a chip or the Home page, which every signed-in user sees.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use jiff::{SignedDuration, Timestamp};
 use serde_json::Value;
 
-use crate::fizzy::{self, Board, Card, Client, Column, FizzyError};
+use crate::fizzy::{self, Board, BoardRef, Card, Client, Column, FizzyError};
 use crate::html;
 
 /// Mentions older than this leave the Home page.
@@ -33,6 +37,7 @@ pub struct Mention {
     /// The activity's id.
     pub id: String,
     pub card_number: u64,
+    pub board_id: String,
     pub board_name: String,
     pub author_id: String,
     pub author_name: String,
@@ -65,12 +70,16 @@ pub struct Snapshot {
     pub origins: Vec<String>,
     pub last_success: Option<Timestamp>,
     pub last_error: Option<String>,
+    /// The single card and user lookups the last poll couldn't make (retried next poll). They don't
+    /// fail the poll; never carry the token.
+    pub lookup_errors: Vec<String>,
     pub successful_polls: u64,
 }
 
 impl Snapshot {
+    /// A card of the incident board (the only board the workspace shows).
     pub fn card(&self, number: u64) -> Option<&Card> {
-        self.cards.get(&number)
+        self.cards.get(&number).filter(|card| self.board.as_ref().is_none_or(|board| on_board(card, board)))
     }
 
     /// Fizzy's answers are older than the last poll attempt.
@@ -82,8 +91,10 @@ impl Snapshot {
 /// What the poll keeps between runs that isn't shown.
 #[derive(Debug, Default)]
 pub(crate) struct PollState {
-    /// Card numbers Fizzy answered 404 for, and when.
+    /// Card numbers Fizzy answered 404 for, or that are on another board, and when.
     missing: HashMap<u64, Timestamp>,
+    /// Cards chips asked for whose lookup failed: asked again next poll.
+    retry: BTreeSet<u64>,
     /// Users whose lookup failed or who have no address.
     unknown_users: HashSet<String>,
 }
@@ -92,7 +103,7 @@ pub(crate) async fn poll(
     client: &Client<'_>,
     previous: &Snapshot,
     incident_board: &str,
-    wanted: BTreeSet<u64>,
+    mut wanted: BTreeSet<u64>,
     state: &mut PollState,
     now: Timestamp,
 ) -> Result<Snapshot, FizzyError> {
@@ -116,10 +127,13 @@ pub(crate) async fn poll(
 
     next.open = open.iter().chain(&postponed).map(|card| card.number).collect();
     next.recently_closed = closed.iter().map(|card| card.number).collect();
-    for card in open.into_iter().chain(postponed).chain(closed) {
-        upsert(&mut next, card);
+    // A board that changed (renamed to another, or recreated): the old one's cards go.
+    next.cards.retain(|_, card| on_board(card, &board));
+    for mut card in open.into_iter().chain(postponed).chain(closed) {
+        // Listed by board, so on it even if the reply left the board out.
+        card.board.get_or_insert_with(|| BoardRef { id: board.id.clone(), name: board.name.clone() });
+        upsert(&mut next, &board, card);
     }
-    next.board = Some(board);
     next.columns = columns;
 
     let mut mentions = Vec::new();
@@ -127,15 +141,20 @@ pub(crate) async fn poll(
         if activity.eventable_type.as_deref() == Some("Card")
             && let Ok(card) = serde_json::from_value::<Card>(activity.eventable.clone())
         {
-            upsert(&mut next, card);
+            upsert(&mut next, &board, card);
         }
-        if let Some(mention) = mention_in(activity) {
+        if let Some(mention) = mention_in(activity).filter(|mention| mention.board_id == board.id) {
             mentions.push(mention);
         }
     }
+    next.mentions.retain(|mention| mention.board_id == board.id);
     merge_mentions(&mut next, mentions, now);
 
-    // Cards chips asked for that nothing above brought in.
+    // A single card or user that can't be looked up doesn't fail the poll: it's noted and asked
+    // again next time, and the lists above still refresh.
+    let mut lookup_errors = Vec::new();
+    // Cards chips asked for that nothing above brought in (or whose lookup failed last time).
+    wanted.append(&mut state.retry);
     let wanted: Vec<u64> = wanted
         .into_iter()
         .filter(|number| !next.cards.contains_key(number))
@@ -143,24 +162,19 @@ pub(crate) async fn poll(
         .take(WANTED_PER_POLL)
         .collect();
     for number in wanted {
-        match client.card(&account, number).await? {
-            Some(card) => upsert(&mut next, card),
-            None => {
-                state.missing.insert(number, now);
-            }
+        if let Err(error) = fetch_card(client, &account, &board, number, &mut next, state, now).await {
+            state.retry.insert(number);
+            lookup_errors.push(format!("card {number}: {error}"));
         }
     }
-    // Cards mentions are about, for their titles.
+    // Cards mentions are about, for their titles (asked again every poll until found).
     let untitled: Vec<u64> = next.mentions.iter().map(|m| m.card_number).filter(|n| !next.cards.contains_key(n)).collect();
     for number in untitled.into_iter().collect::<BTreeSet<_>>().into_iter().take(WANTED_PER_POLL) {
         if state.missing.get(&number).is_some_and(|at| now.duration_since(*at) <= MISSING_RETRY) {
             continue;
         }
-        match client.card(&account, number).await? {
-            Some(card) => upsert(&mut next, card),
-            None => {
-                state.missing.insert(number, now);
-            }
+        if let Err(error) = fetch_card(client, &account, &board, number, &mut next, state, now).await {
+            lookup_errors.push(format!("card {number}: {error}"));
         }
     }
 
@@ -173,16 +187,20 @@ pub(crate) async fn poll(
         .cloned()
         .collect();
     for id in unknown.into_iter().take(USERS_PER_POLL) {
-        match client.user(&account, &id).await? {
-            Some(user) if user.email_address.as_deref().is_some_and(|email| !email.trim().is_empty()) => {
+        match client.user(&account, &id).await {
+            Ok(Some(user)) if user.email_address.as_deref().is_some_and(|email| !email.trim().is_empty()) => {
                 next.emails.insert(id, user.email_address.unwrap_or_default().trim().to_lowercase());
             }
-            _ => {
+            Ok(_) => {
                 state.unknown_users.insert(id);
             }
+            // Not marked unknown: asked again next poll.
+            Err(error) => lookup_errors.push(format!("user {id}: {error}")),
         }
     }
 
+    next.board = Some(board);
+    next.lookup_errors = lookup_errors;
     next.last_success = Some(now);
     next.last_error = None;
     next.successful_polls = previous.successful_polls + 1;
@@ -199,7 +217,37 @@ fn find_board(boards: &[Board], wanted: &str) -> Option<Board> {
         .cloned()
 }
 
-fn upsert(snapshot: &mut Snapshot, card: Card) {
+/// One card by number, kept if it's on the incident board; a 404 or a card on another board isn't
+/// asked for again before [`MISSING_RETRY`].
+async fn fetch_card(
+    client: &Client<'_>,
+    account: &str,
+    board: &Board,
+    number: u64,
+    next: &mut Snapshot,
+    state: &mut PollState,
+    now: Timestamp,
+) -> Result<(), FizzyError> {
+    match client.card(account, number).await? {
+        Some(card) if on_board(&card, board) => upsert(next, board, card),
+        _ => {
+            state.missing.insert(number, now);
+        }
+    }
+    Ok(())
+}
+
+fn on_board(card: &Card, board: &Board) -> bool {
+    card.board.as_ref().is_some_and(|on| on.id == board.id)
+}
+
+/// Keeps `card` if it's on the incident board; drops it otherwise (and forgets an older copy, for
+/// a card moved to another board).
+fn upsert(snapshot: &mut Snapshot, board: &Board, card: Card) {
+    if !on_board(&card, board) {
+        snapshot.cards.remove(&card.number);
+        return;
+    }
     if let Some(origin) = snapshot.account.as_deref().and_then(|account| origin_of(&card.url, account))
         && !snapshot.origins.contains(&origin)
         && snapshot.origins.len() < MAX_ORIGINS
@@ -230,6 +278,7 @@ fn mention_in(activity: &fizzy::Activity) -> Option<Mention> {
     Some(Mention {
         id: activity.id.clone(),
         card_number: fizzy::card_number_in(card_url)?,
+        board_id: activity.board.as_ref().map(|board| board.id.clone()).unwrap_or_default(),
         board_name: activity.board.as_ref().map(|board| board.name.clone()).unwrap_or_default(),
         author_id: creator.id,
         author_name: creator.name,
