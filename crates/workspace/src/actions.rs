@@ -21,11 +21,16 @@ use crate::fizzy::{Card, Client, HttpClient, Severity};
 use crate::home::Viewer;
 use crate::pages::{self, CardSheet, SheetInput};
 use crate::settings::{Act, Settings};
-use crate::writes::{ActionError, Writer};
+use crate::writes::{ActingIdentity, ActionError, Purpose, Writer};
 
 pub const MAX_TITLE_CHARS: usize = 255;
 pub const MAX_TEXT_CHARS: usize = 10_000;
 pub const MAX_COMMENT_CHARS: usize = 5_000;
+/// Other tags a new card may get (the report's type: `incident`, `handover`…).
+pub const MAX_EXTRA_TAGS: usize = 5;
+/// Steps a new card may get (the report's follow-up actions).
+pub const MAX_STEPS: usize = 20;
+pub const MAX_STEP_CHARS: usize = 255;
 /// The newest comments a sheet shows (the earlier ones are in Fizzy).
 pub const SHEET_COMMENTS: usize = 100;
 
@@ -115,7 +120,7 @@ impl Change {
         })
     }
 
-    fn act(&self) -> Act {
+    pub(crate) fn act(&self) -> Act {
         match self {
             Self::Comment(_) => Act::Comment,
             _ => Act::ChangeCard,
@@ -150,6 +155,10 @@ pub struct NewCard {
     pub description: String,
     pub severity: Option<Severity>,
     pub departments: Vec<String>,
+    /// Other tags (a proposal's report type, `incident`…): lowercase titles.
+    pub tags: Vec<String>,
+    /// Steps to add (a proposal's follow-up actions).
+    pub steps: Vec<String>,
     /// The message it comes from, for the comment that links back.
     pub source: Option<CardSource>,
 }
@@ -198,8 +207,54 @@ impl NewCard {
                     .ok_or_else(|| ActionError::invalid("invalid_severity", "Severity must be low, medium, high or critical."))?,
             ),
         };
-        let departments = department_tags(params.get("departments").or_else(|| params.get("department")), settings)?;
-        Ok(Self { title, description, severity, departments, source: None })
+        let mut departments = department_tags(params.get("departments").or_else(|| params.get("department")), settings)?;
+        let mut tags = Vec::new();
+        for value in strings(params.get("tags"), "invalid_tags", "Tags must be a list of words.")? {
+            let tag = crate::settings::normalize_tag(&value);
+            if tag.is_empty() {
+                continue;
+            }
+            if let Some(department) = settings.department_by_tag(&tag) {
+                if !departments.contains(&department.tag) {
+                    departments.push(department.tag.clone());
+                }
+                continue;
+            }
+            if tag.chars().count() > crate::settings::MAX_TAG_CHARS
+                || !tag.chars().all(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '.'))
+                || Severity::from_tag(&tag).is_some()
+                || tag.starts_with("sev-")
+            {
+                return Err(ActionError::invalid("invalid_tag", format!("“{tag}” can't be used as a tag here.")));
+            }
+            if !tags.contains(&tag) {
+                tags.push(tag);
+            }
+        }
+        if tags.len() > MAX_EXTRA_TAGS {
+            return Err(ActionError::invalid("too_many_tags", format!("{MAX_EXTRA_TAGS} other tags at most.")));
+        }
+        let steps: Vec<String> = strings(params.get("steps"), "invalid_steps", "Steps must be a list of lines.")?
+            .into_iter()
+            .map(|step| step.split_whitespace().collect::<Vec<_>>().join(" "))
+            .filter(|step| !step.is_empty())
+            .collect();
+        if steps.len() > MAX_STEPS || steps.iter().any(|step| step.chars().count() > MAX_STEP_CHARS) {
+            return Err(ActionError::invalid("invalid_steps", format!("{MAX_STEPS} steps at most, {MAX_STEP_CHARS} characters each.")));
+        }
+        Ok(Self { title, description, severity, departments, tags, steps, source: None })
+    }
+}
+
+/// A list of strings (or one string); `None`/`null` is empty.
+fn strings(value: Option<&Value>, code: &'static str, message: &str) -> Result<Vec<String>, ActionError> {
+    match value {
+        None | Some(Value::Null) => Ok(Vec::new()),
+        Some(Value::String(one)) => Ok(vec![one.clone()]),
+        Some(Value::Array(values)) if values.iter().all(Value::is_string) => {
+            Ok(values.iter().filter_map(Value::as_str).map(str::to_string).collect())
+        }
+        Some(_) => Err(ActionError::invalid(code, message)),
     }
 }
 
@@ -213,7 +268,7 @@ pub struct Created {
     pub warning: Option<String>,
 }
 
-fn severity_tags() -> Vec<String> {
+pub(crate) fn severity_tags() -> Vec<String> {
     Severity::ALL.iter().map(|severity| severity.tag()).collect()
 }
 
@@ -230,7 +285,7 @@ impl Workspace {
     }
 
     /// The account and the incident board, once a poll found them.
-    fn target(&self) -> Result<(String, crate::fizzy::Board), ActionError> {
+    pub(crate) fn target(&self) -> Result<(String, crate::fizzy::Board), ActionError> {
         let snapshot = self.snapshot();
         match (&snapshot.account, &snapshot.board) {
             (Some(account), Some(board)) => Ok((account.clone(), board.clone())),
@@ -239,9 +294,20 @@ impl Workspace {
     }
 
     fn writer<'a>(&'a self, http: &'a dyn HttpClient, actor: &'a Viewer) -> Result<Writer<'a>, ActionError> {
-        let (account, board) = self.target()?;
         let identity = self.tokens.identity(actor).map_err(ActionError::Forbidden)?;
-        Ok(Writer { client: Client::new(http, &self.config), identity, actor, account, board, audit: &*self.audit })
+        self.writer_as(http, actor, identity, Purpose::person())
+    }
+
+    /// A writer as `identity`, for `purpose` (a proposal Campfire runs for Hermes, an undo).
+    pub(crate) fn writer_as<'a>(
+        &'a self,
+        http: &'a dyn HttpClient,
+        actor: &'a Viewer,
+        identity: ActingIdentity,
+        purpose: Purpose,
+    ) -> Result<Writer<'a>, ActionError> {
+        let (account, board) = self.target()?;
+        Ok(Writer { client: Client::new(http, &self.config), identity, actor, account, board, workspace: self, purpose })
     }
 
     /// A card's sheet, read fresh from Fizzy (steps and comments included). 404 for a card that
@@ -289,7 +355,7 @@ impl Workspace {
         result
     }
 
-    async fn apply(&self, writer: &Writer<'_>, number: u64, change: Change) -> Result<Card, ActionError> {
+    pub(crate) async fn apply(&self, writer: &Writer<'_>, number: u64, change: Change) -> Result<Card, ActionError> {
         match change {
             Change::Move(target) => {
                 let card = writer.card(number).await?;
@@ -351,6 +417,12 @@ impl Workspace {
     pub async fn create_card(&self, http: &dyn HttpClient, actor: &Viewer, new: NewCard) -> Result<Created, ActionError> {
         self.authorize(&Act::CreateCard, actor)?;
         let writer = self.writer(http, actor)?;
+        self.create_with(&writer, new).await
+    }
+
+    /// The card, its tags, its steps, the comment linking back: what [`Workspace::create_card`] and
+    /// a proposal do once allowed.
+    pub(crate) async fn create_with(&self, writer: &Writer<'_>, new: NewCard) -> Result<Created, ActionError> {
         let description = crate::writes::comment_html(None, &new.description, None);
         let card = writer.create_card(&new.title, &description).await?;
         let number = card.number;
@@ -360,13 +432,21 @@ impl Workspace {
 
         let mut managed = severity_tags();
         managed.extend(self.settings().departments.iter().map(|department| department.tag.clone()));
+        managed.extend(new.tags.iter().cloned());
         let mut wanted: Vec<String> = new.severity.map(|severity| vec![severity.tag()]).unwrap_or_default();
         wanted.extend(new.departments.iter().cloned());
+        wanted.extend(new.tags.iter().cloned());
         let mut card = card;
         if !wanted.is_empty() {
             match writer.set_tags(number, &managed, &wanted).await {
                 Ok(tagged) => card = tagged,
                 Err(error) => warnings.push(format!("its tags couldn't be set ({error})")),
+            }
+        }
+        for (at, step) in new.steps.iter().enumerate() {
+            if let Err(error) = writer.add_step(number, step).await {
+                warnings.push(format!("{} of its steps couldn't be added ({error})", new.steps.len() - at));
+                break;
             }
         }
         if let Some(source) = &new.source {

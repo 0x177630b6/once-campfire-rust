@@ -30,6 +30,10 @@ struct FakeFizzy {
     no_total_count: Mutex<bool>,
     /// Writes whose path or body contains this answer that status (and change nothing).
     fail_writes: Mutex<Option<(String, u16)>>,
+    /// Token → the Fizzy user `GET /my/identity` names (else the canned reply).
+    identities: Mutex<HashMap<String, String>>,
+    /// Comments written: `(card, id, token)`.
+    comment_tokens: Mutex<Vec<(u64, String, String)>>,
 }
 
 impl FakeFizzy {
@@ -68,14 +72,26 @@ impl FakeFizzy {
     }
 
     /// A write to a live card, Fizzy's way. `None`: not a route the fake knows.
-    fn write(&self, method: &str, path: &str, body: &Value) -> Option<(u16, Value)> {
+    fn write(&self, method: &str, path: &str, body: &Value, token: &str) -> Option<(u16, Value)> {
         static CARD: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-            regex::Regex::new(r"^/897/cards/(\d+)/(taggings|triage|not_now|closure|comments|steps/(\w+))\.json$").unwrap()
+            regex::Regex::new(r"^/897/cards/(\d+)/(taggings|triage|not_now|closure|comments|steps|steps/(\w+)|comments/(\w+))\.json$")
+                .unwrap()
         });
+        static TITLE: std::sync::LazyLock<regex::Regex> =
+            std::sync::LazyLock::new(|| regex::Regex::new(r"^/897/cards/(\d+)\.json$").unwrap());
+        if method == "PUT"
+            && let Some(caps) = TITLE.captures(path)
+        {
+            let mut cards = self.cards.lock().unwrap();
+            let card = cards.get_mut(&caps[1].parse::<u64>().unwrap())?;
+            card["title"] = body["card"]["title"].clone();
+            return Some((200, card.clone()));
+        }
         if method == "POST" && path == "/897/boards/b1/cards.json" {
             let number = 100 + self.cards.lock().unwrap().len() as u64;
             let mut created = card(number, body["card"]["title"].as_str().unwrap_or(""), &[], None);
             created["description"] = json!(crate::html::to_text(body["card"]["description"].as_str().unwrap_or("")));
+            created["steps"] = json!([]);
             self.live(created.clone());
             return Some((201, created));
         }
@@ -116,10 +132,29 @@ impl FakeFizzy {
             }
             ("DELETE", "closure") => card["closed"] = json!(false),
             ("POST", "comments") => {
-                let comment = json!({"id": "cm", "created_at": "2026-09-30T09:00:00Z", "creator": {"id": "fz-hermes", "name": "Hermes"},
+                let id = format!("cm{}", self.comment_tokens.lock().unwrap().len() + 1);
+                let comment = json!({"id": id, "created_at": "2026-09-30T09:00:00Z", "creator": {"id": "fz-hermes", "name": "Hermes"},
                     "body": {"html": body["comment"]["body"], "plain_text": crate::html::to_text(body["comment"]["body"].as_str().unwrap())}});
                 self.comments.lock().unwrap().entry(number).or_default().push(comment.clone());
+                self.comment_tokens.lock().unwrap().push((number, id, token.to_string()));
                 return Some((201, comment));
+            }
+            ("DELETE", comment) if comment.starts_with("comments/") => {
+                let id = caps[4].to_string();
+                let tokens = self.comment_tokens.lock().unwrap();
+                let (_, _, author) = tokens.iter().find(|(card, known, _)| *card == number && *known == id)?;
+                // Only the comment's creator may delete it.
+                if author != token {
+                    return Some((403, Value::Null));
+                }
+                self.comments.lock().unwrap().entry(number).or_default().retain(|comment| comment["id"] != json!(id));
+                return Some((204, Value::Null));
+            }
+            ("POST", "steps") => {
+                let steps = card["steps"].as_array_mut()?;
+                let step = json!({"id": format!("s{}", steps.len() + 1), "content": body["step"]["content"], "completed": false});
+                steps.push(step.clone());
+                return Some((201, step));
             }
             ("PUT", step) if step.starts_with("steps/") => {
                 let id = &caps[3];
@@ -159,7 +194,12 @@ impl HttpClient for FakeFizzy {
                 {
                     return json(status, json!({"status": status}));
                 }
-                return match self.write(method, path, body.as_ref().unwrap_or(&Value::Null)) {
+                let token = headers
+                    .iter()
+                    .find(|(name, _)| *name == "Authorization")
+                    .map(|(_, value)| value.trim_start_matches("Bearer ").to_string())
+                    .unwrap_or_default();
+                return match self.write(method, path, body.as_ref().unwrap_or(&Value::Null), &token) {
                     Some((status, body)) => json(status, body),
                     None => json(404, json!({"status": 404, "error": "Not Found"})),
                 };
@@ -169,6 +209,13 @@ impl HttpClient for FakeFizzy {
                 && let Some(card) = self.cards.lock().unwrap().get(&number)
             {
                 return json(200, card.clone());
+            }
+            if path == "/my/identity.json" {
+                let token =
+                    headers.iter().find(|(name, _)| *name == "Authorization").map(|(_, v)| v.trim_start_matches("Bearer ").to_string());
+                if let Some(user) = token.and_then(|token| self.identities.lock().unwrap().get(&token).cloned()) {
+                    return json(200, json!({"accounts": [{"slug": "/897", "user": {"id": user}}]}));
+                }
             }
             let (list, page) = match path.split_once("?page=") {
                 Some((list, page)) => (list, page.parse::<u32>().unwrap()),
@@ -196,12 +243,20 @@ impl HttpClient for FakeFizzy {
     }
 }
 
+/// The config, with its storage (settings, write log, Hermes log, proposals) in a fresh directory.
 fn config() -> WorkspaceConfig {
+    config_with(&[])
+}
+
+fn config_with(extra: &[(&str, &str)]) -> WorkspaceConfig {
+    let storage = crate::store::scratch_dir("tests").display().to_string();
+    let extra: HashMap<String, String> = extra.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
     WorkspaceConfig::from_lookup(|name| match name {
         "FIZZY_URL" => Some("http://fizzy".into()),
         "FIZZY_TOKEN" => Some(TOKEN.into()),
         "FIZZY_PUBLIC_URL" => Some("https://fizzy.example".into()),
-        _ => None,
+        "CAMPFIRE_STORAGE_PATH" => Some(storage.clone()),
+        other => extra.get(other).cloned(),
     })
     .unwrap()
     .unwrap()
@@ -506,8 +561,10 @@ async fn working(settings: Settings) -> (FakeFizzy, Workspace, Records) {
     fizzy.live(elsewhere(card(78, "Payroll export", &[], None)));
     let records: Records = Default::default();
     let sink = records.clone();
-    let workspace =
-        Workspace::new(config()).with_settings(scratch_store(settings)).with_audit(move |record| sink.lock().unwrap().push(record.clone()));
+    let workspace = Workspace::new(config())
+        .with_settings(scratch_store(settings))
+        .with_audit(move |record| sink.lock().unwrap().push(record.clone()))
+        .with_clock(now);
     workspace.poll(&fizzy, now()).await.unwrap();
     fizzy.requests.lock().unwrap().clear();
     (fizzy, workspace, records)
@@ -648,7 +705,15 @@ async fn the_policy_is_checked_before_anything() {
     let (fizzy, workspace, _) = working(settings).await;
     let error = workspace.change_card(&fizzy, &karim(), 12, Change::Move(Target::Closed)).await.unwrap_err();
     assert_eq!((error.status(), error.message().as_str()), (403, "Only duty managers can do this."));
-    let new = NewCard { title: "x".into(), description: String::new(), severity: None, departments: vec![], source: None };
+    let new = NewCard {
+        title: "x".into(),
+        description: String::new(),
+        severity: None,
+        departments: vec![],
+        tags: vec![],
+        steps: vec![],
+        source: None,
+    };
     assert_eq!(workspace.create_card(&fizzy, &karim(), new).await.unwrap_err().status(), 403);
     assert!(fizzy.requests.lock().unwrap().is_empty(), "not even a read");
 
@@ -673,7 +738,16 @@ async fn every_write_is_audited_and_never_carries_the_token() {
     assert_eq!(records.len(), 2);
     assert_eq!(
         records[0],
-        WriteRecord { user_id: 7, card: Some(12), action: "tag -sev-low".into(), identity: "hermes", outcome: "ok".into() }
+        WriteRecord {
+            at: now(),
+            user_id: 7,
+            card: Some(12),
+            action: "tag -sev-low".into(),
+            identity: "workspace",
+            outcome: "ok".into(),
+            via: "workspace",
+            reference: None
+        }
     );
     assert!(!format!("{records:?}").contains(TOKEN));
     for (method, _, headers, _) in fizzy.requests.lock().unwrap().iter().filter(|(method, ..)| method != "GET") {
@@ -783,6 +857,8 @@ async fn a_card_whose_tags_fail_is_still_created_with_a_warning() {
         description: String::new(),
         severity: Some(Severity::Low),
         departments: vec![],
+        tags: vec![],
+        steps: vec![],
         source: None,
     };
     let created = workspace.create_card(&fizzy, &karim(), new).await.unwrap();
@@ -791,7 +867,15 @@ async fn a_card_whose_tags_fail_is_still_created_with_a_warning() {
     assert!(workspace.snapshot().card(created.card.number).is_some());
 
     *fizzy.fail_writes.lock().unwrap() = Some(("/boards/b1/cards".into(), 500));
-    let new = NewCard { title: "Other".into(), description: String::new(), severity: None, departments: vec![], source: None };
+    let new = NewCard {
+        title: "Other".into(),
+        description: String::new(),
+        severity: None,
+        departments: vec![],
+        tags: vec![],
+        steps: vec![],
+        source: None,
+    };
     assert_eq!(workspace.create_card(&fizzy, &karim(), new).await.unwrap_err().code(), "fizzy_unavailable");
 }
 
@@ -968,10 +1052,17 @@ async fn the_settings_page_and_the_bot_view() {
         &["Ann".into()],
         None,
     );
+    let page = crate::pages::SettingsPage { hermes_user_learned: Some("fz-hermes".into()), ..page };
     let html = askama::Template::render(&page).unwrap();
     assert!(html.contains(r#"value="engineering""#) && html.contains("security &#60;desk&#62;"));
     assert!(html.contains(r#"value="admins" checked"#) && html.contains(r#"value="anyone" checked"#));
-    assert!(html.contains("data-ws-policy-scope") && html.contains("Hermes doesn’t check this setting yet"));
+    assert!(html.contains("data-ws-policy-scope"));
+    // Phase 2: the dial, D5's defaults checked, the fixed Never, and the honest note (D7).
+    assert!(html.contains(r#"name="autonomy-create" value="ask_first" aria-label="Create a card: Ask first" checked"#), "{html}");
+    assert!(html.contains(r#"name="autonomy-comment" value="alone" aria-label="Comment on a card: Alone" checked"#));
+    assert!(html.contains(r#"name="autonomy-close" value="ask_first" aria-label="Close a card: Ask first" checked"#));
+    assert!(html.contains("Delete or reassign a card") && html.contains("Never (fixed)"));
+    assert!(html.contains("Hermes keeps its own Fizzy account.") && html.contains("fz-hermes (from HERMES_FIZZY_TOKEN)"));
 
     let broken = crate::pages::settings_page(
         workspace.config(),
@@ -995,4 +1086,560 @@ async fn the_settings_page_and_the_bot_view() {
     assert_eq!(json["severity_tags"], json!(["sev-low", "sev-medium", "sev-high", "sev-critical"]));
     assert_eq!(json["duty_managers"], json!([{"id": 1, "name": "Ann"}]));
     assert_eq!(json["confirm_policy"], "anyone");
+    assert_eq!(json["autonomy"]["create"], "ask_first");
+    assert_eq!(json["autonomy"]["tag"], "alone");
+}
+
+// --- Phase 2: supervising Hermes -------------------------------------------------------------------
+
+use crate::drafts::Decision;
+use crate::hermes::Proposed;
+use crate::hermes_log::{Kind, Reverse, Via};
+use crate::proposals::{Context, LIVE_REPORT_OPENING, SourceMessage, Status};
+use crate::settings::Dial;
+
+const HERMES_TOKEN: &str = "h3rmes-token";
+const HERMES_FEED: &str = "/897/activities.json?creator_ids%5B%5D=fz-hermes&board_ids%5B%5D=b1";
+const BOARD_FEED: &str = "/897/activities.json?board_ids%5B%5D=b1";
+
+type Clock = std::sync::Arc<Mutex<Timestamp>>;
+
+fn hermes_bot() -> Bot {
+    Bot { id: 9, name: "Hermes".into(), sgid: "sg".into() }
+}
+
+fn maya() -> Viewer {
+    Viewer { id: 5, name: "Maya".into(), email: None, administrator: false }
+}
+
+/// An administrator: a duty manager while none are listed.
+fn manager() -> Viewer {
+    Viewer { id: 1, name: "Manager".into(), email: None, administrator: true }
+}
+
+/// What the bridge knew: Maya's voice note in front-desk (room 3).
+fn for_maya() -> Context {
+    Context {
+        source: Some("voice_note".into()),
+        room_id: Some(3),
+        room_name: Some("front-desk".into()),
+        user_id: Some(5),
+        user_name: Some("Maya".into()),
+        message_id: Some(55),
+        live_report: false,
+    }
+}
+
+fn all_alone() -> Settings {
+    let mut settings = departments();
+    settings.autonomy = crate::settings::Autonomy {
+        create: Dial::Alone,
+        comment: Dial::Alone,
+        tag: Dial::Alone,
+        move_card: Dial::Alone,
+        close: Dial::Alone,
+        step: Dial::Alone,
+    };
+    settings
+}
+
+/// A polled workspace for phase 2: the workspace's token is the "Campfire" Fizzy user, Hermes's
+/// token (when given) is Hermes's; card 12 is live; the clock can be moved.
+async fn phase2(settings: Settings, hermes_token: bool) -> (FakeFizzy, Workspace, Clock) {
+    let fizzy = fizzy();
+    let mut live = card(12, "Lift B out of service", &["engineering", "incident", "sev-low"], None);
+    live["steps"] = json!([{"id": "s1", "content": "Call the lift company", "completed": false}]);
+    fizzy.live(live);
+    fizzy.live(elsewhere(card(78, "Payroll export", &[], None)));
+    fizzy.identities.lock().unwrap().insert(TOKEN.into(), "fz-campfire".into());
+    fizzy.identities.lock().unwrap().insert(HERMES_TOKEN.into(), "fz-hermes".into());
+    fizzy.reply(HERMES_FEED, json!([]));
+    fizzy.reply(BOARD_FEED, json!([]));
+    let config = if hermes_token { config_with(&[("HERMES_FIZZY_TOKEN", HERMES_TOKEN)]) } else { config() };
+    let clock: Clock = std::sync::Arc::new(Mutex::new(now()));
+    let time = clock.clone();
+    let workspace = Workspace::new(config).with_settings(scratch_store(settings)).with_clock(move || *time.lock().unwrap());
+    workspace.set_bots(vec![hermes_bot()]);
+    workspace.poll(&fizzy, now()).await.unwrap();
+    fizzy.requests.lock().unwrap().clear();
+    (fizzy, workspace, clock)
+}
+
+async fn propose(fizzy: &FakeFizzy, workspace: &Workspace, body: Value) -> Result<Proposed, ActionError> {
+    workspace.propose(fizzy, &hermes_bot(), &body, for_maya(), None).await
+}
+
+fn pending_id(proposed: Proposed) -> String {
+    match proposed {
+        Proposed::Pending { proposal, duplicate: false } => proposal.id,
+        other => panic!("{other:?}"),
+    }
+}
+
+fn done(proposed: Proposed) -> crate::proposals::Proposal {
+    match proposed {
+        Proposed::Done { proposal } => proposal,
+        other => panic!("{other:?}"),
+    }
+}
+
+/// The token of every write, in order.
+fn write_tokens(fizzy: &FakeFizzy) -> Vec<String> {
+    fizzy
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(method, ..)| method != "GET")
+        .map(|(_, _, headers, _)| headers.iter().find(|(n, _)| *n == "Authorization").unwrap().1.trim_start_matches("Bearer ").to_string())
+        .collect()
+}
+
+#[tokio::test]
+async fn proposals_follow_the_dial() {
+    let (fizzy, workspace, _) = phase2(departments(), true).await;
+    assert_eq!(workspace.fizzy_users().hermes.as_deref(), Some("fz-hermes"), "learned from HERMES_FIZZY_TOKEN");
+    assert_eq!(workspace.fizzy_users().workspace.as_deref(), Some("fz-campfire"));
+    assert!(!workspace.shares_hermes_token());
+
+    // Comment: Alone (D5). Run at once, as Hermes, logged with its way back.
+    let proposal =
+        done(propose(&fizzy, &workspace, json!({"action": "comment", "card": 12, "body": "Lift company called"})).await.unwrap());
+    assert_eq!((proposal.status, proposal.result_card), (Status::Done, Some(12)));
+    let (_, path, body) = fizzy.writes().pop().unwrap();
+    assert_eq!(
+        (path.as_str(), body.unwrap()["comment"]["body"].clone()),
+        ("/897/cards/12/comments.json", json!("<p>Lift company called</p>"))
+    );
+    assert_eq!(write_tokens(&fizzy), [HERMES_TOKEN], "Hermes's own token: Fizzy shows Hermes as the author");
+    let entry = workspace.hermes_log().get(&format!("p-{}-done", proposal.id)).unwrap();
+    assert_eq!((entry.kind, entry.via, entry.card, entry.for_user_id), (Kind::Commented, Via::Campfire, Some(12), Some(5)));
+    assert_eq!(entry.source.as_deref(), Some("voice note"));
+    assert_eq!(entry.reverse, Some(Reverse::DeleteComment { comment_id: "cm1".into(), identity: "hermes".into() }));
+    let write = workspace.journal().recent().pop().unwrap();
+    assert_eq!(
+        (write.via.as_str(), write.identity.as_str(), write.reference.as_deref()),
+        ("proposal", "hermes", Some(proposal.id.as_str()))
+    );
+    let stored = std::fs::read_to_string(workspace.config().storage_file("actions.jsonl")).unwrap();
+    assert!(stored.contains(r#""via":"proposal""#) && !stored.contains(HERMES_TOKEN) && !stored.contains(TOKEN));
+
+    // Create: Ask first. Nothing written; kept, logged, a draft to post.
+    fizzy.requests.lock().unwrap().clear();
+    let create = json!({"action": "create", "title": "Lost property — laptop bag", "severity": "low", "department": "engineering",
+        "tags": ["incident"], "steps": ["Call the guest"], "description": "Bag left in the lobby"});
+    let id = pending_id(propose(&fizzy, &workspace, create.clone()).await.unwrap());
+    assert!(fizzy.writes().is_empty(), "nothing written before a confirmation");
+    let kept = std::fs::read_to_string(workspace.config().storage_file("proposals.json")).unwrap();
+    assert!(kept.contains(&id) && kept.contains(r#""status": "pending""#), "{kept}");
+    assert_eq!(workspace.hermes_log().get(&format!("p-{id}-proposed")).unwrap().kind, Kind::Proposed);
+    match propose(&fizzy, &workspace, create).await.unwrap() {
+        Proposed::Pending { proposal, duplicate: true } => assert_eq!(proposal.id, id, "the same proposal twice is one"),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(workspace.pending_proposals().len(), 1);
+
+    // Never: refused, nothing written, logged.
+    let mut settings = (*workspace.settings()).clone();
+    settings.autonomy.close = Dial::Never;
+    workspace.settings_store().save(settings).unwrap();
+    match propose(&fizzy, &workspace, json!({"action": "close", "card": 12})).await.unwrap() {
+        Proposed::Refused { message } => assert!(message.contains("Never"), "{message}"),
+        other => panic!("{other:?}"),
+    }
+    assert!(fizzy.writes().is_empty());
+    assert!(workspace.hermes_log().entries().iter().any(|entry| entry.kind == Kind::Refused));
+
+    // What a person couldn't ask for, or a card elsewhere: refused before anything is kept.
+    let before = workspace.proposals().all().len();
+    let unknown = propose(&fizzy, &workspace, json!({"action": "delete", "card": 12})).await.unwrap_err();
+    assert_eq!((unknown.status(), unknown.code()), (422, "unknown_action"));
+    let reassign = propose(&fizzy, &workspace, json!({"action": "assign", "card": 12})).await.unwrap_err();
+    assert_eq!(reassign.status(), 422);
+    let elsewhere = propose(&fizzy, &workspace, json!({"action": "comment", "card": 78, "body": "hi"})).await.unwrap_err();
+    assert_eq!(elsewhere, ActionError::NotFound);
+    assert_eq!(workspace.proposals().all().len(), before);
+    assert!(fizzy.writes().is_empty());
+}
+
+#[tokio::test]
+async fn a_confirmed_proposal_runs_as_hermes_and_says_who_confirmed() {
+    let (fizzy, workspace, _) = phase2(departments(), true).await;
+    let create = json!({"action": "create", "title": "Lost property — laptop bag", "severity": "low", "department": "engineering",
+        "tags": ["Incident"], "steps": ["Call the guest"], "description": "Bag left in the lobby"});
+    let id = pending_id(propose(&fizzy, &workspace, create).await.unwrap());
+    let proposal = workspace.proposals().get(&id).unwrap();
+
+    // The draft Campfire posts as the bot gets buttons that decide this proposal; the same
+    // marker from a person gets nothing.
+    let draft = crate::proposals::draft_html(&proposal, None);
+    let decorated = workspace.decorate_message(100, 9, &draft).unwrap();
+    assert!(decorated.contains(&format!(r#"data-ws-proposal="{id}""#)), "{decorated}");
+    assert!(decorated.contains(&format!(r#"data-ws-draft-url="/workspace/hermes/proposals/{id}/decision""#)));
+    assert!(decorated.contains(">File</button>"));
+    assert!(workspace.decorate_message(101, 5, &draft).is_none_or(|html| !html.contains("data-ws-proposal")));
+    assert!(
+        drafts::pending(
+            &[ChatMessage {
+                id: 100,
+                room_id: 3,
+                room_name: "front-desk".into(),
+                url: "/rooms/3/@100".into(),
+                creator_id: 9,
+                creator_name: "Hermes".into(),
+                creator_is_bot: true,
+                created_at: now(),
+                body_html: draft.clone()
+            }],
+            now()
+        )
+        .is_empty(),
+        "not a text draft too"
+    );
+
+    let karim = karim();
+    let filed = workspace.decide(&fizzy, &karim, &id, Decision::Confirm).await.unwrap();
+    assert_eq!((filed.status, filed.decided_by_name.as_deref()), (Status::Done, Some("Karim")));
+    let number = filed.result_card.unwrap();
+    assert_eq!(tags(&fizzy, number), ["engineering", "incident", "sev-low"]);
+    assert_eq!(fizzy.live_card(number)["steps"][0]["content"], "Call the guest");
+    let comment = fizzy.writes().last().unwrap().2.clone().unwrap()["comment"]["body"].as_str().unwrap().to_string();
+    assert_eq!(comment, "<p>Created from Maya’s message in front-desk (in Campfire at /rooms/3/@55).</p>", "Hermes's own token: no prefix");
+    assert!(write_tokens(&fizzy).iter().all(|token| token == HERMES_TOKEN));
+    let entry = workspace.hermes_log().get(&format!("p-{id}-done")).unwrap();
+    assert_eq!((entry.kind, entry.card, entry.by_name.as_deref()), (Kind::Created, Some(number), Some("Karim")));
+    assert_eq!(entry.reverse, Some(Reverse::CloseCreated));
+    assert!(workspace.snapshot().card(number).is_some(), "cached at once");
+
+    let again = workspace.decide(&fizzy, &karim, &id, Decision::Confirm).await.unwrap_err();
+    assert_eq!(again.code(), "not_pending");
+    assert!(again.message().contains("Confirmed by Karim"), "{again}");
+    assert_eq!(workspace.proposal_status(&id).unwrap()["status"], "done");
+
+    let other = pending_id(propose(&fizzy, &workspace, json!({"action": "move", "card": 12, "column": "In progress"})).await.unwrap());
+    fizzy.requests.lock().unwrap().clear();
+    let dismissed = workspace.decide(&fizzy, &karim, &other, Decision::Dismiss).await.unwrap();
+    assert_eq!(dismissed.status, Status::Dismissed);
+    assert!(fizzy.writes().is_empty());
+    assert_eq!(workspace.hermes_log().get(&format!("p-{other}-dismissed")).unwrap().by_name.as_deref(), Some("Karim"));
+    assert_eq!(workspace.decide(&fizzy, &karim, "nope", Decision::Confirm).await.unwrap_err(), ActionError::NotFound);
+}
+
+#[tokio::test]
+async fn proposals_expire_and_the_policy_says_who_confirms() {
+    let settings = Settings { confirm_policy: Policy::AuthorOrDutyManager, duty_managers: Some(vec![1]), ..departments() };
+    let (fizzy, workspace, clock) = phase2(settings, true).await;
+    let id = pending_id(propose(&fizzy, &workspace, json!({"action": "close", "card": 12})).await.unwrap());
+    let refused = workspace.decide(&fizzy, &karim(), &id, Decision::Confirm).await.unwrap_err();
+    assert_eq!(refused.status(), 403, "not the person it's for, not a duty manager");
+    assert!(workspace.decide(&fizzy, &maya(), &id, Decision::Dismiss).await.is_ok(), "the person it's for");
+
+    let late = pending_id(propose(&fizzy, &workspace, json!({"action": "close", "card": 12})).await.unwrap());
+    *clock.lock().unwrap() = now() + SignedDuration::from_hours(25);
+    assert!(workspace.pending_proposals().is_empty());
+    assert_eq!(workspace.proposals().get(&late).unwrap().status, Status::Expired);
+    let entry = workspace.hermes_log().get(&format!("p-{late}-expired")).unwrap();
+    assert!(entry.text.starts_with("Dismissed (timed out): Close #12"), "{}", entry.text);
+    let error = workspace.decide(&fizzy, &manager(), &late, Decision::Confirm).await.unwrap_err();
+    assert!(error.message().contains("timed out"), "{error}");
+    assert!(fizzy.writes().is_empty());
+    assert!(!fizzy.live_card(12)["closed"].as_bool().unwrap());
+}
+
+#[tokio::test]
+async fn a_confirmed_live_report_is_filed_at_once_but_only_once() {
+    let (fizzy, workspace, _) = phase2(departments(), true).await;
+    let report = SourceMessage {
+        id: 55,
+        room_id: 3,
+        creator_id: 5,
+        creator_is_bot: false,
+        created_at: now() - SignedDuration::from_mins(2),
+        body_html: format!("<p>{LIVE_REPORT_OPENING}.</p><p>Chute dans le hall</p>"),
+    };
+    let create = json!({"action": "create", "title": "Chute — hall", "severity": "high"});
+    let filed = workspace.propose(&fizzy, &hermes_bot(), &create, for_maya(), Some(report.clone())).await.unwrap();
+    let proposal = done(filed);
+    assert!(proposal.context.live_report);
+    let entry = workspace.hermes_log().get(&format!("p-{}-done", proposal.id)).unwrap();
+    assert_eq!(entry.source.as_deref(), Some("live voice report"));
+    let second = json!({"action": "create", "title": "Chute — hall (2)"});
+    let second = workspace.propose(&fizzy, &hermes_bot(), &second, for_maya(), Some(report.clone())).await.unwrap();
+    assert!(matches!(second, Proposed::Pending { .. }), "a second card from the same report asks first");
+    let someone_else = Context { user_id: Some(6), ..for_maya() };
+    let other = json!({"action": "create", "title": "x"});
+    let other = workspace.propose(&fizzy, &hermes_bot(), &other, someone_else, Some(report)).await.unwrap();
+    assert!(matches!(other, Proposed::Pending { .. }), "not the reporter's own confirmation");
+}
+
+#[tokio::test]
+async fn without_hermes_s_token_campfire_writes_for_hermes_as_the_workspace() {
+    let (fizzy, workspace, _) = phase2(departments(), false).await;
+    let proposal =
+        done(propose(&fizzy, &workspace, json!({"action": "comment", "card": 12, "body": "Lift company called"})).await.unwrap());
+    let (.., body) = fizzy.writes().pop().unwrap();
+    assert_eq!(body.unwrap()["comment"]["body"], "<p>Hermes: Lift company called</p>");
+    assert_eq!(write_tokens(&fizzy), [TOKEN]);
+    let entry = workspace.hermes_log().get(&format!("p-{}-done", proposal.id)).unwrap();
+    assert_eq!(entry.reverse, Some(Reverse::DeleteComment { comment_id: "cm1".into(), identity: "workspace".into() }));
+}
+
+#[tokio::test]
+async fn undo_takes_back_what_campfire_ran_for_hermes() {
+    let (fizzy, workspace, clock) = phase2(all_alone(), true).await;
+    let undo_last = |proposal: &crate::proposals::Proposal| format!("p-{}-done", proposal.id);
+
+    let severity = done(propose(&fizzy, &workspace, json!({"action": "severity", "card": 12, "severity": "high"})).await.unwrap());
+    assert_eq!(tags(&fizzy, 12), ["engineering", "incident", "sev-high"]);
+    *clock.lock().unwrap() = now() + SignedDuration::from_mins(1);
+    let undone = workspace.undo(&fizzy, &manager(), &undo_last(&severity)).await.unwrap();
+    assert_eq!(tags(&fizzy, 12), ["engineering", "incident", "sev-low"], "back to what it was");
+    assert_eq!((undone.kind, undone.by_name.as_deref()), (Kind::Undone, Some("Manager")));
+    let again = workspace.undo(&fizzy, &manager(), &undo_last(&severity)).await.unwrap_err();
+    assert_eq!((again.code(), again.message()), ("already_undone", "Already undone by Manager.".to_string()));
+    assert!(
+        workspace
+            .journal()
+            .recent()
+            .iter()
+            .any(|write| write.via == "undo" && write.reference.as_deref() == Some(undo_last(&severity).as_str()))
+    );
+
+    let moved = done(propose(&fizzy, &workspace, json!({"action": "move", "card": 12, "column": "In progress"})).await.unwrap());
+    assert_eq!(fizzy.live_card(12)["column"]["id"], "c1");
+    workspace.undo(&fizzy, &maya(), &undo_last(&moved)).await.unwrap();
+    assert!(fizzy.live_card(12)["column"].is_null(), "back to New; the person it was for may undo");
+
+    let comment = done(propose(&fizzy, &workspace, json!({"action": "comment", "card": 12, "body": "Wrong card, sorry"})).await.unwrap());
+    fizzy.requests.lock().unwrap().clear();
+    workspace.undo(&fizzy, &manager(), &undo_last(&comment)).await.unwrap();
+    assert!(fizzy.comments.lock().unwrap()[&12].iter().all(|c| c["body"]["plain_text"] != "Wrong card, sorry"), "deleted");
+    assert_eq!(write_tokens(&fizzy), [HERMES_TOKEN], "with the token that wrote it: Fizzy lets only its creator delete it");
+
+    let created = done(propose(&fizzy, &workspace, json!({"action": "create", "title": "Duplicate report"})).await.unwrap());
+    let number = created.result_card.unwrap();
+    fizzy.requests.lock().unwrap().clear();
+    workspace.undo(&fizzy, &manager(), &undo_last(&created)).await.unwrap();
+    let card = fizzy.live_card(number);
+    assert!(card["closed"].as_bool().unwrap(), "closed, not deleted");
+    assert!(fizzy.writes().iter().all(|(method, ..)| method != "DELETE"));
+    let comment = fizzy.comments.lock().unwrap()[&number].last().unwrap()["body"]["html"].as_str().unwrap().to_string();
+    assert!(comment.starts_with("<p>Manager: Undone from Campfire: Hermes created this card by mistake."), "{comment}");
+    assert!(workspace.snapshot().card(number).unwrap().closed);
+}
+
+#[tokio::test]
+async fn undo_is_refused_when_it_isn_t_safe_or_allowed() {
+    let (fizzy, workspace, clock) = phase2(all_alone(), true).await;
+    let severity = done(propose(&fizzy, &workspace, json!({"action": "severity", "card": 12, "severity": "high"})).await.unwrap());
+    let id = format!("p-{}-done", severity.id);
+
+    let forbidden = workspace.undo(&fizzy, &karim(), &id).await.unwrap_err();
+    assert_eq!(forbidden.status(), 403, "not a duty manager, not the person it was for (D8)");
+
+    // Someone commented from Campfire since: the card was touched.
+    *clock.lock().unwrap() = now() + SignedDuration::from_mins(1);
+    workspace.change_card(&fizzy, &karim(), 12, Change::Comment("On it".into())).await.unwrap();
+    let touched = workspace.undo(&fizzy, &maya(), &id).await.unwrap_err();
+    assert_eq!(touched.code(), "changed_since");
+    assert!(touched.message().contains("from Campfire"), "{touched}");
+
+    // Someone changed the severity: the state isn't what Hermes left.
+    let step = done(propose(&fizzy, &workspace, json!({"action": "step", "card": 12, "step_id": "s1", "completed": true})).await.unwrap());
+    let step_id = format!("p-{}-done", step.id);
+    fizzy.live({
+        let mut card = fizzy.live_card(12);
+        card["steps"][0]["completed"] = json!(false);
+        card
+    });
+    assert_eq!(workspace.undo(&fizzy, &manager(), &step_id).await.unwrap_err().code(), "changed_since");
+
+    // Fizzy's feed shows a change since, by someone in Fizzy.
+    let comment = done(propose(&fizzy, &workspace, json!({"action": "comment", "card": 12, "body": "x"})).await.unwrap());
+    fizzy.reply(
+        BOARD_FEED,
+        json!([{"id": "later", "action": "card_triaged", "created_at": "2026-09-30T09:05:00Z",
+            "eventable_type": "Card", "eventable": {"number": 12}, "creator": {"id": "fz-karim", "name": "Karim"}}]),
+    );
+    let in_fizzy = workspace.undo(&fizzy, &manager(), &format!("p-{}-done", comment.id)).await.unwrap_err();
+    assert_eq!(in_fizzy.code(), "changed_since");
+    assert!(in_fizzy.message().starts_with("Karim changed the card in Fizzy since"), "{in_fizzy}");
+
+    // Too old.
+    *clock.lock().unwrap() = now() + SignedDuration::from_hours(25);
+    assert_eq!(workspace.undo(&fizzy, &manager(), &format!("p-{}-done", comment.id)).await.unwrap_err().code(), "too_old");
+    assert_eq!(workspace.undo(&fizzy, &manager(), "p-nope-done").await.unwrap_err(), ActionError::NotFound);
+    let undone: Vec<_> = workspace.hermes_log().entries().into_iter().filter(|entry| entry.kind == Kind::Undone).collect();
+    assert!(undone.is_empty(), "nothing was undone");
+}
+
+#[tokio::test]
+async fn the_hermes_log_reads_hermes_s_direct_actions() {
+    let (fizzy, workspace, _) = phase2(departments(), true).await;
+    fizzy.reply(
+        HERMES_FEED,
+        json!([
+            {"id": "d4", "action": "card_closed", "created_at": "2026-09-30T08:40:00Z", "eventable_type": "Card",
+             "eventable": card(40, "Elsewhere", &[], None), "board": {"id": "b2", "name": "Engineering"}, "creator": {"id": "fz-hermes", "name": "Hermes"}},
+            {"id": "d3", "action": "card_triaged", "created_at": "2026-09-30T08:30:00Z", "particulars": {"column": "In progress"},
+             "eventable_type": "Card", "eventable": card(12, "Lift B out of service", &[], Some("In progress")),
+             "board": {"id": "b1", "name": "Incident Log"}, "creator": {"id": "fz-hermes", "name": "Hermes"}},
+            {"id": "d2", "action": "comment_created", "created_at": "2026-09-30T08:20:00Z", "url": "http://localhost:8484/897/cards/13",
+             "eventable_type": "Comment", "eventable": {"id": "cm9", "body": {"plain_text": "Filed for Maya", "html": "<p>Filed for Maya</p>"}},
+             "board": {"id": "b1", "name": "Incident Log"}, "creator": {"id": "fz-hermes", "name": "Hermes"}},
+            {"id": "d1", "action": "card_published", "created_at": "2026-09-30T08:10:00Z", "eventable_type": "Card",
+             "eventable": card(13, "Guest slip in lobby", &["sev-critical"], None), "board": {"id": "b1", "name": "Incident Log"},
+             "creator": {"id": "fz-hermes", "name": "Hermes"}},
+            {"id": "d0", "action": "card_closed", "created_at": "2026-09-30T08:00:00Z", "eventable_type": "Card",
+             "eventable": card(12, "Lift B", &[], None), "board": {"id": "b1", "name": "Incident Log"}, "creator": {"id": "fz-karim", "name": "Karim"}}
+        ]),
+    );
+    workspace.poll(&fizzy, now()).await.unwrap();
+    assert!(fizzy.paths().contains(&HERMES_FEED.to_string()), "only Hermes's activities, on the incident board");
+    let ids: Vec<String> = workspace.hermes_log().entries().iter().map(|entry| entry.id.clone()).collect();
+    assert_eq!(ids, ["a-d3", "a-d2", "a-d1"], "not another board's, not someone else's");
+    let created = workspace.hermes_log().get("a-d1").unwrap();
+    assert_eq!((created.via, created.kind, created.text.as_str()), (Via::Direct, Kind::Created, "Created #13 Guest slip in lobby"));
+    workspace.poll(&fizzy, now()).await.unwrap();
+    assert_eq!(workspace.hermes_log().entries().len(), 3, "deduplicated by activity id");
+
+    let restarted = Workspace::new(workspace.config().clone());
+    assert_eq!(restarted.hermes_log().entries().len(), 3, "kept across a restart");
+
+    // The page: direct lines say so; undo where it's safely derivable, for those allowed.
+    let page = workspace.hermes_page(&manager(), "all", &Messages(Vec::new())).await.unwrap();
+    let html = askama::Template::render(&page).unwrap();
+    assert!(html.contains(r#"<span class="ws-via ws-via--direct">direct</span>"#), "{html}");
+    assert!(html.contains(r#"data-ws-undo="/workspace/hermes/actions/a-d1/undo""#), "a card Hermes created: close + comment");
+    assert!(html.contains(r#"data-ws-undo="/workspace/hermes/actions/a-d2/undo""#), "its comment: deleted with its token");
+    assert!(!html.contains("actions/a-d3/undo"), "a move: Fizzy doesn't say from where");
+    assert!(!html.contains("isn't known, so what it does directly"));
+    let for_karim = askama::Template::render(&workspace.hermes_page(&karim(), "all", &Messages(Vec::new())).await.unwrap()).unwrap();
+    assert!(!for_karim.contains("data-ws-undo") && for_karim.contains("Duty managers and the person it was for can undo this."));
+
+    // Undo of a direct creation: nobody touched it since (Hermes's own follow-ups don't count).
+    fizzy.live(card(13, "Guest slip in lobby", &["sev-critical"], None));
+    fizzy.reply(
+        BOARD_FEED,
+        json!([{"id": "d5", "action": "comment_created", "created_at": "2026-09-30T08:12:00Z", "url": "http://localhost:8484/897/cards/13",
+            "eventable_type": "Comment", "eventable": {"id": "cm8"}, "creator": {"id": "fz-hermes", "name": "Hermes"}}]),
+    );
+    let triaged = workspace.undo(&fizzy, &manager(), "a-d3").await.unwrap_err();
+    assert_eq!(triaged.code(), "cannot_undo");
+    workspace.undo(&fizzy, &manager(), "a-d1").await.unwrap();
+    assert!(fizzy.live_card(13)["closed"].as_bool().unwrap());
+}
+
+#[tokio::test]
+async fn people_s_workspace_actions_aren_t_logged_as_hermes_s() {
+    // No "Campfire" user yet: the workspace writes with Hermes's own token.
+    let settings = Settings { hermes_fizzy_user_id: Some("fz-hermes".into()), ..departments() };
+    let (fizzy, workspace, _) = phase2(settings, false).await;
+    fizzy.identities.lock().unwrap().insert(TOKEN.into(), "fz-hermes".into());
+    let workspace = Workspace::new(workspace.config().clone())
+        .with_settings(scratch_store(Settings { hermes_fizzy_user_id: Some("fz-hermes".into()), ..departments() }));
+    workspace.poll(&fizzy, now()).await.unwrap();
+    assert!(workspace.shares_hermes_token());
+    workspace.change_card(&fizzy, &karim(), 12, Change::Move(Target::Closed)).await.unwrap();
+    let closed_at = workspace.journal().recent().last().unwrap().at;
+    let at = |offset: i64| (closed_at + SignedDuration::from_secs(offset)).to_string();
+    fizzy.reply(
+        HERMES_FEED,
+        json!([
+            {"id": "k1", "action": "card_closed", "created_at": at(20), "eventable_type": "Card", "eventable": card(12, "Lift B", &[], None),
+             "board": {"id": "b1", "name": "Incident Log"}, "creator": {"id": "fz-hermes", "name": "Hermes"}},
+            {"id": "h1", "action": "card_closed", "created_at": at(10), "eventable_type": "Card", "eventable": card(13, "Guest slip", &[], None),
+             "board": {"id": "b1", "name": "Incident Log"}, "creator": {"id": "fz-hermes", "name": "Hermes"}}
+        ]),
+    );
+    workspace.poll(&fizzy, now()).await.unwrap();
+    let ids: Vec<String> = workspace.hermes_log().entries().iter().map(|entry| entry.id.clone()).collect();
+    assert_eq!(ids, ["a-h1"], "Karim's close through the workspace isn't Hermes's");
+    let html = askama::Template::render(&workspace.hermes_page(&manager(), "all", &Messages(Vec::new())).await.unwrap()).unwrap();
+    assert!(html.contains("left out of this log"));
+}
+
+#[tokio::test]
+async fn the_hermes_tab_lists_pending_proposals_and_filters_the_log() {
+    let (fizzy, workspace, _) = phase2(departments(), true).await;
+    let id = pending_id(propose(&fizzy, &workspace, json!({"action": "close", "card": 12})).await.unwrap());
+    workspace.set_draft_message(&id, 100);
+    done(propose(&fizzy, &workspace, json!({"action": "comment", "card": 12, "body": "Seen"})).await.unwrap());
+    let question = ChatMessage {
+        id: 7,
+        room_id: 3,
+        room_name: "front-desk".into(),
+        url: "/rooms/3/@7".into(),
+        creator_id: 9,
+        creator_name: "Hermes".into(),
+        creator_is_bot: true,
+        created_at: now() - SignedDuration::from_mins(5),
+        body_html: "<p>Which room was it: 103 or 113?</p>".into(),
+    };
+    let page = workspace.hermes_page(&maya(), "all", &Messages(vec![question.clone()])).await.unwrap();
+    assert_eq!(page.pending.len(), 1);
+    assert_eq!(page.pending[0].message_url.as_deref(), Some("/rooms/3/@100"));
+    let html = askama::Template::render(&page).unwrap();
+    assert!(html.contains(&format!(r#"id="proposal-{id}""#)) && html.contains("Close #12 Lift B out of service"), "{html}");
+    assert!(html.contains(r#"data-ws-draft-action="confirm">Confirm</button>"#));
+    assert!(html.contains(r#"<span class="ws-via ws-via--campfire">via Campfire</span>"#));
+    assert!(html.contains("Commented on #12 Lift B out of service: “Seen”"));
+    assert!(html.contains("Asked in front-desk: Which room was it: 103 or 113?"));
+    assert!(html.contains("data-ws-undo=\"/workspace/hermes/actions/p-"), "Maya may undo what was done for her");
+
+    let questions = workspace.hermes_page(&maya(), "questions", &Messages(vec![question.clone()])).await.unwrap();
+    assert_eq!(questions.items.len(), 1);
+    let comments = workspace.hermes_page(&maya(), "comments", &Messages(vec![question])).await.unwrap();
+    assert!(comments.items.iter().all(|item| item.text.starts_with("Commented")) && comments.items.len() == 1);
+
+    // Home lists it to confirm too, and the page asks for its state.
+    let home = workspace.home(&maya(), &Messages(Vec::new()), now()).await.unwrap();
+    assert_eq!(home.proposals.len(), 1);
+    let states = workspace.proposal_states(&[id.clone(), "zzz".into()]);
+    assert_eq!(states[&id]["status"], "pending");
+    assert!(states.get("zzz").is_none());
+    assert_eq!(crate::hermes::parse_ids("b1,a2, bad id,A3,b1"), ["a2", "b1"]);
+
+    // Hermes's Fizzy user unknown: the page says its direct actions can't be shown.
+    let (_, unknown, _) = phase2(departments(), false).await;
+    let html = askama::Template::render(&unknown.hermes_page(&maya(), "all", &Messages(Vec::new())).await.unwrap()).unwrap();
+    assert!(html.contains("isn't known, so what it does directly in Fizzy isn't shown"), "{html}");
+}
+
+#[tokio::test]
+async fn chips_of_cards_nothing_refreshes_are_read_again() {
+    let fizzy = fizzy();
+    let workspace = Workspace::new(config());
+    workspace.poll(&fizzy, now()).await.unwrap();
+    workspace.chips(&[77]);
+    workspace.poll(&fizzy, now()).await.unwrap();
+    assert!(workspace.snapshot().card(77).is_some());
+    let reads = |fizzy: &FakeFizzy| fizzy.paths().iter().filter(|path| *path == "/897/cards/77.json").count();
+    fizzy.requests.lock().unwrap().clear();
+    workspace.poll(&fizzy, now() + SignedDuration::from_mins(5)).await.unwrap();
+    assert_eq!(reads(&fizzy), 0, "fresh enough");
+    fizzy.reply("/897/cards/77.json", card(77, "Pool pump knocking", &[], Some("Done")));
+    workspace.poll(&fizzy, now() + SignedDuration::from_mins(16)).await.unwrap();
+    assert_eq!(reads(&fizzy), 1, "read again after 15 minutes");
+    assert_eq!(workspace.snapshot().card(77).unwrap().column.as_ref().unwrap().name, "Done", "the chip shows its new column");
+    fizzy.replies.lock().unwrap().remove("/897/cards/77.json");
+    workspace.poll(&fizzy, now() + SignedDuration::from_mins(32)).await.unwrap();
+    assert!(workspace.snapshot().card(77).is_none(), "deleted in Fizzy: gone");
+}
+
+#[tokio::test]
+async fn what_campfire_ran_for_hermes_isn_t_logged_twice_as_direct() {
+    let (fizzy, workspace, _) = phase2(departments(), true).await;
+    done(propose(&fizzy, &workspace, json!({"action": "comment", "card": 12, "body": "Lift company called"})).await.unwrap());
+    // Fizzy's feed shows that comment as Hermes's (Campfire wrote it with Hermes's token).
+    fizzy.reply(
+        HERMES_FEED,
+        json!([{"id": "c1", "action": "comment_created", "created_at": "2026-09-30T09:00:03Z", "url": "http://localhost:8484/897/cards/12",
+            "eventable_type": "Comment", "eventable": {"id": "cm1", "body": {"plain_text": "Lift company called"}},
+            "board": {"id": "b1", "name": "Incident Log"}, "creator": {"id": "fz-hermes", "name": "Hermes"}}]),
+    );
+    workspace.poll(&fizzy, now()).await.unwrap();
+    let entries = workspace.hermes_log().entries();
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    assert_eq!(entries[0].via, Via::Campfire);
 }

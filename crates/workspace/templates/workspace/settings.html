@@ -61,7 +61,25 @@
       {%- for policy in policies %}
       <label class="ws-radio"><input type="radio" name="confirm_policy" value="{{ policy.value }}"{% if policy.selected %} checked{% endif %}> {{ policy.label }}</label>
       {%- endfor %}
-      <p class="ws-muted" data-ws-policy-scope>This applies to the workspace’s buttons only (File and Dismiss, the card sheet, the board, the room panel, new cards). Anyone in a room can still type “@Hermes confirm” or ask Hermes to change a card, and Hermes doesn’t check this setting yet; people with a Fizzy account on the board can change cards there.</p>
+      <p class="ws-muted" data-ws-policy-scope>This applies to the workspace’s buttons (File and Dismiss, including those of Hermes’s proposals, the card sheet, the board, the room panel, new cards). People with a Fizzy account on the board can still change cards there.</p>
+    </section>
+
+    <section class="ws-section" aria-labelledby="ws-settings-autonomy">
+      <h2 id="ws-settings-autonomy" class="ws-section__title">What Hermes may do alone</h2>
+      <p class="ws-muted">When Hermes proposes an action through Campfire: <strong>Alone</strong> runs it at once (it’s in the Hermes tab and can be undone for 24 hours), <strong>Ask first</strong> posts it as a draft that someone confirms (per the rule above; 24 hours to answer), <strong>Never</strong> refuses it. A live voice report its reporter confirmed is filed at once unless creating cards is set to Never.</p>
+      <table class="ws-autonomy">
+        <thead><tr><th scope="col">Action</th>{% for dial in autonomy[0].choices %}<th scope="col">{{ dial.label }}</th>{% endfor %}</tr></thead>
+        <tbody>
+          {%- for row in autonomy %}
+          <tr data-ws-autonomy="{{ row.key }}"><th scope="row">{{ row.label }}</th>
+            {%- for dial in row.choices %}<td><input type="radio" name="autonomy-{{ row.key }}" value="{{ dial.value }}" aria-label="{{ row.label }}: {{ dial.label }}"{% if dial.selected %} checked{% endif %}></td>{% endfor %}</tr>
+          {%- endfor %}
+          <tr><th scope="row">Delete or reassign a card</th><td></td><td></td><td>Never (fixed)</td></tr>
+        </tbody>
+      </table>
+      <p class="ws-muted" data-ws-autonomy-scope><strong>Hermes keeps its own Fizzy account.</strong> This dial applies to what Hermes proposes through Campfire, which is what its incident-report skill does by default. With its own account it can still change cards directly (its skill only does that when Campfire can’t be reached): those changes show in the Hermes tab as “direct”, and only the simple ones can be undone.</p>
+      <label class="ws-field"><span class="ws-field__label">Hermes’s Fizzy user id</span><input class="input" type="text" name="hermes_fizzy_user_id" value="{{ hermes_user_id }}" maxlength="64" pattern="[A-Za-z0-9_\-]*" placeholder="{% if let Some(learned) = hermes_user_learned %}{{ learned }} (from HERMES_FIZZY_TOKEN){% else %}learned from HERMES_FIZZY_TOKEN{% endif %}"></label>
+      <p class="ws-muted">For the Hermes tab to show what Hermes does directly in Fizzy. Leave it empty when Campfire holds Hermes’s token.</p>
     </section>
 
     <div class="ws-form__actions">

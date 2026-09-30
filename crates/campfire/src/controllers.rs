@@ -340,6 +340,15 @@ static HERMES_ROUTES: LazyLock<Vec<Route>> = LazyLock::new(|| {
         post("/workspace/settings(.:format)", "hermes/workspace#update_settings", workspace::update_settings),
         get("/hermes/:bot_key/workspace/settings(.:format)", "hermes/workspace#bot_settings", workspace::bot_settings)
             .defaults(BOT_DEFAULTS),
+        // Phase 2: the Hermes tab, proposals, undo.
+        get("/workspace/hermes(.:format)", "hermes/workspace#hermes", workspace::hermes),
+        get("/workspace/hermes/proposals(.:format)", "hermes/workspace#proposal_states", workspace::proposal_states),
+        post("/workspace/hermes/proposals/:id/decision(.:format)", "hermes/workspace#decide", workspace::decide),
+        post("/workspace/hermes/actions/:id/undo(.:format)", "hermes/workspace#undo", workspace::undo),
+        post("/hermes/:bot_key/workspace/proposals(.:format)", "hermes/workspace#bot_propose", workspace::bot_propose)
+            .defaults(BOT_DEFAULTS),
+        get("/hermes/:bot_key/workspace/proposals/:id(.:format)", "hermes/workspace#bot_proposal", workspace::bot_proposal)
+            .defaults(BOT_DEFAULTS),
     ]
 });
 

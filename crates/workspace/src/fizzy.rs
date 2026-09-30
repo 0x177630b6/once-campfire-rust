@@ -312,6 +312,9 @@ pub struct Activity {
     pub board: Option<BoardRef>,
     #[serde(default)]
     pub creator: Option<UserRef>,
+    /// `{column}` for triaged, `{old_title, new_title}`, … (`/activities` only).
+    #[serde(default)]
+    pub particulars: Value,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -324,6 +327,9 @@ struct Identity {
 struct IdentityAccount {
     #[serde(default)]
     slug: String,
+    /// The token's user in that account.
+    #[serde(default)]
+    user: Option<UserRef>,
 }
 
 // --- Client ---------------------------------------------------------------------------------------
@@ -402,6 +408,45 @@ impl<'a> Client<'a> {
             .map(|account| account.slug.trim_matches('/').to_string())
             .find(|slug| !slug.is_empty())
             .ok_or_else(|| FizzyError::Setup("the Fizzy token has no account".into()))
+    }
+
+    /// The Fizzy user `token` belongs to in `account` (`GET /my/identity`), `None` if it has none
+    /// there.
+    pub async fn user_of(&self, token: &Secret, account: &str) -> Result<Option<String>, FizzyError> {
+        let url = format!("{}/my/identity.json", self.config.fizzy_url);
+        let response = self.http.get(&url, &headers(token)).await.map_err(FizzyError::Transport)?;
+        if response.status != 200 {
+            return Err(FizzyError::Status(response.status));
+        }
+        let identity: Identity = serde_json::from_slice(&response.body).map_err(|e| FizzyError::Decode(e.to_string()))?;
+        Ok(identity
+            .accounts
+            .into_iter()
+            .find(|each| each.slug.trim_matches('/') == account)
+            .and_then(|each| each.user)
+            .map(|user| user.id)
+            .filter(|id| !id.is_empty()))
+    }
+
+    /// One page of a list, and whether there's a next one.
+    pub async fn get_page<T: DeserializeOwned>(&self, path: &str, page: u32) -> Result<(Vec<T>, bool), FizzyError> {
+        let separator = if path.contains('?') { '&' } else { '?' };
+        let paged = if page <= 1 { path.to_string() } else { format!("{path}{separator}page={page}") };
+        let response = self.get(&paged).await?;
+        if response.status != 200 {
+            return Err(FizzyError::Status(response.status));
+        }
+        Ok((decode_list(&response.body)?, has_next_page(response.link.as_deref())))
+    }
+
+    /// `/activities` of the incident board, optionally by one creator.
+    pub fn activities_path(account: &str, board_id: &str, creator: Option<&str>) -> String {
+        let mut path = format!("/{account}/activities.json?");
+        if let Some(creator) = creator {
+            path.push_str(&format!("creator_ids%5B%5D={creator}&"));
+        }
+        path.push_str(&format!("board_ids%5B%5D={board_id}"));
+        path
     }
 
     pub async fn boards(&self, account: &str) -> Result<Vec<Board>, FizzyError> {

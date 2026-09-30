@@ -12,14 +12,20 @@
 //!
 //! ```json
 //! {
-//!   "version": 1,
+//!   "version": 2,
 //!   "departments": [{"name": "Engineering", "tag": "engineering", "rooms": [3, 7]}],
 //!   "duty_managers": [1, 5],
-//!   "confirm_policy": "anyone"
+//!   "confirm_policy": "anyone",
+//!   "autonomy": {"create": "ask_first", "comment": "alone", "tag": "alone", "move": "ask_first",
+//!                "close": "ask_first", "step": "ask_first"},
+//!   "hermes_fizzy_user_id": null
 //! }
 //! ```
 //!
-//! `duty_managers` absent (or `null`) means Campfire's administrators.
+//! `duty_managers` absent (or `null`) means Campfire's administrators. Version 2 (phase 2) added
+//! `autonomy` (what Hermes may do alone when it proposes through Campfire, [`Autonomy`]) and
+//! `hermes_fizzy_user_id` (Hermes's Fizzy user, for its log; `null` = learned from
+//! `HERMES_FIZZY_TOKEN`). A version 1 file loads with their defaults; the next save writes version 2.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
@@ -28,7 +34,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::home::Viewer;
 
-pub const SETTINGS_VERSION: u32 = 1;
+pub const SETTINGS_VERSION: u32 = 2;
+pub const MAX_FIZZY_ID_CHARS: usize = 64;
 pub const MAX_DEPARTMENTS: usize = 50;
 pub const MAX_NAME_CHARS: usize = 60;
 pub const MAX_TAG_CHARS: usize = 40;
@@ -46,15 +53,154 @@ pub struct Settings {
     pub duty_managers: Option<Vec<i64>>,
     #[serde(default)]
     pub confirm_policy: Policy,
+    /// What Hermes may do alone when it proposes an action through Campfire (version 2).
+    #[serde(default)]
+    pub autonomy: Autonomy,
+    /// Hermes's Fizzy user id, for its log; `None` = learned from `HERMES_FIZZY_TOKEN` (version 2).
+    #[serde(default)]
+    pub hermes_fizzy_user_id: Option<String>,
 }
 
+/// A file without `version` is a version 1 file.
 fn version() -> u32 {
-    SETTINGS_VERSION
+    1
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { version: SETTINGS_VERSION, departments: Vec::new(), duty_managers: None, confirm_policy: Policy::default() }
+        Self {
+            version: SETTINGS_VERSION,
+            departments: Vec::new(),
+            duty_managers: None,
+            confirm_policy: Policy::default(),
+            autonomy: Autonomy::default(),
+            hermes_fizzy_user_id: None,
+        }
+    }
+}
+
+/// How far Hermes may go on its own with one kind of action it proposes through Campfire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Dial {
+    /// Campfire runs it at once (it's logged and can be undone).
+    Alone,
+    /// Campfire posts it as a draft someone confirms (per the confirm policy); 24 h to answer.
+    AskFirst,
+    /// Campfire refuses it, and Hermes says so.
+    Never,
+}
+
+impl Dial {
+    pub const ALL: [Dial; 3] = [Dial::Alone, Dial::AskFirst, Dial::Never];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Dial::Alone => "alone",
+            Dial::AskFirst => "ask_first",
+            Dial::Never => "never",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Dial::Alone => "Alone",
+            Dial::AskFirst => "Ask first",
+            Dial::Never => "Never",
+        }
+    }
+}
+
+/// The kinds of actions Hermes can propose (the dial is set per kind). Deleting and reassigning
+/// cards aren't among them: Campfire never does either for Hermes ("Never", fixed).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ActionKind {
+    Create,
+    Comment,
+    /// Severity and department tags.
+    Tag,
+    /// To New, a column or Monitoring.
+    Move,
+    Close,
+    Step,
+}
+
+impl ActionKind {
+    pub const ALL: [ActionKind; 6] =
+        [ActionKind::Create, ActionKind::Comment, ActionKind::Tag, ActionKind::Move, ActionKind::Close, ActionKind::Step];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ActionKind::Create => "create",
+            ActionKind::Comment => "comment",
+            ActionKind::Tag => "tag",
+            ActionKind::Move => "move",
+            ActionKind::Close => "close",
+            ActionKind::Step => "step",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ActionKind::Create => "Create a card",
+            ActionKind::Comment => "Comment on a card",
+            ActionKind::Tag => "Change severity or departments",
+            ActionKind::Move => "Move a card (New, a column, Monitoring)",
+            ActionKind::Close => "Close a card",
+            ActionKind::Step => "Tick a step",
+        }
+    }
+}
+
+/// The dial of every kind (decision D5's defaults: comment and tag alone; create, move and close
+/// ask first; steps ask first too, as the decision didn't list them).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Autonomy {
+    pub create: Dial,
+    pub comment: Dial,
+    pub tag: Dial,
+    #[serde(rename = "move")]
+    pub move_card: Dial,
+    pub close: Dial,
+    pub step: Dial,
+}
+
+impl Default for Autonomy {
+    fn default() -> Self {
+        Self {
+            create: Dial::AskFirst,
+            comment: Dial::Alone,
+            tag: Dial::Alone,
+            move_card: Dial::AskFirst,
+            close: Dial::AskFirst,
+            step: Dial::AskFirst,
+        }
+    }
+}
+
+impl Autonomy {
+    /// A damaged settings file: nothing alone.
+    pub fn ask_first() -> Self {
+        Self {
+            create: Dial::AskFirst,
+            comment: Dial::AskFirst,
+            tag: Dial::AskFirst,
+            move_card: Dial::AskFirst,
+            close: Dial::AskFirst,
+            step: Dial::AskFirst,
+        }
+    }
+
+    pub fn dial(&self, kind: ActionKind) -> Dial {
+        match kind {
+            ActionKind::Create => self.create,
+            ActionKind::Comment => self.comment,
+            ActionKind::Tag => self.tag,
+            ActionKind::Move => self.move_card,
+            ActionKind::Close => self.close,
+            ActionKind::Step => self.step,
+        }
     }
 }
 
@@ -109,6 +255,7 @@ impl Policy {
     /// Whether `actor` may do `act`; `duty_manager` is [`Settings::is_duty_manager`].
     pub fn permits(self, act: &Act, actor: &Viewer, duty_manager: bool) -> bool {
         match (self, act) {
+            (_, Act::Undo { for_user_id }) => duty_manager || *for_user_id == Some(actor.id),
             (Policy::Anyone, _) => true,
             (_, _) if duty_manager => true,
             (Policy::DutyManagersOnly, _) => false,
@@ -130,6 +277,11 @@ pub enum Act {
     Comment,
     /// Move, close, "not now", severity, departments, steps.
     ChangeCard,
+    /// Undo something Hermes did (phase 2): duty managers, and the person it was done for, whatever
+    /// the confirm policy (decision D8).
+    Undo {
+        for_user_id: Option<i64>,
+    },
 }
 
 impl Act {
@@ -139,6 +291,7 @@ impl Act {
             (Act::ConfirmDraft { .. }, Policy::AuthorOrDutyManager) => {
                 "Only the person who reported it or a duty manager can confirm this draft."
             }
+            (Act::Undo { .. }, _) => "Only duty managers and the person it was done for can undo this.",
             (_, _) => "Only duty managers can do this.",
         }
     }
@@ -187,7 +340,7 @@ impl Settings {
     /// administrator saves the settings again. A policy the owner tightened must not silently
     /// loosen to `anyone` because the file got damaged.
     pub fn fail_closed() -> Self {
-        Self { confirm_policy: Policy::DutyManagersOnly, ..Self::default() }
+        Self { confirm_policy: Policy::DutyManagersOnly, autonomy: Autonomy::ask_first(), ..Self::default() }
     }
 
     /// The settings cleaned up (trimmed, tags normalized, duplicates of room and user ids dropped),
@@ -237,6 +390,12 @@ impl Settings {
             if managers.len() > MAX_DUTY_MANAGERS || managers.iter().any(|id| *id <= 0) {
                 return invalid("The duty managers aren't valid.".into());
             }
+        }
+        self.hermes_fizzy_user_id = self.hermes_fizzy_user_id.map(|id| id.trim().to_string()).filter(|id| !id.is_empty());
+        if let Some(id) = &self.hermes_fizzy_user_id
+            && (id.len() > MAX_FIZZY_ID_CHARS || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'))
+        {
+            return invalid(format!("“{id}” isn't a Fizzy user id (letters, digits, “-” and “_”)."));
         }
         self.version = SETTINGS_VERSION;
         Ok(self)
@@ -320,7 +479,7 @@ impl SettingsStore {
     pub fn save(&self, settings: Settings) -> Result<Arc<Settings>, SaveError> {
         let settings = settings.validated().map_err(SaveError::Invalid)?;
         let _saving = self.saving.lock().unwrap_or_else(|e| e.into_inner());
-        write_atomically(&self.path, &settings).map_err(|error| SaveError::Io(error.to_string()))?;
+        crate::store::write_json_atomically(&self.path, &settings).map_err(|error| SaveError::Io(error.to_string()))?;
         let settings = Arc::new(settings);
         *self.current.write().unwrap_or_else(|e| e.into_inner()) = settings.clone();
         *self.load_error.write().unwrap_or_else(|e| e.into_inner()) = None;
@@ -339,40 +498,6 @@ fn read(path: &Path) -> Result<Settings, SettingsError> {
     settings.validated().map_err(|error| SettingsError(format!("{} isn't valid: {error}", path.display())))
 }
 
-fn write_atomically(path: &Path, settings: &Settings) -> std::io::Result<()> {
-    use std::io::Write;
-    let dir = path.parent().filter(|dir| !dir.as_os_str().is_empty()).unwrap_or(Path::new("."));
-    std::fs::create_dir_all(dir)?;
-    let name = path.file_name().and_then(|name| name.to_str()).unwrap_or("workspace.json");
-    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0);
-    let temporary = dir.join(format!(".{name}.{}-{nanos}.tmp", std::process::id()));
-    let result = (|| {
-        let mut file = std::fs::File::create(&temporary)?;
-        let mut json = serde_json::to_vec_pretty(settings).map_err(std::io::Error::other)?;
-        json.push(b'\n');
-        file.write_all(&json)?;
-        file.sync_all()?;
-        std::fs::rename(&temporary, path)
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(&temporary);
-    }
-    result?;
-    sync_dir(dir)
-}
-
-/// Makes the rename durable: a crash right after it can't bring the old file back.
-#[cfg(unix)]
-fn sync_dir(dir: &Path) -> std::io::Result<()> {
-    std::fs::File::open(dir)?.sync_all()
-}
-
-/// Windows can't open a directory as a file; its renames are journaled.
-#[cfg(not(unix))]
-fn sync_dir(_dir: &Path) -> std::io::Result<()> {
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -385,13 +510,7 @@ mod tests {
         Department { name: name.into(), tag: tag.into(), rooms: rooms.to_vec() }
     }
 
-    /// A fresh directory under the system's temporary directory.
-    pub(crate) fn scratch_dir(name: &str) -> PathBuf {
-        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-        let dir = std::env::temp_dir().join(format!("campfire-workspace-{name}-{}-{nanos}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
+    use crate::store::scratch_dir;
 
     #[test]
     fn validation_normalizes_tags_and_ids() {
@@ -572,5 +691,73 @@ mod tests {
         }
         assert_eq!(SettingsStore::open(&path).get(), store.get());
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_version_one_file_loads_with_the_phase_two_defaults() {
+        let dir = scratch_dir("v1");
+        let path = dir.join("workspace.json");
+        std::fs::write(
+            &path,
+            r#"{"version": 1, "departments": [{"name": "Security", "tag": "security", "rooms": [4]}], "duty_managers": [3], "confirm_policy": "author_or_duty_manager"}"#,
+        )
+        .unwrap();
+        let store = SettingsStore::open(&path);
+        assert_eq!(store.load_error(), None);
+        let settings = store.get();
+        assert_eq!(settings.autonomy, Autonomy::default());
+        assert_eq!(settings.hermes_fizzy_user_id, None);
+        assert_eq!(settings.confirm_policy, Policy::AuthorOrDutyManager, "version 1 values are kept");
+        assert_eq!(settings.autonomy.dial(ActionKind::Comment), Dial::Alone);
+        assert_eq!(settings.autonomy.dial(ActionKind::Tag), Dial::Alone);
+        for kind in [ActionKind::Create, ActionKind::Move, ActionKind::Close, ActionKind::Step] {
+            assert_eq!(settings.autonomy.dial(kind), Dial::AskFirst, "{kind:?}");
+        }
+        let json: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(json["version"], 1, "reading doesn't rewrite the file");
+
+        let mut next = (*settings).clone();
+        next.autonomy.close = Dial::Never;
+        next.hermes_fizzy_user_id = Some(" 03hermes ".into());
+        store.save(next).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(json["version"], 2, "the next save upgrades it");
+        assert_eq!(json["autonomy"]["close"], "never");
+        assert_eq!(json["autonomy"]["move"], "ask_first");
+        assert_eq!(json["hermes_fizzy_user_id"], "03hermes");
+        assert_eq!(SettingsStore::open(&path).get(), store.get());
+
+        // A partial map keeps the defaults for what it leaves out.
+        std::fs::write(&path, r#"{"version": 2, "autonomy": {"create": "alone"}}"#).unwrap();
+        let partial = SettingsStore::open(&path).get();
+        assert_eq!((partial.autonomy.create, partial.autonomy.comment), (Dial::Alone, Dial::Alone));
+        assert_eq!(partial.autonomy.close, Dial::AskFirst);
+        // An unknown dial value doesn't validate: the file fails closed (nothing alone).
+        std::fs::write(&path, r#"{"version": 2, "autonomy": {"create": "sometimes"}}"#).unwrap();
+        let broken = SettingsStore::open(&path);
+        assert!(broken.load_error().is_some());
+        assert_eq!(broken.get().autonomy, Autonomy::ask_first());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_hermes_user_id_is_validated() {
+        let invalid = Settings { hermes_fizzy_user_id: Some("a b".into()), ..Settings::default() }.validated().unwrap_err();
+        assert!(invalid.0.contains("Fizzy user id"));
+        let blank = Settings { hermes_fizzy_user_id: Some("  ".into()), ..Settings::default() }.validated().unwrap();
+        assert_eq!(blank.hermes_fizzy_user_id, None);
+    }
+
+    #[test]
+    fn undo_is_for_duty_managers_and_the_person_it_was_for() {
+        let (member, person, manager) = (viewer(1, false), viewer(2, false), viewer(3, false));
+        for policy in Policy::ALL {
+            let settings = Settings { duty_managers: Some(vec![3]), confirm_policy: policy, ..Settings::default() };
+            let undo = Act::Undo { for_user_id: Some(2) };
+            assert!(!settings.permits(&undo, &member), "{policy:?}: not anyone, even under `anyone`");
+            assert!(settings.permits(&undo, &person) && settings.permits(&undo, &manager), "{policy:?}");
+            assert!(!settings.permits(&Act::Undo { for_user_id: None }, &person));
+        }
+        assert!(Act::Undo { for_user_id: None }.refusal(Policy::Anyone).contains("person it was done for"));
     }
 }

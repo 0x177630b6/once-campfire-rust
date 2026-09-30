@@ -9,8 +9,11 @@
 //! - [`pages`]: the board, the card sheet, the room panel, the new-card form, the settings page;
 //! - [`actions`] and [`writes`]: working cards (move, close, severity, departments, steps,
 //!   comments, create), through an acting identity, audited, policy-checked;
-//! - [`settings`]: departments, duty managers and the policy, in a JSON file;
-//! - [`cache`] and [`fizzy`]: the in-memory picture of Fizzy, refreshed by polling its JSON API.
+//! - [`settings`]: departments, duty managers, the policy and Hermes's autonomy, in a JSON file;
+//! - [`cache`] and [`fizzy`]: the in-memory picture of Fizzy, refreshed by polling its JSON API;
+//! - phase 2, supervising Hermes: [`journal`] (the durable write log), [`hermes_log`] (what Hermes
+//!   did, direct or through Campfire), [`proposals`] (Hermes asks, Campfire decides by the dial) and
+//!   [`hermes`] (the Hermes tab, proposals' decisions, undo).
 //!
 //! This crate knows nothing of Campfire's own crates, so upstream merges can't break it and its
 //! tests run anywhere (`cargo test -p campfire_workspace`). The app plugs it in through a thin
@@ -24,11 +27,16 @@ pub mod chips;
 pub mod config;
 pub mod drafts;
 pub mod fizzy;
+pub mod hermes;
+pub mod hermes_log;
 pub mod home;
 mod html;
+pub mod journal;
 pub mod overlay;
 pub mod pages;
+pub mod proposals;
 pub mod settings;
+mod store;
 pub mod writes;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -71,6 +79,15 @@ pub struct Workspace {
     /// One lock per card being written to ([`Workspace::lock_card`]); an entry lives only while
     /// someone holds or waits for it.
     card_locks: CardLocks,
+    /// Every write, durably (`actions.jsonl`).
+    journal: journal::ActionLog,
+    /// What Hermes did (`hermes-log.jsonl`).
+    hermes_log: hermes_log::HermesLog,
+    /// Hermes's proposals (`proposals.json`).
+    proposals: proposals::ProposalStore,
+    /// The Fizzy users behind the tokens, once learned.
+    fizzy_users: RwLock<hermes::FizzyUsers>,
+    clock: Box<dyn Fn() -> Timestamp + Send + Sync>,
 }
 
 type CardLocks = Mutex<HashMap<u64, Arc<tokio::sync::Mutex<()>>>>;
@@ -95,10 +112,14 @@ impl Drop for CardLock<'_> {
 }
 
 impl Workspace {
-    /// Reads the settings file (`config.settings_path`); writes go through `FIZZY_TOKEN`.
+    /// Reads the settings file (`config.settings_path`) and, next to it, the write log, the Hermes
+    /// log and the proposals; people's writes go through `FIZZY_TOKEN`.
     pub fn new(config: WorkspaceConfig) -> Self {
         let settings = SettingsStore::open(&config.settings_path);
         let tokens = Box::new(writes::SharedToken(config.token.clone()));
+        let journal = journal::ActionLog::open(config.storage_file("actions.jsonl"));
+        let hermes_log = hermes_log::HermesLog::open(config.storage_file("hermes-log.jsonl"), Timestamp::now());
+        let proposals = proposals::ProposalStore::open(config.storage_file("proposals.json"));
         Self {
             config,
             snapshot: RwLock::new(Arc::new(Snapshot::default())),
@@ -109,7 +130,46 @@ impl Workspace {
             tokens,
             audit: Box::new(|_| {}),
             card_locks: Mutex::new(HashMap::new()),
+            journal,
+            hermes_log,
+            proposals,
+            fizzy_users: RwLock::new(hermes::FizzyUsers::default()),
+            clock: Box::new(Timestamp::now),
         }
+    }
+
+    /// The time writes and the Hermes log are stamped with (tests fix it).
+    pub fn with_clock(mut self, clock: impl Fn() -> Timestamp + Send + Sync + 'static) -> Self {
+        self.clock = Box::new(clock);
+        self
+    }
+
+    pub fn now(&self) -> Timestamp {
+        (self.clock)()
+    }
+
+    /// One write: into the durable write log, then to the app's audit sink (the server log).
+    pub fn record(&self, record: &WriteRecord) {
+        self.journal.append(record);
+        (self.audit)(record);
+    }
+
+    pub fn journal(&self) -> &journal::ActionLog {
+        &self.journal
+    }
+
+    pub fn hermes_log(&self) -> &hermes_log::HermesLog {
+        &self.hermes_log
+    }
+
+    pub fn proposals(&self) -> &proposals::ProposalStore {
+        &self.proposals
+    }
+
+    /// The storage errors since the last call (write log, Hermes log, proposals), for the app to
+    /// log.
+    pub fn take_storage_errors(&self) -> Vec<String> {
+        [self.journal.take_error(), self.hermes_log.take_error(), self.proposals.take_error()].into_iter().flatten().collect()
     }
 
     /// Waits until nobody else is writing to card `number`, then holds it until the returned
@@ -153,6 +213,7 @@ impl Workspace {
     /// A card as Fizzy just returned it (after a write, or read for a sheet): into the picture at
     /// once, in the right list. A card on another board is dropped.
     pub fn remember(&self, card: Card) {
+        let now = self.now();
         let mut snapshot = self.snapshot.write().unwrap_or_else(|e| e.into_inner());
         let mut next = (**snapshot).clone();
         let number = card.number;
@@ -166,9 +227,11 @@ impl Workspace {
                     next.open.push(number);
                 }
                 next.cards.insert(number, card);
+                next.refreshed.insert(number, now);
             }
             _ => {
                 next.cards.remove(&number);
+                next.refreshed.remove(&number);
             }
         }
         *snapshot = Arc::new(next);
@@ -203,6 +266,17 @@ impl Workspace {
         let mut state = self.poll_state.lock().unwrap_or_else(|e| e.into_inner()).take().unwrap_or_default();
         let result = cache::poll(&client, &previous, &self.config.incident_board, wanted, &mut state, now).await;
         *self.poll_state.lock().unwrap_or_else(|e| e.into_inner()) = Some(state);
+        let result = match result {
+            Ok(mut next) => {
+                // Hermes's own actions, for its log; a failure here doesn't fail the poll.
+                if let Err(error) = self.poll_hermes(&client, &next, now).await {
+                    next.lookup_errors.push(format!("Hermes's activities: {error}"));
+                }
+                Ok(next)
+            }
+            Err(error) => Err(error),
+        };
+        self.expire_proposals(now);
         let next = match &result {
             Ok(next) => next.clone(),
             Err(error) => {
@@ -223,8 +297,15 @@ impl Workspace {
     pub fn decorate_message(&self, message_id: i64, creator_id: i64, body_html: &str) -> Option<String> {
         let snapshot = self.snapshot();
         let chipped = chips::decorate(body_html, &self.config, &snapshot);
-        let buttons =
-            self.bot(creator_id).filter(|_| drafts::detect(body_html).is_some()).map(|bot| drafts::buttons(message_id, &bot, None));
+        let buttons = self.bot(creator_id).and_then(|bot| match proposals::marker_in(body_html) {
+            // A proposal's draft: its buttons decide that proposal (a marker alone does nothing).
+            Some(id) => self
+                .proposals
+                .get(&id)
+                .filter(|proposal| proposal.bot_id == bot.id)
+                .map(|proposal| drafts::proposal_buttons(&proposal, &bot, drafts::Place::Room)),
+            None => drafts::detect(body_html).is_some().then(|| drafts::buttons(message_id, &bot, None)),
+        });
         if let Some(unknown) = chipped.as_deref().map(unknown_cards) {
             self.want(unknown);
         }
@@ -264,7 +345,9 @@ impl Workspace {
     /// The Home page for `viewer`.
     pub async fn home(&self, viewer: &Viewer, source: &dyn ChatSource, now: Timestamp) -> Result<HomeView, String> {
         let messages = source.recent_messages(now - drafts::DRAFT_TTL - SignedDuration::from_mins(5)).await?;
-        Ok(home::build(&self.config, &self.snapshot(), viewer, &messages, &self.bots(), now))
+        let mut view = home::build(&self.config, &self.snapshot(), viewer, &messages, &self.bots(), now);
+        view.proposals = self.pending_items(viewer);
+        Ok(view)
     }
 
     /// The board page, from the last poll.

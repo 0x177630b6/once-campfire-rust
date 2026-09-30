@@ -16,11 +16,22 @@
   {%- endmatch %}
 
   <section class="ws-section" aria-labelledby="ws-confirm">
-    <h2 id="ws-confirm" class="ws-section__title">To confirm <span class="ws-count{% if !to_confirm.is_empty() %} ws-count--ai{% endif %}">{{ to_confirm.len() }}</span></h2>
-    {%- if to_confirm.is_empty() %}
+    <h2 id="ws-confirm" class="ws-section__title">To confirm <span class="ws-count{% if !to_confirm.is_empty() || !proposals.is_empty() %} ws-count--ai{% endif %}">{{ to_confirm.len() + proposals.len() }}</span></h2>
+    {%- if to_confirm.is_empty() && proposals.is_empty() %}
     <p class="ws-empty">Nothing waiting for a confirmation.</p>
     {%- else %}
     <ul class="ws-list">
+      {%- for proposal in proposals %}
+      <li class="ws-item ws-item--draft">
+        <p class="ws-item__meta"><span class="ws-ai">Hermes asks</span>{% if let Some(name) = proposal.for_label %} for {{ name }}{% endif %}{% if let Some(room) = proposal.room_name %} in {% if let Some(url) = proposal.message_url %}<a href="{{ url }}" data-turbo-frame="_top">{{ room }}</a>{% else %}{{ room }}{% endif %}{% endif %} · <time datetime="{{ proposal.created_at }}" data-local-time-target="datetime"></time></p>
+        <p class="ws-item__title">{{ proposal.summary }}</p>
+        {%- if proposal.buttons.is_empty() %}
+        <p class="ws-muted"><a class="ws-link" href="/workspace/hermes#proposal-{{ proposal.id }}">In the Hermes tab</a></p>
+        {%- else %}
+        {{ proposal.buttons|safe }}
+        {%- endif %}
+      </li>
+      {%- endfor %}
       {%- for draft in to_confirm %}
       <li class="ws-item ws-item--draft">
         <p class="ws-item__meta"><span class="ws-ai">Hermes drafted an incident</span> in <a href="{{ draft.url }}" data-turbo-frame="_top">{{ draft.room_name }}</a> · <time datetime="{{ draft.created_at }}" data-local-time-target="datetime"></time></p>

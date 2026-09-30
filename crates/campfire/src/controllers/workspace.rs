@@ -14,7 +14,11 @@
 //!   cards panel (the last three as fragments with `?fragment=1`, for the page's overlays);
 //! - `POST /workspace/cards` and `POST /workspace/cards/:number/:change`: create and change cards;
 //! - `GET`/`POST /workspace/settings`: the settings (administrators);
-//! - `GET /hermes/:bot_key/workspace/settings.json`: the settings, for Hermes (bots only).
+//! - `GET /hermes/:bot_key/workspace/settings.json`: the settings, for Hermes (bots only);
+//! - phase 2: `GET /workspace/hermes` (the Hermes tab), `GET /workspace/hermes/proposals.json`,
+//!   `POST /workspace/hermes/proposals/:id/decision`, `POST /workspace/hermes/actions/:id/undo`,
+//!   and, for Hermes through its bridge, `POST /hermes/:bot_key/workspace/proposals` and
+//!   `GET /hermes/:bot_key/workspace/proposals/:id` (bots only).
 //!
 //! All answer 404 while the workspace is off (no `FIZZY_URL`/`FIZZY_TOKEN`), and run
 //! `ApplicationController`'s chain (session only and no bots, except the bot route;
@@ -34,8 +38,10 @@ use campfire_views::{ViewContext, hermes::WorkspaceHooks};
 use campfire_workspace::actions::{CardSource, Change, NewCard};
 use campfire_workspace::drafts::{self, Decision};
 use campfire_workspace::fizzy::{self, HttpResponse};
+use campfire_workspace::hermes::{self, Proposed};
 use campfire_workspace::overlay::{self, TabBar};
 use campfire_workspace::pages::{self, BoardFilter, FormSource};
+use campfire_workspace::proposals::{self, Context};
 use campfire_workspace::settings::SaveError;
 use campfire_workspace::{Act, ActionError, Bot, BoxFuture, ChatMessage, ChatSource, Settings, Viewer, Workspace, WriteRecord};
 use serde_json::{Value, json};
@@ -62,14 +68,17 @@ pub fn build(app_config: &crate::config::Config) -> Option<Arc<Workspace>> {
     app_config.workspace.clone().map(|config| Arc::new(Workspace::new(config).with_audit(log_write)))
 }
 
-/// Every Fizzy write, in the server log: who (Campfire user), which card, what, through whose
-/// token, and how it went. Never the token.
+/// Every Fizzy write, in the server log (the workspace also keeps it in `actions.jsonl`): who
+/// (Campfire user), which card, what, through whose token, for what (a person, a proposal of
+/// Hermes's, an undo), and how it went. Never the token.
 fn log_write(record: &WriteRecord) {
     tracing::info!(
         user_id = record.user_id,
         card = record.card.map(|number| number.to_string()).unwrap_or_else(|| "new".into()),
         action = %record.action,
         identity = record.identity,
+        via = record.via,
+        reference = record.reference.as_deref().unwrap_or("-"),
         outcome = %record.outcome,
         "workspace wrote to Fizzy"
     );
@@ -83,6 +92,9 @@ pub async fn start(app: &App) {
         return;
     };
     refresh_bots(app, &workspace).await;
+    for error in workspace.take_storage_errors() {
+        tracing::warn!(%error, "a workspace file couldn't be read or written");
+    }
     let hooks = Hooks { workspace: workspace.clone(), voice: app.gemini_live.is_some() };
     campfire_views::hermes::install_workspace_hooks(Some(Arc::new(hooks)));
     let config = workspace.config();
@@ -137,6 +149,10 @@ async fn poll_loop(app: Weak<AppState>, workspace: Arc<Workspace>) {
             tracing::warn!(errors = %lookup_errors.join("; "), "some Fizzy lookups failed; retrying at the next poll");
         }
         last_lookup_errors = lookup_errors;
+        // The write log, the Hermes log, the proposals: said once per failure.
+        for error in workspace.take_storage_errors() {
+            tracing::warn!(%error, "a workspace file couldn't be read or written");
+        }
     }
 }
 
@@ -180,13 +196,16 @@ impl WorkspaceHooks for Hooks {
             show_bar: !path.ends_with("/voice"),
             home_url: overlay::HOME_PATH.into(),
             board_url: pages::BOARD_PATH.into(),
+            hermes_url: hermes::HERMES_PATH.into(),
             chats_url: ctx.last_room_visited_id.map(campfire_routes::room).unwrap_or_else(|| "/".into()),
             report_url: report_room.filter(|_| self.voice).map(overlay::voice_path),
             cards_url: overlay::CARDS_PATH.into(),
             stylesheet_url: ctx.asset("hermes/workspace.css"),
             script_url: ctx.asset("hermes/workspace.js"),
+            logic_url: ctx.asset("hermes/workspace_logic.js"),
             home_icon: ctx.asset("hermes/home.svg"),
             board_icon: ctx.asset("hermes/board.svg"),
+            hermes_icon: ctx.asset("bot.svg"),
             chats_icon: ctx.asset("messages-outlined.svg"),
             report_icon: ctx.asset("headset.svg"),
             panel,
@@ -490,7 +509,7 @@ pub async fn settings(c: &mut Ctx) -> Result {
     let directory = c.app().db.read(directory).await.map_err(db_error)?;
     let administrators: Vec<String> = directory.people.iter().filter(|person| person.2).map(|person| person.1.clone()).collect();
     let people: Vec<(i64, String)> = directory.people.iter().map(|(id, name, _)| (*id, name.clone())).collect();
-    let content = pages::settings_page(
+    let mut view = pages::settings_page(
         workspace.config(),
         &workspace.snapshot(),
         &workspace.settings(),
@@ -498,9 +517,9 @@ pub async fn settings(c: &mut Ctx) -> Result {
         &people,
         &administrators,
         workspace.settings_store().load_error(),
-    )
-    .render()
-    .map_err(Error::internal)?;
+    );
+    view.hermes_user_learned = workspace.fizzy_users().hermes;
+    let content = view.render().map_err(Error::internal)?;
     page(c, StatusCode::OK, "Workspace settings", content).await
 }
 
@@ -566,6 +585,239 @@ pub async fn bot_settings(c: &mut Ctx) -> Result {
         .collect();
     let body = pages::bot_settings(workspace.config(), &workspace.snapshot(), &settings, &directory.rooms, &managers);
     c.json(StatusCode::OK, &body)
+}
+
+// --- Phase 2: Hermes -----------------------------------------------------------------------------
+
+/// `GET /workspace/hermes[?filter=created|tags|moves|comments|questions|failures]`: the Hermes tab.
+pub async fn hermes(c: &mut Ctx) -> Result {
+    let workspace = feature(c)?;
+    before_actions(c, Before::default()).await?;
+    find_template(c, &format::HTML)?;
+    let user = require_current_user(c)?.clone();
+    let filter = c.params.get("filter").and_then(Param::as_str).unwrap_or("all").to_string();
+    let viewer = viewer(&user);
+    let source = RoomMessages { app: c.app().clone(), user };
+    let view = workspace.hermes_page(&viewer, &filter, &source).await.map_err(|error| Error::internal(anyhow::anyhow!(error)))?;
+    let content = view.render().map_err(Error::internal)?;
+    page(c, StatusCode::OK, "Hermes", content).await
+}
+
+/// `GET /workspace/hermes/proposals.json?ids=a,b`: `{"proposals": {"a": {"status", "label"}}}`, for
+/// the drafts' buttons (their state isn't in the cached message HTML).
+pub async fn proposal_states(c: &mut Ctx) -> Result {
+    let workspace = feature(c)?;
+    before_actions(c, Before::default()).await?;
+    let ids = hermes::parse_ids(c.params.get("ids").and_then(Param::as_str).unwrap_or(""));
+    c.json(StatusCode::OK, &hermes::states_json(workspace.proposal_states(&ids)))
+}
+
+/// `POST /workspace/hermes/proposals/:id/decision` `{"decision": "confirm" | "dismiss"}`: File or
+/// Dismiss a pending proposal (confirm policy). A filed proposal is then noted in its room as the
+/// person (a link, which renders as a chip), when they're in that room. `201 {"status", "message",
+/// "card", "url", "chip", "warning"}`.
+pub async fn decide(c: &mut Ctx) -> Result {
+    let workspace = feature(c)?;
+    before_actions(c, Before::default()).await?;
+    let user = require_current_user(c)?.clone();
+    let id = c.params.get("id").and_then(Param::as_str).unwrap_or("").to_string();
+    let Some(decision) = c.request_params.get("decision").and_then(Param::as_str).and_then(Decision::parse) else {
+        return json_error(c, StatusCode::UNPROCESSABLE_ENTITY, "invalid_decision", "Decision must be confirm or dismiss.");
+    };
+    let proposal = match workspace.decide(&FizzyHttp::new(), &viewer(&user), &id, decision).await {
+        Ok(proposal) => proposal,
+        Err(error) => return action_error(c, &error),
+    };
+    let done = proposal.status == proposals::Status::Done;
+    if done && let (Some(room_id), Some(url)) = (proposal.context.room_id, proposal.result_url.clone()) {
+        let user_id = user.id;
+        let room = c.app().db.read(move |conn| Room::find_for_user(conn, user_id, room_id)).await.map_err(db_error)?;
+        if let Some(room) = room {
+            let link = h::escape(&url);
+            let what = if proposal.action == "create" { "Filed Hermes’s proposal".to_string() } else { h::escape(&proposal.summary) };
+            let body = format!(r#"<p>{what}: <a href="{link}">{link}</a></p>"#);
+            let posted = async {
+                let message = messages::create_message(c, &room, MessageParams { body: Some(body), ..MessageParams::default() }).await?;
+                messages::broadcast_create(c, &room, &message).await
+            }
+            .await;
+            if let Err(error) = posted {
+                tracing::warn!(%error, room_id, proposal = %proposal.id, "couldn't note a confirmed proposal in its room");
+            }
+        }
+    }
+    tracing::info!(user_id = user.id, proposal = %proposal.id, status = proposal.status.as_str(), "decided a Hermes proposal");
+    let chip = proposal.result_card.and_then(|number| workspace.chip(number));
+    let message = match (&proposal.status, proposal.result_card) {
+        (proposals::Status::Done, Some(number)) if proposal.action == "create" => format!("Card #{number} filed."),
+        (proposals::Status::Done, _) => "Done.".to_string(),
+        _ => proposal.state_label(),
+    };
+    c.json(
+        StatusCode::CREATED,
+        &json!({ "status": proposal.status.as_str(), "message": message, "card": proposal.result_card, "url": proposal.result_url,
+                 "chip": chip, "warning": if done { proposal.message.clone() } else { None } }),
+    )
+}
+
+/// `POST /workspace/hermes/actions/:id/undo`: takes back one of Hermes's logged actions (duty
+/// managers and the person it was for). `200 {"ok", "message", "chip"}`; `422` with the reason it
+/// can't be undone (changed since, too old, no way back); `403`; `404`; `502`.
+pub async fn undo(c: &mut Ctx) -> Result {
+    let workspace = feature(c)?;
+    before_actions(c, Before::default()).await?;
+    let user = require_current_user(c)?.clone();
+    let id = c.params.get("id").and_then(Param::as_str).unwrap_or("").to_string();
+    match workspace.undo(&FizzyHttp::new(), &viewer(&user), &id).await {
+        Ok(entry) => {
+            tracing::info!(user_id = user.id, entry = %id, card = ?entry.card, "undid one of Hermes's actions");
+            let chip = entry.card.and_then(|number| workspace.chip(number));
+            c.json(StatusCode::OK, &json!({ "ok": true, "message": "Undone.", "chip": chip }))
+        }
+        Err(error) => action_error(c, &error),
+    }
+}
+
+/// `POST /hermes/:bot_key/workspace/proposals` (bots only): a proposal from Hermes, relayed by its
+/// bridge, which adds `context` (the conversation it was answering); Campfire checks that context
+/// against its database and drops what doesn't hold. The dial decides: `201` done, `202` pending
+/// (the draft is posted in the context's room as the bot), `403` refused, `404`, `422`, `502`.
+/// Every answer is `{"status", "message", …}`.
+pub async fn bot_propose(c: &mut Ctx) -> Result {
+    let workspace = feature(c)?;
+    before_actions(c, Before::default().allow_bot_access()).await?;
+    let bot_user = require_current_user(c)?.clone();
+    if !bot_user.is_bot() {
+        return halt(concerns::head(StatusCode::FORBIDDEN));
+    }
+    let body = c.request_params.to_json();
+    let raw = body.get("context").cloned().unwrap_or(Value::Null);
+    let (app, reader) = (c.app().clone(), bot_user.clone());
+    let (context, source) = c.app().db.read(move |conn| checked_context(conn, &app, &reader, &raw)).await.map_err(db_error)?;
+    let bot = workspace.bot(bot_user.id).unwrap_or_else(|| Bot {
+        id: bot_user.id,
+        name: bot_user.name.clone(),
+        sgid: attachable_sgid(&c.app().secrets, bot_user.id),
+    });
+    let outcome = workspace.propose(&FizzyHttp::new(), &bot, &body, context, source).await;
+    match outcome {
+        Ok(Proposed::Done { proposal }) => {
+            tracing::info!(proposal = %proposal.id, action = %proposal.action, card = ?proposal.result_card, "ran a Hermes proposal");
+            c.json(StatusCode::CREATED, &hermes::proposal_json(&proposal))
+        }
+        Ok(Proposed::Pending { mut proposal, duplicate }) => {
+            if !duplicate && let Some(room_id) = proposal.context.room_id {
+                match post_draft(c, room_id, &proposal).await {
+                    Ok(message_id) => {
+                        workspace.set_draft_message(&proposal.id, message_id);
+                        proposal.draft_message_id = Some(message_id);
+                    }
+                    Err(error) => tracing::warn!(%error, room_id, proposal = %proposal.id, "couldn't post a proposal's draft"),
+                }
+            }
+            tracing::info!(proposal = %proposal.id, action = %proposal.action, duplicate, "Hermes proposal waiting for a confirmation");
+            let mut reply = hermes::proposal_json(&proposal);
+            reply["message"] = json!(if proposal.draft_message_id.is_some() {
+                "Waiting for a confirmation in Campfire (expires in 24 h): the draft is in the room."
+            } else {
+                "Waiting for a confirmation in Campfire's Hermes tab (expires in 24 h)."
+            });
+            reply["duplicate"] = json!(duplicate);
+            c.json(StatusCode::ACCEPTED, &reply)
+        }
+        Ok(Proposed::Refused { message }) => {
+            c.json(StatusCode::FORBIDDEN, &json!({ "status": "refused", "error": "never", "message": message }))
+        }
+        Err(error) => {
+            let status = match error.status() {
+                404 => "not_found",
+                403 => "refused",
+                422 => "invalid",
+                _ => "failed",
+            };
+            c.json(status_of(&error), &json!({ "status": status, "error": error.code(), "message": error.message() }))
+        }
+    }
+}
+
+/// `GET /hermes/:bot_key/workspace/proposals/:id` (bots only): a proposal's status, for Hermes.
+pub async fn bot_proposal(c: &mut Ctx) -> Result {
+    let workspace = feature(c)?;
+    before_actions(c, Before::default().allow_bot_access()).await?;
+    let bot_user = require_current_user(c)?.clone();
+    if !bot_user.is_bot() {
+        return halt(concerns::head(StatusCode::FORBIDDEN));
+    }
+    let id = c.params.get("id").and_then(Param::as_str).unwrap_or("").to_string();
+    let own = workspace.proposals().get(&id).is_some_and(|proposal| proposal.bot_id == bot_user.id);
+    match workspace.proposal_status(&id).filter(|_| own) {
+        Some(status) => c.json(StatusCode::OK, &status),
+        None => c.json(StatusCode::NOT_FOUND, &json!({ "status": "not_found", "error": "not_found", "message": "No such proposal." })),
+    }
+}
+
+/// The draft of a pending proposal, posted in its room as the bot (the current user of the bot
+/// route), without the bot webhooks.
+async fn post_draft(c: &mut Ctx, room_id: i64, proposal: &proposals::Proposal) -> Result<i64> {
+    let room = c.app().db.read(move |conn| Room::find(conn, room_id)).await.map_err(db_error)?;
+    let body = proposals::draft_html(proposal, None);
+    let message = messages::create_message(c, &room, MessageParams { body: Some(body), ..MessageParams::default() }).await?;
+    messages::broadcast_create(c, &room, &message).await?;
+    Ok(message.id)
+}
+
+/// The bridge's context, as far as Campfire's database confirms it: a room the bot is in, an active
+/// person, their message in that room. What doesn't hold is dropped (a name stays, for display).
+fn checked_context(
+    conn: &campfire_db::Connection,
+    app: &App,
+    bot: &User,
+    raw: &Value,
+) -> campfire_db::Result<(Context, Option<proposals::SourceMessage>)> {
+    let number = |key: &str| raw.get(key).and_then(|value| value.as_i64().or_else(|| value.as_str()?.trim().parse().ok()));
+    let text = |key: &str| raw.get(key).and_then(Value::as_str).map(|value| value.split_whitespace().collect::<Vec<_>>().join(" "));
+    let mut context = Context {
+        source: text("source").filter(|source| ["chat", "voice_note", "fizzy_comment", "live_voice_question"].contains(&source.as_str())),
+        user_name: text("user_name").filter(|name| !name.is_empty()).map(|name| name.chars().take(80).collect()),
+        ..Context::default()
+    };
+    if let Some(room_id) = number("room_id")
+        && let Some(room) = Room::find_for_user(conn, bot.id, room_id)?
+    {
+        context.room_name = Some(Presenter::new(conn, app, None).room_view(&room, bot)?.display_name);
+        context.room_id = Some(room.id);
+    }
+    if let Some(user_id) = number("user_id")
+        && let Ok(user) = User::find(conn, user_id)
+        && user.is_active()
+        && !user.is_bot()
+    {
+        context.user_id = Some(user.id);
+        context.user_name = Some(user.name.clone());
+    }
+    let mut source = None;
+    if let (Some(message_id), Some(room_id)) = (number("message_id"), context.room_id)
+        && let Ok(message) = Message::find_reachable(conn, bot.id, message_id)
+        && message.room_id == room_id
+        && context.user_id.is_none_or(|user_id| user_id == message.creator_id)
+    {
+        let creator = message.creator(conn)?;
+        // The message says who it's for, when it's a person's.
+        if !creator.is_bot() && creator.is_active() {
+            context.user_id = Some(creator.id);
+            context.user_name = Some(creator.name.clone());
+        }
+        source = Some(proposals::SourceMessage {
+            id: message.id,
+            room_id: message.room_id,
+            creator_id: creator.id,
+            creator_is_bot: creator.is_bot(),
+            created_at: message.created_at.jiff(),
+            body_html: message.body_html(conn)?.unwrap_or_default(),
+        });
+        context.message_id = Some(message.id);
+    }
+    Ok((context, source))
 }
 
 /// The settings form's JSON as `Settings` reads it: ids sent as strings become numbers.
@@ -836,6 +1088,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn phase_two_routes_are_404_while_off_and_bots_only_where_they_should() {
+        let Some(app) = TestApp::boot().await else { return };
+        let mut david = app.david();
+        assert_eq!(david.get("/workspace/hermes").await.status, StatusCode::NOT_FOUND);
+        assert_eq!(david.write(json_post("/workspace/hermes/proposals/abc/decision", &json!({}))).await.status, StatusCode::NOT_FOUND);
+        let bot = app.anonymous().write(json_post(&format!("/hermes/{BENDER_KEY}/workspace/proposals"), &json!({}))).await;
+        assert_eq!(bot.status, StatusCode::NOT_FOUND);
+
+        let Some(on) = TestApp::boot_with(ON).await else { return };
+        let mut david = on.david();
+        let tab = david.get("/workspace/hermes").await;
+        assert_eq!(tab.status, StatusCode::OK);
+        assert!(tab.text().contains("data-ws-hermes") && tab.text().contains("ws-tab"), "{}", tab.text());
+        let unknown = david.write(json_post("/workspace/hermes/proposals/abc/decision", &json!({"decision": "confirm"}))).await;
+        assert_eq!(unknown.status, StatusCode::NOT_FOUND);
+        let invalid = david.write(json_post("/workspace/hermes/proposals/abc/decision", &json!({"decision": "maybe"}))).await;
+        assert_eq!(invalid.status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(david.write(json_post("/workspace/hermes/actions/a-1/undo", &json!({}))).await.status, StatusCode::NOT_FOUND);
+        assert_eq!(david.get("/workspace/hermes/proposals.json?ids=abc").await.json(), json!({"proposals": {}}));
+        let people = david.write(json_post("/hermes/nope/workspace/proposals", &json!({"action": "close", "card": 1}))).await;
+        assert_eq!(people.status, StatusCode::FORBIDDEN, "people aren't bots");
+        let refused =
+            on.anonymous().write(json_post(&format!("/hermes/{BENDER_KEY}/workspace/proposals"), &json!({"action": "delete"}))).await;
+        assert_eq!((refused.status, refused.json()["status"].clone()), (StatusCode::UNPROCESSABLE_ENTITY, json!("invalid")));
+        let down = on
+            .anonymous()
+            .write(json_post(
+                &format!("/hermes/{BENDER_KEY}/workspace/proposals"),
+                &json!({"action": "close", "card": 1, "context": {"room_id": ALL_TALK}}),
+            ))
+            .await;
+        assert_eq!((down.status, down.json()["status"].clone()), (StatusCode::BAD_GATEWAY, json!("failed")), "{}", down.text());
+        assert!(!down.text().contains("t0k3n"));
+        let status = on.anonymous().get(&format!("/hermes/{BENDER_KEY}/workspace/proposals/abc")).await;
+        assert_eq!(status.status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
     async fn phase_one_routes_are_404_while_off() {
         let Some(app) = TestApp::boot().await else { return };
         let mut david = app.david();
@@ -946,6 +1236,18 @@ mod tests {
         assert_eq!(endpoint(Method::POST, "/workspace/settings"), Some("hermes/workspace#update_settings"));
         assert_eq!(endpoint(Method::GET, "/hermes/1-abc/workspace/settings.json"), Some("hermes/workspace#bot_settings"));
         assert_eq!(param(Method::GET, "/hermes/1-abc/workspace/settings.json", "bot_key").as_deref(), Some("1-abc"));
+
+        // Phase 2.
+        assert_eq!(endpoint(Method::GET, "/workspace/hermes"), Some("hermes/workspace#hermes"));
+        assert_eq!(endpoint(Method::GET, "/workspace/hermes/proposals.json"), Some("hermes/workspace#proposal_states"));
+        assert_eq!(endpoint(Method::POST, "/workspace/hermes/proposals/k3x9a01b/decision"), Some("hermes/workspace#decide"));
+        assert_eq!(param(Method::POST, "/workspace/hermes/proposals/k3x9a01b/decision", "id").as_deref(), Some("k3x9a01b"));
+        assert_eq!(endpoint(Method::POST, "/workspace/hermes/actions/p-k3x9a01b-done/undo"), Some("hermes/workspace#undo"));
+        assert_eq!(param(Method::POST, "/workspace/hermes/actions/a-03fb2k4-x/undo", "id").as_deref(), Some("a-03fb2k4-x"));
+        assert_eq!(endpoint(Method::GET, "/workspace/hermes/actions/a-1/undo"), None);
+        assert_eq!(endpoint(Method::POST, "/hermes/1-abc/workspace/proposals"), Some("hermes/workspace#bot_propose"));
+        assert_eq!(endpoint(Method::GET, "/hermes/1-abc/workspace/proposals/k3x9"), Some("hermes/workspace#bot_proposal"));
+        assert_eq!(param(Method::GET, "/hermes/1-abc/workspace/proposals/k3x9", "id").as_deref(), Some("k3x9"));
     }
 
     #[test]

@@ -172,7 +172,7 @@ fn the_workspace_assets_are_served_but_never_linked_or_pinned() {
     // links them, and only while the workspace is on, so every upstream page keeps the reference's
     // stylesheet tags and import map.
     let added = added();
-    for logical in ["hermes/workspace.css", "hermes/workspace.js", "hermes/home.svg", "hermes/board.svg"] {
+    for logical in ["hermes/workspace.css", "hermes/workspace.js", "hermes/workspace_logic.js", "hermes/home.svg", "hermes/board.svg"] {
         assert!(added.iter().any(|added| added == logical), "{logical}");
         let path = campfire_assets::asset_path(logical);
         assert!(path.starts_with("/assets/hermes/"), "{path}");
@@ -182,6 +182,9 @@ fn the_workspace_assets_are_served_but_never_linked_or_pinned() {
     assert!(!campfire_assets::javascript_importmap_tags().contains("hermes/workspace"));
     let script = get(&campfire_assets::asset_path("hermes/workspace.js"));
     assert!(String::from_utf8_lossy(&script.body).contains("data-ws-card"));
+    // Phase 2: the page logic, a module of its own (node --test tests it), published for the script.
+    let logic = get(&campfire_assets::asset_path("hermes/workspace_logic.js"));
+    assert!(String::from_utf8_lossy(&logic.body).contains("globalThis.HermesWorkspace"));
     let css = get(&campfire_assets::stylesheet_path("hermes/workspace.css"));
     assert!(String::from_utf8_lossy(&css.body).contains(".ws-tabbar"));
 }

@@ -1,0 +1,88 @@
+{#- Hermes fork: the Hermes tab (campfire_workspace::hermes::HermesPage): pending proposals, then
+    Hermes's log. Styles: hermes/workspace.css; hermes/workspace.js handles Confirm / Dismiss and
+    Undo. -#}
+<section class="ws-home ws-hermes" aria-labelledby="ws-hermes-title" data-ws-hermes>
+  <h1 id="ws-hermes-title" class="for-screen-reader">Hermes</h1>
+
+  {%- match fizzy %}
+  {%- when FizzyStatus::Ok %}
+  {%- when FizzyStatus::Waiting with { failed } %}
+  <p class="ws-notice" role="status">
+    {%- if failed %}<strong>Boards unavailable.</strong> Hermes's direct actions will appear once Fizzy responds (retrying every {{ retry_seconds }}&nbsp;s).
+    {%- else %}Loading the Incident Log…{% endif %}
+  </p>
+  {%- when FizzyStatus::Stale with { since } %}
+  <p class="ws-notice" role="status"><strong>Boards unavailable.</strong> Hermes's direct actions are as of <time datetime="{{ since }}" data-local-time-target="time"></time>; retrying every {{ retry_seconds }}&nbsp;s.</p>
+  {%- endmatch %}
+
+  <section class="ws-section" aria-labelledby="ws-pending">
+    <h2 id="ws-pending" class="ws-section__title">Pending <span class="ws-count{% if !pending.is_empty() %} ws-count--ai{% endif %}">{{ pending.len() }}</span></h2>
+    {%- if pending.is_empty() %}
+    <p class="ws-empty">Hermes isn't waiting for anyone.</p>
+    {%- else %}
+    <ul class="ws-list">
+      {%- for proposal in pending %}
+      <li class="ws-item ws-item--draft" id="proposal-{{ proposal.id }}">
+        <p class="ws-item__meta"><span class="ws-ai">Hermes asks</span>
+          {%- if let Some(name) = proposal.for_label %} for {{ name }}{% endif %}
+          {%- if let Some(room) = proposal.room_name %} in {% if let Some(url) = proposal.message_url %}<a href="{{ url }}" data-turbo-frame="_top">{{ room }}</a>{% else %}{{ room }}{% endif %}{% endif %}
+          {%- if let Some(source) = proposal.source %} · {{ source }}{% endif %}
+          · <time datetime="{{ proposal.created_at }}" data-local-time-target="datetime"></time>
+          · expires <time datetime="{{ proposal.expires_at }}" data-local-time-target="datetime"></time></p>
+        <p class="ws-item__title">{{ proposal.summary }}</p>
+        {%- for detail in proposal.details %}
+        <p class="ws-item__text">{{ detail }}</p>
+        {%- endfor %}
+        {%- if proposal.buttons.is_empty() %}
+        {%- if let Some(note) = proposal.decide_note %}<p class="ws-muted">Who can confirm: {{ note }}.</p>{% endif %}
+        {%- else %}
+        {{ proposal.buttons|safe }}
+        {%- endif %}
+      </li>
+      {%- endfor %}
+    </ul>
+    {%- endif %}
+  </section>
+
+  <section class="ws-section" aria-labelledby="ws-log">
+    <h2 id="ws-log" class="ws-section__title">What Hermes did <span class="ws-count">{{ items.len() }}</span></h2>
+    <nav class="ws-filters" aria-label="Filter the log">
+      {%- for filter in filters %}
+      <a class="ws-filter" href="{{ filter.url }}"{% if filter.selected %} aria-current="true"{% endif %}>{{ filter.label }}</a>
+      {%- endfor %}
+    </nav>
+    {%- if direct_unknown %}
+    <p class="ws-notice" role="status">Hermes's own Fizzy user isn't known, so what it does directly in Fizzy isn't shown: set <code>HERMES_FIZZY_TOKEN</code>, or its Fizzy user id in the <a class="ws-link" href="/workspace/settings">settings</a>.</p>
+    {%- endif %}
+    <p class="ws-muted">Hermes still has its own Fizzy account: <strong>direct</strong> lines are what it did there itself (Fizzy doesn't report tags, steps or where a moved card was, so those aren't here); <strong>via Campfire</strong> lines are what it proposed here, run by Campfire.{% if shared_token %} The workspace writes with Hermes's Fizzy account too: people's changes from the workspace are left out of this log.{% endif %}</p>
+    {%- if items.is_empty() %}
+    <p class="ws-empty">{% if filtered %}Nothing of this kind.{% else %}Nothing yet.{% endif %}</p>
+    {%- else %}
+    <ul class="ws-list ws-log" data-ws-log>
+      {%- for item in items %}
+      <li class="ws-item ws-log__item ws-log__item--{{ item.tone }}{% if item.failed %} ws-log__item--failed{% endif %}" id="{{ item.id }}">
+        <p class="ws-item__meta"><span class="ws-via ws-via--{{ item.tone }}">{{ item.via }}</span> · <time datetime="{{ item.at }}" data-local-time-target="datetime"></time>
+          {%- if let Some(label) = item.for_label %} · {{ label }}{% endif %} · {{ item.source }}
+          {%- if let Some(by) = item.by_label %} · {{ by }}{% endif %}</p>
+        <p class="ws-item__title">{% if let Some(url) = item.card_url %}<a href="{{ url }}" target="_blank" rel="noopener">{{ item.text }}</a>{% else %}{{ item.text }}{% endif %}</p>
+        {%- if let Some(error) = item.error %}
+        <p class="ws-item__text ws-log__error">{{ error }}</p>
+        {%- endif %}
+        {%- if let Some(by) = item.undone_by %}
+        <p class="ws-muted">Undone by {{ by }}.</p>
+        {%- endif %}
+        {%- if let Some(url) = item.undo_url %}
+        <p class="ws-log__actions"><button type="button" class="btn ws-btn ws-btn--small" data-ws-undo="{{ url }}">Undo</button> <span class="ws-sheet__status" role="status" data-ws-status></span></p>
+        {%- endif %}
+        {%- if let Some(note) = item.undo_note %}
+        <p class="ws-muted">{{ note }}</p>
+        {%- endif %}
+      </li>
+      {%- endfor %}
+    </ul>
+    {%- endif %}
+  </section>
+  {%- if let Some(settings_url) = settings_url %}
+  <p class="ws-muted"><a class="ws-link" href="{{ settings_url }}">Workspace settings</a> (what Hermes may do alone)</p>
+  {%- endif %}
+</section>

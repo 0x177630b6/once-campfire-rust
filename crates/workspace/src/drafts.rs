@@ -211,6 +211,10 @@ pub fn pending(messages: &[ChatMessage], now: Timestamp) -> Vec<PendingDraft> {
         if !message.creator_is_bot || now.duration_since(message.created_at) > DRAFT_TTL {
             continue;
         }
+        // A proposal's draft: the proposal says whether it's waiting (Home lists those itself).
+        if crate::proposals::marker_in(&message.body_html).is_some() {
+            continue;
+        }
         let Some(draft) = detect(&message.body_html) else { continue };
         let answered = sorted[at + 1..].iter().filter(|later| later.room_id == message.room_id).any(|later| {
             later.creator_id == message.creator_id
@@ -259,6 +263,44 @@ pub fn buttons(message_id: i64, bot: &Bot, message_url: Option<&str>) -> String 
         url = escape(&reply_path(message_id)),
         name = escape(&bot.name),
         sgid = escape(&bot.sgid),
+        edit = edit,
+    )
+}
+
+/// Where a proposal's buttons are: under its draft in the room (Edit fills the composer), or
+/// elsewhere (Home, the Hermes tab: Edit opens the draft in its room, when there is one).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Place<'a> {
+    Room,
+    Elsewhere(Option<&'a str>),
+}
+
+/// The buttons under the draft of a Hermes proposal (phase 2): File (Confirm for a change) /
+/// Edit / Dismiss, posting `{"decision": "confirm" | "dismiss"}` to the proposal's decision route.
+/// The draft's state (decided, expired) isn't in the cached HTML: the page asks
+/// (`GET /workspace/hermes/proposals.json`).
+pub fn proposal_buttons(proposal: &crate::proposals::Proposal, bot: &Bot, place: Place<'_>) -> String {
+    let edit = match place {
+        Place::Elsewhere(Some(url)) => format!(r#"<a class="btn ws-draft__btn" href="{}" data-turbo-frame="_top">Edit</a>"#, escape(url)),
+        Place::Elsewhere(None) => String::new(),
+        Place::Room => r#"<button type="button" class="btn ws-draft__btn" data-ws-draft-action="edit">Edit</button>"#.to_string(),
+    };
+    let file = if proposal.action == "create" { "File" } else { "Confirm" };
+    format!(
+        concat!(
+            r#"<div class="ws-draft ws-draft--proposal" data-ws-proposal="{id}" data-ws-draft-url="{url}" data-ws-bot-name="{name}" data-ws-bot-sgid="{sgid}">"#,
+            r#"<span class="ws-draft__hint">Hermes proposal awaiting confirmation</span>"#,
+            r#"<span class="ws-draft__actions">"#,
+            r#"<button type="button" class="btn btn--reversed ws-draft__btn" data-ws-draft-action="confirm">{file}</button>"#,
+            "{edit}",
+            r#"<button type="button" class="btn ws-draft__btn ws-draft__btn--quiet" data-ws-draft-action="dismiss">Dismiss</button>"#,
+            r#"</span><span class="ws-draft__status" role="status"></span></div>"#
+        ),
+        id = escape(&proposal.id),
+        url = escape(&proposal.decision_path()),
+        name = escape(&bot.name),
+        sgid = escape(&bot.sgid),
+        file = file,
         edit = edit,
     )
 }

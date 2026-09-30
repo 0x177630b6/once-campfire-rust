@@ -21,13 +21,21 @@
 //   when the policy lets the viewer create cards (`[data-ws-viewer][data-ws-can-create]`).
 // - A failed change in the sheet shows the error and keeps what was typed in the comment box.
 // - Settings: the departments rows (add / remove) and the form, posted as JSON.
+// - Hermes (phase 2): a Hermes proposal's draft (`[data-ws-proposal]`) has the same buttons, posting
+//   to the proposal's decision route; its state (filed, dismissed, timed out) comes from
+//   GET /workspace/hermes/proposals.json, since the buttons live in the cached message HTML. The
+//   Hermes tab's Undo buttons POST /workspace/hermes/actions/:id/undo.
+//
+// The logic that doesn't touch the page is in hermes/workspace_logic.js (tested with `node --test`),
+// which the tab bar loads first and which is read from `globalThis.HermesWorkspace`.
 //
 // Every write answers JSON; a refusal or an error shows its message where the action was. A reply
 // that was redirected means the session expired (fetch follows the redirect to the sign-in page).
 
+const logic = globalThis.HermesWorkspace
 const CARDS_URL = "/workspace/cards.json"
+const PROPOSALS_URL = "/workspace/hermes/proposals.json"
 const REFRESH_MS = 60_000
-const MAX_CHIPS = 50
 
 let scanTimer = null
 
@@ -38,6 +46,7 @@ function scheduleScan(delay = 250) {
 
 function scan() {
   markAnsweredDrafts()
+  refreshProposals()
   refreshChips()
   addCardActions()
   setUpPanel()
@@ -47,7 +56,7 @@ function scan() {
 
 async function refreshChips() {
   const links = [ ...document.querySelectorAll("a[data-ws-card]") ]
-  const numbers = [ ...new Set(links.map(link => link.dataset.wsCard)) ].filter(n => /^\d+$/.test(n)).slice(0, MAX_CHIPS)
+  const numbers = logic.chipNumbers(links.map(link => link.dataset.wsCard))
   if (numbers.length === 0) return
 
   const url = document.querySelector(".ws-tabbar")?.dataset.wsCardsUrl || CARDS_URL
@@ -64,7 +73,7 @@ async function refreshChips() {
   for (const link of document.querySelectorAll("a[data-ws-card]")) {
     const html = cards[link.dataset.wsCard]
     if (!html) continue
-    const version = hash(html)
+    const version = logic.hash(html)
     if (link.dataset.wsV === version) continue
     const template = document.createElement("template")
     template.innerHTML = html
@@ -75,18 +84,12 @@ async function refreshChips() {
   }
 }
 
-// Tells a chip we put in from one the server rendered, so that swapping it in doesn't trigger
-// another refresh.
-function hash(text) {
-  let h = 5381
-  for (let i = 0; i < text.length; i++) h = ((h * 33) ^ text.charCodeAt(i)) >>> 0
-  return h.toString(36)
-}
-
 // --- Drafts -----------------------------------------------------------------------------------------
 
+// A text draft followed by a later message of the same bot was answered (or re-drafted). Not a
+// proposal's draft: Hermes's own reply comes right after it, and the proposal says its state.
 function markAnsweredDrafts() {
-  for (const draft of document.querySelectorAll(".ws-draft:not([data-ws-draft-state])")) {
+  for (const draft of document.querySelectorAll(".ws-draft:not([data-ws-draft-state]):not([data-ws-proposal])")) {
     const message = draft.closest(".message")
     if (!message) continue
     for (let next = message.nextElementSibling; next; next = next.nextElementSibling) {
@@ -104,8 +107,9 @@ function setStatus(draft, text) {
 }
 
 async function answerDraft(draft, decision) {
+  const proposal = "wsProposal" in draft.dataset
   draft.dataset.wsDraftState = "busy"
-  setStatus(draft, decision === "confirm" ? "Filing…" : "Dismissing…")
+  setStatus(draft, logic.draftBusyText(decision))
   try {
     const response = await fetch(draft.dataset.wsDraftUrl, {
       method: "POST",
@@ -113,18 +117,63 @@ async function answerDraft(draft, decision) {
       headers: { "Content-Type": "application/json", "Accept": "application/json" },
       body: JSON.stringify({ decision })
     })
-    // Signed out: the session check redirects to the sign-in page, which fetch follows (200), and
-    // nothing was posted.
-    if (response.redirected || response.status === 401) throw new Error("you’re signed out. Sign in again, then retry.")
     const body = await response.json().catch(() => ({}))
-    if (response.status !== 201) throw new Error(body?.message || `HTTP ${response.status}`)
+    // Signed out: nothing was posted.
+    const problem = logic.replyProblem(response, body) || (response.status === 201 ? null : `HTTP ${response.status}`)
+    if (problem) throw new Error(problem)
     draft.dataset.wsDraftState = "sent"
-    setStatus(draft, decision === "confirm" ? "Sent “confirm” to Hermes." : "Sent “cancel” to Hermes.")
+    setStatus(draft, logic.draftSentText(decision, body, proposal))
+    if (body.chip && body.card) updateChips(body.card, body.chip)
+    if (proposal) afterHermesChange()
   } catch (error) {
     delete draft.dataset.wsDraftState
-    setStatus(draft, `Couldn’t send: ${error.message}`)
+    setStatus(draft, proposal ? error.message : `Couldn’t send: ${error.message}`)
   }
 }
+
+// --- Hermes: proposals' states, undo -----------------------------------------------------------------
+
+async function refreshProposals() {
+  const drafts = [ ...document.querySelectorAll(".ws-draft[data-ws-proposal]:not([data-ws-draft-state])") ]
+  const ids = logic.proposalIds(drafts.map(draft => draft.dataset.wsProposal))
+  if (ids.length === 0) return
+  let states
+  try {
+    const response = await fetch(`${PROPOSALS_URL}?ids=${ids.join(",")}`, { credentials: "same-origin", headers: { "Accept": "application/json" } })
+    if (!response.ok || response.redirected) return
+    states = (await response.json())?.proposals || {}
+  } catch {
+    return // the buttons stay; the server refuses what isn't pending any more
+  }
+  for (const draft of drafts) {
+    const text = logic.proposalStateText(states[draft.dataset.wsProposal])
+    if (!text) continue
+    draft.dataset.wsDraftState = "sent"
+    setStatus(draft, text)
+  }
+}
+
+// On the Hermes tab, show the log as it is now.
+function afterHermesChange() {
+  if (document.querySelector("[data-ws-hermes]")) setTimeout(reloadPage, 900)
+}
+
+document.addEventListener("click", async event => {
+  const button = event.target.closest?.("[data-ws-undo]")
+  if (!button || button.disabled) return
+  event.preventDefault()
+  const item = button.closest(".ws-log__item")
+  button.disabled = true
+  showStatus(item, "Undoing…")
+  try {
+    const data = await postJSON(button.dataset.wsUndo, {})
+    showStatus(item, data.message || "Undone.", "ok")
+    afterHermesChange()
+  } catch (error) {
+    button.disabled = false
+    showStatus(item, error.message, "error")
+  }
+})
 
 function escapeHTML(text) {
   const element = document.createElement("span")
@@ -173,8 +222,6 @@ document.addEventListener("click", event => {
 
 // --- Requests ---------------------------------------------------------------------------------------
 
-const SIGNED_OUT = "You’re signed out. Sign in again, then retry."
-
 // POSTs `body` as JSON. Resolves to the reply's JSON; rejects with a message to show.
 async function postJSON(url, body) {
   let response
@@ -186,11 +233,11 @@ async function postJSON(url, body) {
       body: JSON.stringify(body)
     })
   } catch {
-    throw new Error("The server can’t be reached. Check your connection and retry.")
+    throw new Error(logic.UNREACHABLE)
   }
-  if (response.redirected || response.status === 401) throw new Error(SIGNED_OUT)
   const data = await response.json().catch(() => ({}))
-  if (!response.ok) throw new Error(data?.message || `Something went wrong (HTTP ${response.status}).`)
+  const problem = logic.replyProblem(response, data)
+  if (problem) throw new Error(problem)
   return data
 }
 
@@ -201,9 +248,9 @@ async function getFragment(url) {
   try {
     response = await fetch(`${url}${separator}fragment=1`, { credentials: "same-origin", headers: { "Accept": "text/html" } })
   } catch {
-    throw new Error("The server can’t be reached. Check your connection and retry.")
+    throw new Error(logic.UNREACHABLE)
   }
-  if (response.redirected) throw new Error(SIGNED_OUT)
+  if (response.redirected) throw new Error(logic.SIGNED_OUT)
   if (response.status === 404) throw new Error("This card isn’t on the incident board.")
   const html = await response.text()
   // Errors come as a notice to show as is.
@@ -328,12 +375,12 @@ document.addEventListener("turbo:before-cache", () => {
 // --- Card sheet ------------------------------------------------------------------------------------
 
 function changeBody(control) {
-  switch (control.dataset.wsChange) {
-    case "severity": return { severity: control.value }
-    case "move": return { to: control.value }
-    case "departments": return { tags: [ ...control.querySelectorAll("input:checked") ].map(input => input.value) }
-    case "step": return { step_id: control.dataset.wsStep, completed: control.checked }
-  }
+  return logic.changeBody(control.dataset.wsChange, {
+    value: control.value,
+    checked: control.checked,
+    checkedValues: control.dataset.wsChange === "departments" ? [ ...control.querySelectorAll("input:checked") ].map(input => input.value) : [],
+    stepId: control.dataset.wsStep
+  })
 }
 
 async function changeCard(sheet, kind, body) {
@@ -375,7 +422,7 @@ function updateChips(number, html) {
   for (const link of document.querySelectorAll(`a[data-ws-card="${number}"]`)) {
     const chip = fragment(html)
     if (!chip) continue
-    chip.dataset.wsV = hash(html)
+    chip.dataset.wsV = logic.hash(html)
     link.replaceWith(chip)
   }
 }
@@ -584,14 +631,21 @@ async function saveSettings(form) {
   const departments = [ ...form.querySelectorAll("[data-ws-departments] [data-ws-department]") ].map(row => ({
     name: row.querySelector("input[name=name]").value,
     tag: row.querySelector("input[name=tag]").value,
-    rooms: [ ...row.querySelectorAll("input[name=rooms]:checked") ].map(input => Number(input.value))
+    rooms: [ ...row.querySelectorAll("input[name=rooms]:checked") ].map(input => input.value)
   }))
-  const listed = form.querySelector("input[name=managers][value=listed]")?.checked
-  const body = {
-    departments,
-    duty_managers: listed ? [ ...form.querySelectorAll("input[name=duty_managers]:checked") ].map(input => Number(input.value)) : null,
-    confirm_policy: form.querySelector("input[name=confirm_policy]:checked")?.value || "anyone"
+  const autonomy = {}
+  for (const row of form.querySelectorAll("[data-ws-autonomy]")) {
+    const checked = row.querySelector("input[type=radio]:checked")
+    if (checked) autonomy[row.dataset.wsAutonomy] = checked.value
   }
+  const body = logic.settingsBody({
+    departments,
+    listed: form.querySelector("input[name=managers][value=listed]")?.checked,
+    managers: [ ...form.querySelectorAll("input[name=duty_managers]:checked") ].map(input => input.value),
+    policy: form.querySelector("input[name=confirm_policy]:checked")?.value,
+    autonomy,
+    hermesUserId: form.querySelector("input[name=hermes_fizzy_user_id]")?.value
+  })
   const submit = form.querySelector("[type=submit]")
   submit.disabled = true
   showStatus(form, "Saving…")
@@ -618,6 +672,6 @@ new MutationObserver(mutations => {
 
 document.addEventListener("turbo:load", () => scheduleScan(0))
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") scheduleScan(0) })
-setInterval(() => { if (document.visibilityState === "visible") refreshChips() }, REFRESH_MS)
+setInterval(() => { if (document.visibilityState === "visible") { refreshChips(); refreshProposals() } }, REFRESH_MS)
 
 scheduleScan(0)

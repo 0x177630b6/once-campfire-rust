@@ -27,6 +27,9 @@ const WANTED_PER_POLL: usize = 10;
 const MAX_WANTED: usize = 200;
 /// A card number Fizzy answered 404 for isn't asked for again before this.
 const MISSING_RETRY: SignedDuration = SignedDuration::from_mins(30);
+/// A card nothing refreshed for this long (one a chip asked for once, an old closed card) is read
+/// again, within the same per-poll budget as the cards chips ask for (phase 2.0).
+pub const STALE_AFTER: SignedDuration = SignedDuration::from_mins(15);
 /// New users looked up per poll (for their email address).
 const USERS_PER_POLL: usize = 20;
 const MAX_ORIGINS: usize = 8;
@@ -74,6 +77,8 @@ pub struct Snapshot {
     /// fail the poll; never carry the token.
     pub lookup_errors: Vec<String>,
     pub successful_polls: u64,
+    /// When each card in `cards` was last read from Fizzy.
+    pub refreshed: HashMap<u64, Timestamp>,
 }
 
 impl Snapshot {
@@ -132,7 +137,7 @@ pub(crate) async fn poll(
     for mut card in open.into_iter().chain(postponed).chain(closed) {
         // Listed by board, so on it even if the reply left the board out.
         card.board.get_or_insert_with(|| BoardRef { id: board.id.clone(), name: board.name.clone() });
-        upsert(&mut next, &board, card);
+        upsert(&mut next, &board, card, now);
     }
     next.columns = columns;
 
@@ -141,7 +146,7 @@ pub(crate) async fn poll(
         if activity.eventable_type.as_deref() == Some("Card")
             && let Ok(card) = serde_json::from_value::<Card>(activity.eventable.clone())
         {
-            upsert(&mut next, &board, card);
+            upsert(&mut next, &board, card, now);
         }
         if let Some(mention) = mention_in(activity).filter(|mention| mention.board_id == board.id) {
             mentions.push(mention);
@@ -161,12 +166,32 @@ pub(crate) async fn poll(
         .filter(|number| state.missing.get(number).is_none_or(|at| now.duration_since(*at) > MISSING_RETRY))
         .take(WANTED_PER_POLL)
         .collect();
+    let mut budget = WANTED_PER_POLL - wanted.len();
     for number in wanted {
         if let Err(error) = fetch_card(client, &account, &board, number, &mut next, state, now).await {
             state.retry.insert(number);
             lookup_errors.push(format!("card {number}: {error}"));
         }
     }
+    // Cards nothing refreshed lately (asked for by a chip once, closed long ago): read again, the
+    // longest unread first, so a chip doesn't keep showing an old column.
+    let mut stale: Vec<(Timestamp, u64)> = next
+        .cards
+        .keys()
+        .map(|number| (next.refreshed.get(number).copied().unwrap_or(Timestamp::UNIX_EPOCH), *number))
+        .filter(|(at, _)| now.duration_since(*at) > STALE_AFTER)
+        .collect();
+    stale.sort();
+    for (_, number) in stale {
+        if budget == 0 {
+            break;
+        }
+        budget -= 1;
+        if let Err(error) = fetch_card(client, &account, &board, number, &mut next, state, now).await {
+            lookup_errors.push(format!("card {number}: {error}"));
+        }
+    }
+    next.refreshed.retain(|number, _| next.cards.contains_key(number));
     // Cards mentions are about, for their titles (asked again every poll until found).
     let untitled: Vec<u64> = next.mentions.iter().map(|m| m.card_number).filter(|n| !next.cards.contains_key(n)).collect();
     for number in untitled.into_iter().collect::<BTreeSet<_>>().into_iter().take(WANTED_PER_POLL) {
@@ -229,8 +254,10 @@ async fn fetch_card(
     now: Timestamp,
 ) -> Result<(), FizzyError> {
     match client.card(account, number).await? {
-        Some(card) if on_board(&card, board) => upsert(next, board, card),
+        Some(card) if on_board(&card, board) => upsert(next, board, card, now),
         _ => {
+            // Deleted, or moved to another board: gone from the picture.
+            next.cards.remove(&number);
             state.missing.insert(number, now);
         }
     }
@@ -243,11 +270,12 @@ fn on_board(card: &Card, board: &Board) -> bool {
 
 /// Keeps `card` if it's on the incident board; drops it otherwise (and forgets an older copy, for
 /// a card moved to another board).
-fn upsert(snapshot: &mut Snapshot, board: &Board, card: Card) {
+fn upsert(snapshot: &mut Snapshot, board: &Board, card: Card, now: Timestamp) {
     if !on_board(&card, board) {
         snapshot.cards.remove(&card.number);
         return;
     }
+    snapshot.refreshed.insert(card.number, now);
     if let Some(origin) = snapshot.account.as_deref().and_then(|account| origin_of(&card.url, account))
         && !snapshot.origins.contains(&origin)
         && snapshot.origins.len() < MAX_ORIGINS

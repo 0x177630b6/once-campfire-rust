@@ -1,19 +1,22 @@
 //! Every write the workspace makes to Fizzy, in one place.
 //!
 //! - **Who writes**: a [`TokenSource`] gives the token to write with for the Campfire user acting
-//!   (the [`ActingIdentity`]). For now that's always Hermes's Fizzy account ([`SharedToken`],
-//!   `FIZZY_TOKEN`, which then needs `write` permission); per-person Fizzy tokens later only need
-//!   another `TokenSource`.
+//!   (the [`ActingIdentity`]). For people that's the workspace's Fizzy account ([`SharedToken`],
+//!   `FIZZY_TOKEN`, the "Campfire" Fizzy user, which then needs `write` permission); per-person
+//!   Fizzy tokens later only need another `TokenSource`. What Campfire runs for Hermes (phase 2)
+//!   uses Hermes's own token (`HERMES_FIZZY_TOKEN`) when it's set.
 //! - **On whose behalf**: while the token isn't the person's own, every comment starts with their
 //!   Campfire name ("Karim: …"), since Fizzy shows the token's user as the author.
-//! - **Audit**: every write is recorded ([`WriteRecord`]: Campfire user, card, action, outcome;
-//!   never the token), and the app logs it.
+//! - **Audit**: every write is recorded ([`WriteRecord`]: when, Campfire user, card, action, whose
+//!   token, for what, outcome; never the token), in the durable write log (`actions.jsonl`,
+//!   [`crate::journal`]) and in the server log.
 //! - **Toggles**: Fizzy's taggings are toggles (posting a tag the card has removes it), so tag
 //!   changes are computed against a fresh read of the card, only the differences are posted, and
 //!   the card is read again to check the result. A failed toggle is never retried blindly.
 //! - **Incident board only**: [`Writer::card`] answers `NotFound` for a card on any other board,
 //!   before anything is written.
 
+use jiff::Timestamp;
 use serde_json::{Value, json};
 
 use crate::config::Secret;
@@ -27,7 +30,7 @@ pub struct ActingIdentity {
     pub token: Secret,
     /// The token isn't the actor's own: comments carry their name.
     pub on_behalf: bool,
-    /// For the log: whose token (`hermes`, later `own`).
+    /// For the log: whose token (`workspace`, `hermes`, later `own`).
     pub label: &'static str,
 }
 
@@ -43,26 +46,44 @@ pub trait TokenSource: Send + Sync {
     fn identity(&self, actor: &Viewer) -> Result<ActingIdentity, String>;
 }
 
-/// Everyone writes through one account's token (Hermes's `FIZZY_TOKEN`).
+/// Everyone writes through one account's token (the workspace's `FIZZY_TOKEN`).
 pub struct SharedToken(pub Secret);
 
 impl TokenSource for SharedToken {
     fn identity(&self, _actor: &Viewer) -> Result<ActingIdentity, String> {
-        Ok(ActingIdentity { token: self.0.clone(), on_behalf: true, label: "hermes" })
+        Ok(ActingIdentity { token: self.0.clone(), on_behalf: true, label: "workspace" })
     }
 }
 
-/// One write, for the server log. Never carries the token.
+/// One write, for the durable write log and the server log. Never carries the token.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WriteRecord {
+    pub at: Timestamp,
     pub user_id: i64,
     pub card: Option<u64>,
-    /// e.g. `tag +sev-high`, `move column:03ab`, `comment`.
+    /// e.g. `tag +sev-high`, `move column:03ab`, `comment`, `create card`.
     pub action: String,
     /// Whose token (`ActingIdentity::label`).
     pub identity: &'static str,
     /// `ok`, or what went wrong.
     pub outcome: String,
+    /// `workspace` (a person), `proposal` (Hermes, through Campfire) or `undo`.
+    pub via: &'static str,
+    /// The proposal or Hermes log entry this write belongs to.
+    pub reference: Option<String>,
+}
+
+/// What a sequence of writes is for, in the records.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Purpose {
+    pub via: &'static str,
+    pub reference: Option<String>,
+}
+
+impl Purpose {
+    pub fn person() -> Self {
+        Self { via: "workspace", reference: None }
+    }
 }
 
 /// Receives every [`WriteRecord`] (the app logs them).
@@ -139,7 +160,9 @@ pub struct Writer<'a> {
     pub(crate) actor: &'a Viewer,
     pub(crate) account: String,
     pub(crate) board: Board,
-    pub(crate) audit: &'a Audit,
+    /// Records every write ([`crate::Workspace::record`]) and tells the time.
+    pub(crate) workspace: &'a crate::Workspace,
+    pub(crate) purpose: Purpose,
 }
 
 impl<'a> Writer<'a> {
@@ -172,7 +195,23 @@ impl<'a> Writer<'a> {
             Ok(response) => FizzyError::Status(response.status).to_string(),
             Err(error) => error.to_string(),
         };
-        (self.audit)(&WriteRecord { user_id: self.actor.id, card, action, identity: self.identity.label, outcome });
+        // A created card's number, from Fizzy's reply.
+        let card = card.or_else(|| match &result {
+            Ok(response) if ok.contains(&response.status) => {
+                serde_json::from_slice::<Value>(&response.body).ok().and_then(|reply| reply["number"].as_u64())
+            }
+            _ => None,
+        });
+        self.workspace.record(&WriteRecord {
+            at: self.workspace.now(),
+            user_id: self.actor.id,
+            card,
+            action,
+            identity: self.identity.label,
+            outcome,
+            via: self.purpose.via,
+            reference: self.purpose.reference.clone(),
+        });
         match result {
             Ok(response) if ok.contains(&response.status) => Ok(response),
             Ok(response) => Err(ActionError::from_fizzy(&FizzyError::Status(response.status))),
@@ -270,13 +309,34 @@ impl<'a> Writer<'a> {
     }
 
     /// `POST /cards/:n/comments`, the text as HTML paragraphs, prefixed with the actor's name while
-    /// the token isn't theirs. `link` (a URL) is appended as a link.
-    pub async fn comment(&self, number: u64, text: &str, link: Option<&str>) -> Result<(), ActionError> {
+    /// the token isn't theirs. `link` (a URL) is appended as a link. Returns the new comment's id,
+    /// when Fizzy's reply says it (for undo).
+    pub async fn comment(&self, number: u64, text: &str, link: Option<&str>) -> Result<Option<String>, ActionError> {
         let prefix = self.identity.on_behalf.then_some(self.actor.name.as_str());
         let body = json!({ "comment": { "body": comment_html(prefix, text, link) } });
-        self.write(Some(number), "comment".into(), "POST", &format!("/cards/{number}/comments.json"), Some(body), &[200, 201])
+        let response =
+            self.write(Some(number), "comment".into(), "POST", &format!("/cards/{number}/comments.json"), Some(body), &[200, 201]).await?;
+        Ok(serde_json::from_slice::<crate::fizzy::Comment>(&response.body).ok().map(|comment| comment.id).filter(|id| !id.is_empty()))
+    }
+
+    /// `DELETE /cards/:n/comments/:id`: Fizzy lets only the comment's creator do it.
+    pub async fn delete_comment(&self, number: u64, comment_id: &str) -> Result<(), ActionError> {
+        let path = format!("/cards/{number}/comments/{comment_id}.json");
+        self.write(Some(number), format!("delete comment {comment_id}"), "DELETE", &path, None, &[200, 204]).await.map(|_| ())
+    }
+
+    /// `POST /cards/:n/steps` `{"step": {"content"}}`.
+    pub async fn add_step(&self, number: u64, content: &str) -> Result<(), ActionError> {
+        let body = json!({ "step": { "content": content, "completed": false } });
+        self.write(Some(number), "step added".into(), "POST", &format!("/cards/{number}/steps.json"), Some(body), &[200, 201])
             .await
             .map(|_| ())
+    }
+
+    /// `PUT /cards/:n` `{"card": {"title"}}`.
+    pub async fn set_title(&self, number: u64, title: &str) -> Result<(), ActionError> {
+        let body = json!({ "card": { "title": title } });
+        self.write(Some(number), "title".into(), "PUT", &format!("/cards/{number}.json"), Some(body), &[200, 204]).await.map(|_| ())
     }
 }
 
@@ -347,10 +407,10 @@ mod tests {
     }
 
     #[test]
-    fn the_shared_token_writes_on_behalf() {
+    fn the_shared_token_writes_on_behalf_as_the_workspace() {
         let identity =
             SharedToken(Secret::new("t0k")).identity(&Viewer { id: 1, name: "K".into(), email: None, administrator: false }).unwrap();
-        assert!(identity.on_behalf);
+        assert!(identity.on_behalf && identity.label == "workspace");
         assert!(!format!("{identity:?}").contains("t0k"));
         let error = ActionError::from_fizzy(&FizzyError::Status(401));
         assert!(error.message().contains("write permission") && error.status() == 502);

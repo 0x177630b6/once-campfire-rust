@@ -10,6 +10,7 @@
 //! | `FIZZY_POLL_S` | `30` | Seconds between polls (at least 5) |
 //! | `WORKSPACE_INCIDENT_BOARD` | `Incident Log` | The incident board, by name or id |
 //! | `CAMPFIRE_PUBLIC_URL` | unset | Campfire as browsers reach it, for the link to the message a card was created from (unset: the message's path, as text) |
+//! | `HERMES_FIZZY_TOKEN` | unset | Hermes's own Fizzy token (`write`): what Campfire runs for Hermes (its proposals, the undo of its comments) is written under Hermes's name, and the Hermes log learns Hermes's Fizzy user from it. Unset: those writes use `FIZZY_TOKEN` |
 //!
 //! The settings administrators edit in the app ([`crate::settings`]) are in
 //! `<CAMPFIRE_STORAGE_PATH>/hermes/workspace.json` (`storage/hermes/workspace.json` by default).
@@ -58,6 +59,8 @@ pub struct WorkspaceConfig {
     /// `CAMPFIRE_PUBLIC_URL` without a trailing slash: where links written into Fizzy point back
     /// to Campfire. `None`: those are paths, as text (the request's `Host` is never used).
     pub campfire_url: Option<String>,
+    /// `HERMES_FIZZY_TOKEN`: Hermes's own Fizzy token, for what Campfire runs for Hermes (phase 2).
+    pub hermes_token: Option<Secret>,
 }
 
 /// A configuration error. It never quotes `FIZZY_TOKEN`.
@@ -103,7 +106,13 @@ impl WorkspaceConfig {
                 .join("hermes")
                 .join("workspace.json"),
             campfire_url,
+            hermes_token: present("HERMES_FIZZY_TOKEN").map(Secret::new),
         }))
+    }
+
+    /// `<CAMPFIRE_STORAGE_PATH>/hermes/<name>`: the workspace's files, next to the settings.
+    pub fn storage_file(&self, name: &str) -> PathBuf {
+        self.settings_path.parent().map(|dir| dir.join(name)).unwrap_or_else(|| PathBuf::from(name))
     }
 
     /// Where browsers open Fizzy.
@@ -150,6 +159,8 @@ mod tests {
         assert_eq!(config.link_base(), "http://fizzy");
         assert_eq!(config.settings_path, PathBuf::from("storage/hermes/workspace.json"));
         assert_eq!(config.campfire_url, None);
+        assert_eq!(config.hermes_token, None);
+        assert_eq!(config.storage_file("actions.jsonl"), PathBuf::from("storage/hermes/actions.jsonl"));
         assert!(!format!("{config:?}").contains("s3cret"));
     }
 
@@ -164,9 +175,12 @@ mod tests {
             ("WORKSPACE_INCIDENT_BOARD", "Incidents"),
             ("CAMPFIRE_STORAGE_PATH", "/rails/storage"),
             ("CAMPFIRE_PUBLIC_URL", "https://192.168.0.114:8443/"),
+            ("HERMES_FIZZY_TOKEN", " h3rmes "),
         ])
         .unwrap()
         .unwrap();
+        assert_eq!(config.hermes_token.as_ref().map(Secret::expose), Some("h3rmes"));
+        assert!(!format!("{config:?}").contains("h3rmes"));
         assert_eq!(config.campfire_url.as_deref(), Some("https://192.168.0.114:8443"));
         assert_eq!(config.settings_path, PathBuf::from("/rails/storage/hermes/workspace.json"));
         assert_eq!(config.link_base(), "https://192.168.0.114:8444");

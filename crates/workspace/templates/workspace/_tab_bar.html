@@ -1,5 +1,6 @@
 
     <link rel="stylesheet" href="{{ stylesheet_url }}">
+    <script type="module" src="{{ logic_url }}"></script>
     <script type="module" src="{{ script_url }}"></script>
     <template data-ws-viewer data-ws-can-create="{{ can_create }}"></template>
 {%- if show_bar %}
@@ -17,6 +18,9 @@
 {%- endif %}
       <a class="ws-tab" href="{{ board_url }}"{% if active == Tab::Board %} aria-current="page"{% endif %}>
         <img class="colorize--black" aria-hidden="true" src="{{ board_icon }}" width="22" height="22" /><span class="ws-tab__label">Boards</span>
+      </a>
+      <a class="ws-tab" href="{{ hermes_url }}"{% if active == Tab::Hermes %} aria-current="page"{% endif %}>
+        <img class="colorize--black" aria-hidden="true" src="{{ hermes_icon }}" width="22" height="22" /><span class="ws-tab__label">Hermes</span>
       </a>
     </nav>
 {%- endif %}

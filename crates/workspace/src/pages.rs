@@ -11,7 +11,7 @@
 //!   first.
 //! - [`NewCardForm`] (`GET /workspace/cards/new`): "Create a card from this message".
 //! - [`SettingsPage`] (`GET /workspace/settings`, administrators): departments, duty managers,
-//!   policy.
+//!   policy, what Hermes may do alone.
 //!
 //! Fizzy's HTML is never shown as is: descriptions and comments are rendered from their text.
 
@@ -26,7 +26,7 @@ use crate::config::WorkspaceConfig;
 use crate::fizzy::{Card, CardState, Column, Comment, Severity};
 use crate::home::FizzyStatus;
 use crate::html;
-use crate::settings::{Policy, Settings};
+use crate::settings::{ActionKind, Dial, Policy, Settings};
 
 pub const BOARD_PATH: &str = "/workspace/board";
 pub const SETTINGS_PATH: &str = "/workspace/settings";
@@ -522,6 +522,19 @@ pub struct SettingsPage {
     pub administrators: String,
     pub policies: Vec<Choice>,
     pub load_error: Option<String>,
+    /// What Hermes may do alone (phase 2): one row per kind of action.
+    pub autonomy: Vec<AutonomyRow>,
+    /// The settings' Hermes Fizzy user id (empty = learned from `HERMES_FIZZY_TOKEN`).
+    pub hermes_user_id: String,
+    /// The one learned from `HERMES_FIZZY_TOKEN`, if any (the app sets it).
+    pub hermes_user_learned: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutonomyRow {
+    pub key: &'static str,
+    pub label: &'static str,
+    pub choices: Vec<Choice>,
 }
 
 /// `rooms` and `people` are `(id, name)`; `administrators` their names.
@@ -559,6 +572,19 @@ pub fn settings_page(
             .map(|policy| Choice::new(policy.as_str(), policy.label(), *policy == settings.confirm_policy))
             .collect(),
         load_error,
+        autonomy: ActionKind::ALL
+            .iter()
+            .map(|kind| AutonomyRow {
+                key: kind.as_str(),
+                label: kind.label(),
+                choices: Dial::ALL
+                    .iter()
+                    .map(|dial| Choice::new(dial.as_str(), dial.label(), settings.autonomy.dial(*kind) == *dial))
+                    .collect(),
+            })
+            .collect(),
+        hermes_user_id: settings.hermes_fizzy_user_id.clone().unwrap_or_default(),
+        hermes_user_learned: None,
     }
 }
 
@@ -582,5 +608,6 @@ pub fn bot_settings(
         })).collect::<Vec<_>>(),
         "duty_managers": managers.iter().map(|(id, name)| json!({ "id": id, "name": name })).collect::<Vec<_>>(),
         "confirm_policy": settings.confirm_policy.as_str(),
+        "autonomy": ActionKind::ALL.iter().map(|kind| (kind.as_str().to_string(), json!(settings.autonomy.dial(*kind).as_str()))).collect::<serde_json::Map<_, _>>(),
     })
 }

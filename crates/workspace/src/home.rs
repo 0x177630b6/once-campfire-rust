@@ -100,6 +100,8 @@ pub enum FizzyStatus {
 pub struct HomeView {
     pub viewer_name: String,
     pub to_confirm: Vec<DraftItem>,
+    /// Hermes's pending proposals (phase 2), with their buttons.
+    pub proposals: Vec<crate::hermes::PendingItem>,
     pub open: Vec<CardGroup>,
     pub open_count: usize,
     pub mentions: Vec<MentionItem>,
@@ -132,6 +134,7 @@ pub fn build(
     HomeView {
         viewer_name: viewer.name.clone(),
         to_confirm: drafts::pending(messages, now).into_iter().filter_map(|pending| draft_item(pending, bots)).collect(),
+        proposals: Vec::new(),
         open_count: incident_cards.len(),
         open: groups(config, snapshot, &incident_cards),
         mentions: mentions(config, snapshot, viewer, now),

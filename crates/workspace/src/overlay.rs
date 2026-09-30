@@ -1,6 +1,6 @@
 //! What the workspace adds to every page of a signed-in user, through the one hook at the end of
-//! the application layout: its stylesheet and script, the phone tab bar (Home · Report · Boards ·
-//! Chats; a small rail on wide screens), and, on the page of a room linked to a department, the
+//! the application layout: its stylesheet and script, the phone tab bar (Home · Chats · Report ·
+//! Boards · Hermes; a small rail on wide screens), and, on the page of a room linked to a department, the
 //! room's cards panel ([`crate::pages::RoomPanel`]). Report opens the live voice report of the room
 //! on screen (or of the last room visited), only when that feature is on.
 
@@ -12,6 +12,8 @@ pub enum Tab {
     Home,
     Board,
     Chats,
+    /// The Hermes tab (phase 2).
+    Hermes,
     Other,
 }
 
@@ -24,13 +26,17 @@ pub struct TabBar {
     pub show_bar: bool,
     pub home_url: String,
     pub board_url: String,
+    pub hermes_url: String,
     pub chats_url: String,
     pub report_url: Option<String>,
     pub cards_url: String,
     pub stylesheet_url: String,
     pub script_url: String,
+    /// The script's pure logic (`hermes/workspace_logic.js`), loaded before it.
+    pub logic_url: String,
     pub home_icon: String,
     pub board_icon: String,
+    pub hermes_icon: String,
     pub chats_icon: String,
     pub report_icon: String,
     /// The room's cards panel (rendered), or empty.
@@ -59,6 +65,9 @@ pub fn locate(path: &str) -> (Tab, Option<i64>) {
     let path = path.split(['?', '#']).next().unwrap_or("");
     if path == crate::pages::BOARD_PATH || path.starts_with("/workspace/cards/") {
         return (Tab::Board, None);
+    }
+    if path == crate::hermes::HERMES_PATH || path.starts_with("/workspace/hermes/") {
+        return (Tab::Hermes, None);
     }
     if path == HOME_PATH || path.starts_with("/workspace/") {
         return (Tab::Home, None);
@@ -95,13 +104,16 @@ mod tests {
             show_bar: true,
             home_url: HOME_PATH.into(),
             board_url: "/workspace/board".into(),
+            hermes_url: "/workspace/hermes".into(),
             chats_url: "/".into(),
             report_url: report_url.map(str::to_string),
             cards_url: CARDS_PATH.into(),
             stylesheet_url: "/assets/hermes/workspace-1.css".into(),
             script_url: "/assets/hermes/workspace-1.js".into(),
+            logic_url: "/assets/hermes/workspace_logic-1.js".into(),
             home_icon: "/assets/hermes/home-1.svg".into(),
             board_icon: "/assets/hermes/board-1.svg".into(),
+            hermes_icon: "/assets/bot-1.svg".into(),
             chats_icon: "/assets/messages-outlined-1.svg".into(),
             report_icon: "/assets/headset-1.svg".into(),
             panel: String::new(),
@@ -119,6 +131,8 @@ mod tests {
         assert_eq!(locate("/workspace/board?dept=x"), (Tab::Board, None));
         assert_eq!(locate("/workspace/cards/12"), (Tab::Board, None));
         assert_eq!(locate("/workspace/settings"), (Tab::Home, None));
+        assert_eq!(locate("/workspace/hermes"), (Tab::Hermes, None));
+        assert_eq!(locate("/workspace/hermes?filter=tags"), (Tab::Hermes, None));
     }
 
     #[test]
@@ -141,6 +155,10 @@ mod tests {
         assert!(html.contains(r#"href="/workspace/board""#) && html.contains("Boards"));
         let board = bar(Tab::Board, None).render().unwrap();
         assert!(board.contains(r#"href="/workspace/board" aria-current="page""#));
+        let hermes = bar(Tab::Hermes, None).render().unwrap();
+        assert!(hermes.contains(r#"href="/workspace/hermes" aria-current="page""#) && hermes.contains(">Hermes<"));
+        let logic = html.find("workspace_logic-1.js").unwrap();
+        assert!(logic < html.find("workspace-1.js").unwrap(), "the logic module loads first");
         let with_panel = TabBar { panel: "<div class=\"ws-panel-root\"></div>".into(), ..bar(Tab::Chats, None) }.render().unwrap();
         assert!(with_panel.contains(r#"<div class="ws-panel-root"></div>"#));
 

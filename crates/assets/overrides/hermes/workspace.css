@@ -1162,3 +1162,95 @@ dialog.ws-overlay {
 .ws-section__link--next {
   margin-inline-start: 0;
 }
+
+/* ---------------------------------------------------------------------------------------------
+ * Phase 2: the Hermes tab (pending proposals, the log), a proposal's draft, the autonomy dial */
+
+.ws-draft[data-ws-draft-state="sent"][data-ws-proposal] .ws-draft__status {
+  color: color-mix(in srgb, var(--color-text) 70%, transparent);
+}
+
+.ws-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4em;
+  margin-block-end: var(--block-space-half, 0.5em);
+}
+
+.ws-filter {
+  border: 1px solid var(--color-border-dark);
+  border-radius: 2em;
+  color: inherit;
+  font-size: 0.8em;
+  font-weight: 600;
+  padding: 0.3em 0.8em;
+  text-decoration: none;
+
+  &[aria-current="true"] {
+    background: var(--color-text);
+    border-color: var(--color-text);
+    color: var(--color-bg);
+  }
+}
+
+.ws-via {
+  border-radius: 0.3em;
+  font-size: 0.85em;
+  font-weight: 700;
+  padding: 0.05em 0.4em;
+}
+
+.ws-via--direct {
+  background: var(--ws-ai-soft);
+  border: 1px dashed var(--ws-ai-line);
+  color: var(--ws-ai);
+}
+
+.ws-via--campfire {
+  background: color-mix(in srgb, var(--color-text) 8%, transparent);
+}
+
+.ws-via--chat {
+  color: color-mix(in srgb, var(--color-text) 60%, transparent);
+  font-weight: 600;
+}
+
+.ws-log__item--failed .ws-item__title {
+  color: var(--color-negative, var(--ws-sev-critical));
+}
+
+.ws-log__error {
+  color: var(--color-negative, var(--ws-sev-critical));
+}
+
+.ws-log__actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5em;
+  margin: 0;
+}
+
+.ws-autonomy {
+  border-collapse: collapse;
+  font-size: 0.9em;
+  inline-size: 100%;
+  margin-block: var(--block-space-half, 0.5em);
+
+  th,
+  td {
+    border-block-end: 1px solid var(--color-border);
+    padding: 0.4em 0.3em;
+    text-align: center;
+  }
+
+  th[scope="row"] {
+    font-weight: 500;
+    text-align: start;
+  }
+
+  input[type="radio"] {
+    block-size: 1.2em;
+    inline-size: 1.2em;
+  }
+}
