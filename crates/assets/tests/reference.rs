@@ -167,6 +167,26 @@ fn the_hermes_stylesheet_is_served_but_not_linked_everywhere() {
 }
 
 #[test]
+fn the_workspace_assets_are_served_but_never_linked_or_pinned() {
+    // Hermes fork: the Duty Manager Workspace (docs/hermes-workspace.md). Only its tab bar partial
+    // links them, and only while the workspace is on, so every upstream page keeps the reference's
+    // stylesheet tags and import map.
+    let added = added();
+    for logical in ["hermes/workspace.css", "hermes/workspace.js", "hermes/home.svg"] {
+        assert!(added.iter().any(|added| added == logical), "{logical}");
+        let path = campfire_assets::asset_path(logical);
+        assert!(path.starts_with("/assets/hermes/"), "{path}");
+        assert_eq!(get(&path).status, 200, "{path}");
+    }
+    assert!(!campfire_assets::all_stylesheet_paths().iter().any(|logical| logical.starts_with("hermes/")));
+    assert!(!campfire_assets::javascript_importmap_tags().contains("hermes/workspace"));
+    let script = get(&campfire_assets::asset_path("hermes/workspace.js"));
+    assert!(String::from_utf8_lossy(&script.body).contains("data-ws-card"));
+    let css = get(&campfire_assets::stylesheet_path("hermes/workspace.css"));
+    assert!(String::from_utf8_lossy(&css.body).contains(".ws-tabbar"));
+}
+
+#[test]
 fn public_files_are_served_like_action_dispatch_static() {
     let overridden = overridden();
     for case in json_fixture("static_responses.json").as_array().unwrap() {
