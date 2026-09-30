@@ -1103,12 +1103,24 @@ dialog.ws-overlay {
   }
 }
 
+/* The panel is a grid column between the conversation and the sidebar. Upstream's #nav is not in
+ * the grid: it's `position: fixed` over the top of the page, from the left edge to
+ * `--sidebar-width` (nav.css), so it would cover the panel's head (and its close button, the
+ * nav's buttons sitting at its right end). While the panel is open the nav ends where the panel
+ * starts. The column's width is max(17rem, 22vw) (what minmax(17rem, 22vw) resolves to beside a
+ * 1fr column), named so the nav can use it. */
 @media (min-width: 100ch) {
   body.ws-panel-open {
+    --ws-panel-width: max(17rem, 22vw);
+
     grid-template-areas:
       "nav panel sidebar"
       "main panel sidebar";
-    grid-template-columns: 1fr minmax(17rem, 22vw) var(--sidebar-width);
+    grid-template-columns: 1fr var(--ws-panel-width) var(--sidebar-width);
+
+    #nav {
+      inset-inline-end: calc(var(--sidebar-width) + var(--ws-panel-width));
+    }
   }
 }
 

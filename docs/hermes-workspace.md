@@ -133,7 +133,8 @@ are never changed.
 
 - **Room cards panel**: a room linked to one or more departments (settings) gets a "N cards"
   button in its nav; it opens a panel (a column beside the conversation on wide screens, a sheet
-  on phones) listing the incident board's open cards tagged with those departments, most severe
+  on phones; on wide screens the room's fixed top bar is shortened to end where the panel starts,
+  so it doesn't cover the panel's head and close button) listing the incident board's open cards tagged with those departments, most severe
   first, with "New card" and "Open on the board". A room not linked shows nothing. Open or closed
   is remembered per browser (`localStorage`). The panel comes with the layout's overlay (from the
   cache, no Fizzy request) and is refreshed after each change (`GET /workspace/rooms/:id/panel`).
@@ -366,7 +367,9 @@ Not seams (fork-owned or new files): `crates/workspace/**`, `controllers/workspa
    `.message__actions-grid` in the message menu, `form#composer`, `[data-composer-target=text]`,
    the composer controller's `replaceMessageContent`, `#nav .room--current`,
    `meta[name=current-room-id]`) or the layout grid (`body`'s `grid-template-areas`/`-columns`
-   with `--sidebar-width`, `#main-content`, `#sidebar` z-index, the `100ch` breakpoint): check
+   with `--sidebar-width`, `#main-content`, `#sidebar` z-index, the `100ch` breakpoint, `#nav`
+   being `position: fixed` up to `inset-inline-end: var(--sidebar-width)`, which the open panel
+   moves to end where the panel starts): check
    `hermes/workspace.js` and `workspace.css` in a browser (phone and desktop, light and dark): the
    room panel, the message menu's card entry, the overlay, the board's column switcher.
 7. `cargo clippy --workspace --all-targets` and the parity gate as usual; with the workspace **off**
