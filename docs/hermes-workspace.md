@@ -330,6 +330,12 @@ settings_not_saved` (nothing changed), not `422`.
   damaged or invalid file fails closed: every dial at `ask_first`, and visibility `by_department_room`
   with `untagged: duty_managers`, which, with no department known any more, shows the cards to the
   duty managers (the administrators) only, rather than letting a restricted department's cards leak.
+  One exception: a handover `time_zone` this system can't resolve is read as UTC, with a warning in
+  the log and on the settings page until the next save (a save still refuses it), since it only
+  moves the shift ends.
+- Saving refuses (`422`) a **restricted department linked to an open room** (Campfire's
+  `Rooms::Open`, which every user is a member of): everyone would see its cards
+  (`Settings::check_open_rooms`, checked by the adapter, which knows the rooms).
 
 Edited at `/workspace/settings` (Campfire administrators only, decision D6; linked from Home, the
 board and the Hermes tab): add / rename / remove departments, their rooms (checkboxes) and whether
@@ -533,13 +539,16 @@ department" on the duty managers' Home). Nothing here writes to Fizzy or calls H
 ### 2.5 Alerts
 
 `campfire_workspace::alerts`. After every successful poll, `alerts::detect` compares the new picture
-with the previous one and the proposals:
+with the one the previous successful poll produced (kept for the alerts; not the live picture, which
+`Workspace::remember` updates as soon as Campfire creates, changes or reads a card, so a card created
+or raised through Campfire, by a person or a proposal, or read by the sheet after a change in Fizzy,
+still alerts at the next poll) and the proposals:
 
 | Event | When | Who |
 |---|---|---|
 | **Raised** (`sev:<card>:<severity>`) | An open card filed since the first poll with an alerting severity (`notifications.severities`, critical and high by default), or whose severity rose to one | Each duty manager: a direct message from Hermes's bot, "**Critical**: Guest slip in lobby · #13 · nobody assigned" and the card's link (a chip). With `department_rooms`, a notice in the linked rooms of the card's departments (of its restricted departments only, when it has some and visibility is restricted), where Hermes's bot is a member |
-| **Still in New** (`new:<card>`) | Such a card (alerting severity) still in New `new_reminder_min` minutes after it was created (15) | The duty managers |
-| **Proposal waiting** (`proposal:<id>:person`, `…:managers`) | A pending Hermes proposal `draft_reminder_min` minutes old (10): its person; twice that: the duty managers (at once for a proposal without a person) | The person (if still a member of its room and they may see it), then the duty managers |
+| **Still in New** (`new:<card>`) | Such a card (alerting severity) still in New `new_reminder_min` minutes after it was created (15), while recently due (below) | The duty managers |
+| **Proposal waiting** (`proposal:<id>:person`, `…:managers`) | A pending Hermes proposal `draft_reminder_min` minutes old (10): its person; twice that: the duty managers (at once for a proposal without a person); while recently due | The person (if still a member of its room and they may see it), then the duty managers |
 | **Handover due** (`handover:<end>`) | Within 30 minutes after a shift end, when `handover.reminder` is on and a handover room is set | The duty managers, with a link to prepare it |
 
 - **Once**: each event's key is claimed in `notified.json` before anything is sent, so nothing is
@@ -548,7 +557,12 @@ with the previous one and the proposals:
   being sent (a card unknown until now alerts only if Fizzy says it was created after that first
   poll, so an old card a chip asks for later doesn't).
 - **Rate**: each person (and room) gets at most one message per poll, whatever the number of events
-  ("3 alerts from the incident board", 10 lines at most, then "… and N more").
+  ("3 alerts from the incident board", 10 lines at most, then "… and N more"). New serious incidents
+  come first (critical, then high…), then the reminders, so the cap never cuts a new critical one.
+- **Nothing stale**: a reminder is sent only while **recently due**, for 3 times its delay after it
+  fell due (10 minutes at least), so a shorter delay doesn't send every reminder long overdue at
+  once; and while alerts are off (`enabled: false`), what they would send is **recorded without
+  being sent**, so turning them back on sends nothing that happened meanwhile.
 - **Recipients follow the visibility** (2.7): duty managers see every card; a proposal's person is
   reminded only when they may see it; room notices go only where every member may see the card.
 - **Delivery** (the adapter, `deliver_alerts`, from the poll task): as Hermes's bot (`HERMES_BOT`,
@@ -560,7 +574,7 @@ with the previous one and the proposals:
   "everything" involvement, so the phone is notified when Web Push is set up (`VAPID_*` keys,
   HTTPS, and on iPhone the app on the Home Screen). No bot webhook: Hermes isn't asked anything.
 - Alerts carry a card's title and number: lock-screen previews can show them.
-- `enabled: false` sends nothing and records nothing.
+- `enabled: false` sends nothing (and records what it would have sent, above).
 
 ### 2.6 End-of-shift handover
 
@@ -575,7 +589,11 @@ Handover section, which opens `GET /workspace/handover`:
   prose (phase 3), no Fizzy write, no Fizzy card (D10).
 - **This shift**: the shift whose end is nearest to now (before or after; the coming one on a
   tie), from the end before it; or from the last handover posted, when that is later (so a second
-  handover the same shift covers what came since).
+  handover the same shift covers what came since), or when it handed over the shift just before,
+  early (posted at 14:50 for the 15:00 end: the 15:00–23:00 handover starts at 14:50, so what came
+  in those ten minutes is in one of them). A late handover of an older shift doesn't count.
+- A summary longer than a message can be (10 000 characters) is cut at a line, with a note saying
+  the rest is on the board, so it can always be posted as prepared.
 - **Posting** (`POST /workspace/handover {"text"}`): as the duty manager, in the handover room,
   through `create_message` and `broadcast_create` (no bot webhook), like a message they type.
   Paragraphs at blank lines, lines kept, `http(s)://` words made links (a card's renders as its
@@ -584,11 +602,15 @@ Handover section, which opens `GET /workspace/handover`:
   `text_too_long` (10 000 characters). Then `notified.json` records when and by whom.
 - **Visibility**: only what every member of the handover room may see is listed; the rest is
   counted in a note above the box ("2 items aren't listed…"), never named, and isn't in the post.
+  While the room's members aren't known (the people and rooms not read yet, or nobody known to be
+  in it), only what a person in no room may see is listed, and no proposal: an empty member list
+  is never taken as "everyone may see it".
 - **Time zones**: an IANA name from the system's database when it has one. Campfire's image is a
   slim Debian without `tzdata`, so `shifts::builtin` knows today's rules of common zones (Europe,
   North America, the French overseas departments, UTC…) as POSIX rules, daylight saving included; a
-  POSIX TZ string (`CET-1CEST,M3.5.0,M10.5.0/3`) is accepted as is. Anything else doesn't validate.
-  Default `Europe/Paris`.
+  POSIX TZ string (`CET-1CEST,M3.5.0,M10.5.0/3`) is accepted as is. Anything else doesn't validate
+  on save; in a file already saved (a zone this system no longer resolves), it's read as UTC with a
+  warning. Default `Europe/Paris`.
 - The reminder at each shift end is 2.5's "Handover due".
 
 ### 2.7 Visibility by department room
@@ -611,8 +633,10 @@ Handover section, which opens `GET /workspace/handover`:
   (`404`, checked on a fresh read before any write, nothing written), undo (`404`), chips
   (`cards.json` and the replies' chips), the Hermes tab (log lines about a hidden card, or about a
   proposal for one, aren't shown), proposals (listed, decided and reminded only when the card or the
-  departments of the card they'd create are visible: `Workspace::proposal_visible`), a proposal's
-  draft (posted in its room only when every member may see it, else it waits in the Hermes tab;
+  departments of the card they'd create are visible: `Workspace::proposal_visible`; a new card's
+  departments are those its request resolves to, `tags` naming a department included, stored on the
+  proposal when it's made), a proposal's draft (posted in its room only when every member may see
+  it — never while the room's members aren't known —, else it waits in the Hermes tab;
   "Filed …" notes about a change name the card only then), alert recipients, the handover. A card
   the picture doesn't have (so its tags aren't known) is hidden while visibility is restricted.
 - **Chips**: message HTML is rendered once per message version and shared by every viewer (the
@@ -621,8 +645,9 @@ Handover section, which opens `GET /workspace/handover`:
   from `GET /workspace/cards.json`, which answers per viewer: a hidden card stays a plain link. The
   reply says `"visibility": "by_department_room"`, and a chip on the page that the reply leaves out
   (rendered earlier) goes back to a plain link. With `everyone`, the hook renders chips as before,
-  byte for byte. Saving a different mode clears the fragment cache (`AppState::fragment_cache`), so
-  no cached message keeps chips of the other mode. No new seam: the message hook already is one.
+  byte for byte. Saving a different mode clears the fragment cache (`AppState::fragment_cache`), and
+  again 5 seconds later (a message rendered with the old mode just before the switch may insert its
+  fragment after the first clear), so no cached message keeps chips of the other mode. No new seam: the message hook already is one.
 - **Room membership** is Campfire's `memberships` table, read-only: all of it at every poll (for the
   layout's panel and the alerts), and the viewer's own at each workspace request (fresher). Someone
   added to or removed from a room outside a workspace request is seen at the next poll.
@@ -631,7 +656,11 @@ Handover section, which opens `GET /workspace/handover`:
   turn on Campfire's "Only administrators can create rooms" (otherwise anyone creates a room, and an
   administrator who links it to a department grants its members that department's cards). Hermes
   itself (its skill reads Fizzy with its own token) isn't restricted. Alerts' previews on lock
-  screens are the duty managers'.
+  screens are the duty managers'. **Nothing already posted is taken back**: an alert's notice in a
+  room, a direct message, or a handover posted before a department was restricted (or before a
+  card was given a restricted department) keeps the card's title and link; only chips re-check.
+  A restricted department can't be linked to an open room (saving refuses it), but a room made
+  open afterwards isn't re-checked until the next save.
 
 ## Routes and contract
 
@@ -856,23 +885,30 @@ Not seams (fork-owned or new files): `crates/workspace/**`, `controllers/workspa
   posted, membership refreshed by requests); notice rooms; the alert detector (nothing at the first
   poll, a card filed since, a severity raised, medium not alerting, once per key, nothing again
   after a restart even when the severity flaps, alerts off, listed duty managers, no room notice when
-  off, no bot = dropped and counted), reminders (still in New after 15 minutes, a proposal's person
-  then the duty managers, only what the person may see, once), the handover reminder at a shift end;
+  off, no bot = dropped and counted; cards created, re-rated, filed by a proposal alone or
+  confirmed, or read by the sheet after a Fizzy change alert once at the next poll), reminders
+  (still in New after 15 minutes, a proposal's person then the duty managers, only what the person
+  may see, once; nothing stale after alerts are turned back on or a delay shortened), new serious
+  incidents first in a capped message, the handover reminder at a shift end; a proposed card's
+  departments from `tags`; unknown room members (directory not read, empty room) seeing nothing
+  restricted; a restricted department in an open room refused;
   `notified.json` (claims across a restart, 14 days, a broken file); the handover (duty managers
   only, the nearest shift, sections, hidden cards counted not named, not a member / no room, posted
-  HTML escaped with links, the next one from the last posted); shift ends across midnight and
-  daylight saving (Paris by its POSIX rule), time zones, settings v1/v2 → v3 (defaults, nothing
-  restricted, no handover room), invalid values failing closed; the settings page's new sections.
+  HTML escaped with links, the next one from the last posted, or from an early one, a long summary
+  cut to fit); shift ends across midnight and daylight saving (Paris by its POSIX rule), time
+  zones, settings v1/v2 → v3 (defaults, nothing restricted, no handover room), invalid values
+  failing closed, an unknown time zone read as UTC with a warning; the settings page's new sections.
 - `crates/assets/tests/js/workspace_logic.test.mjs` (`node --test`): chip versions, chip numbers,
   proposal ids, reply handling (signed out, server messages), drafts' status lines, proposal states,
-  card sheet change bodies, the settings body (with visibility, alerts, handover), shift ends,
+  card sheet change bodies, the settings body (with visibility, alerts, handover; an invalid
+  reminder delay is an error, not a default), shift ends,
   which chips go back to plain links, the handover's checks.
 - `crates/campfire/src/controllers/workspace.rs` (needs the app to link, i.e. libvips; runs in CI):
   route recognition (all routes), `FizzyHttp` against a fake server (headers, query, `Link`,
   `X-Total-Count`, 404,
   errors without the token, a POST's method and body), settings ids; request tests against the
   parity seed (skip without it): phase 1 routes 404 while off, errors before Fizzy answers (502,
-  422, 404, the form, the panel's 204), settings saved by an administrator and read by a bot;
+  422, 404, the form, the panel's 204), settings saved by an administrator and read by a bot (a restricted department in an open room refused);
   phase 2 routes (404 while off, the Hermes tab, decisions and undo of unknown ids, the proposals'
   states, the bot route refusing people and bots other than `HERMES_BOT`, a proposal that doesn't
   parse, Fizzy down, no token in the reply).
