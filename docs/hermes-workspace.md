@@ -4,8 +4,9 @@ Phase 0 of the "Duty Manager Workspace" design (the approved mockup, §5 "Feasib
 make what already exists visible inside Campfire, **read-only on the Fizzy side** (this phase never
 writes to Fizzy).
 
-- **Card chips**: a Fizzy card URL (`…/<account>/cards/<n>`) in a message renders as a small
-  Fizzy-style card (number, title, severity, column), with the card's *current* state.
+- **Card chips**: a Fizzy card URL (`…/<account>/cards/<n>`) of an incident-board card in a message
+  renders as a small Fizzy-style card (number, title, severity, column), with the card's *current*
+  state. A link to a card on any other board stays a plain link.
 - **Draft buttons**: a Hermes message that shows an incident draft and asks for a confirmation gets
   **File / Edit / Dismiss**. File and Dismiss post `confirm` / `cancel` in the room as the user;
   Edit puts "@Hermes change: " in the composer.
@@ -13,7 +14,8 @@ writes to Fizzy).
   the room on screen); a slim rail on wide screens.
 - **Home** (`/workspace`): *To confirm* (Hermes drafts nobody answered), *Open incidents* (the
   Incident Log's cards that aren't closed, by column, most severe first), *Mentions* (Fizzy comments
-  that @mention you), *Handover* (incident cards changed in the last 12 h). Every card links to Fizzy.
+  on incident-board cards that @mention you), *Handover* (incident cards changed in the last 12 h).
+  Every card links to Fizzy.
 
 This is a fork-only feature. **It is entirely off unless `FIZZY_URL` and `FIZZY_TOKEN` are set**:
 no routes (404), no hooks installed, so every page renders byte for byte what upstream renders.
@@ -34,8 +36,10 @@ A malformed `FIZZY_URL`, `FIZZY_PUBLIC_URL`, `FIZZY_ACCOUNT` or `FIZZY_POLL_S` f
 
 Whose token: the token decides what the workspace can see (Fizzy scopes everything to the token's
 user: `Current.user.boards`). Use a token of a user that can see the Incident Log (the Hermes Fizzy
-user created by `deploy/fizzy-agent.sh` works; a dedicated `read` token is better). **Everything
-that user can see on those boards is shown to every signed-in Campfire user** (chips, Home).
+user created by `deploy/fizzy-agent.sh` works; a dedicated `read` token is better). **Everything the
+token sees on the incident board is shown to every signed-in user** (chips, Home). Nothing from its
+other boards is: their cards and comments are dropped as the poll reads them (the activity feed is
+account-wide, and a chip can ask for any card number), so they never become chips or Home entries.
 
 ## How it works
 
@@ -49,10 +53,12 @@ Fizzy JSON API ◀── poll task ──▶ Snapshot (memory) ──▶ Workspa
 
 - **Polling** (`campfire_workspace::cache`): Fizzy refuses webhooks to private addresses, so the app
   polls: the incident board's open cards (all pages, at most 10), its "Not Now" and 2 pages of
-  recently closed cards, its columns, page 1 of `/activities` (3 on the first poll: card changes on
-  every board, and `comment_created` @mentions), the users those mentions name (their email address,
-  once each), and at most 10 cards per poll that chips asked for and nothing else brought in (404s
-  aren't asked again for 30 min). Requests: `Accept: application/json`, `Authorization: Bearer`,
+  recently closed cards, its columns, page 1 of `/activities` (3 on the first poll: card changes and
+  `comment_created` @mentions; those of other boards are dropped), the users those mentions name
+  (their email address, once each), and at most 10 cards per poll that chips asked for and nothing
+  else brought in (404s and cards on other boards aren't asked again for 30 min). A single card or
+  user lookup that fails doesn't fail the poll: the lists still refresh, the lookup is retried next
+  poll, and the log says it once (`some Fizzy lookups failed`, never with the token). Requests: `Accept: application/json`, `Authorization: Bearer`,
   pagination by `?page=N` while `Link` says `rel="next"` (the header's own URL carries Fizzy's
   `BASE_URL`, possibly unreachable, so only its presence is used). The HTTP client is the app's
   `integrations::net` (HTTP/1.1, rustls; 10 s connect, 20 s per read, 30 s per request).
@@ -62,36 +68,54 @@ Fizzy JSON API ◀── poll task ──▶ Snapshot (memory) ──▶ Workspa
 - **Chips** (`campfire_workspace::chips`): at render time, anchors whose `href` is
   `<base>/<account>/cards/<n>` with `<base>` = `FIZZY_URL`, `FIZZY_PUBLIC_URL`, or the base Fizzy
   writes into card URLs (its `BASE_URL`, learned from the cards it returns, e.g.
-  `http://localhost:8484`) become `<a class="ws-chip" data-ws-card="n" href="FIZZY_PUBLIC_URL/…">`.
-  A card the workspace doesn't know yet keeps its plain link, marked `data-ws-card`. The stored
+  `http://localhost:8484`) become `<a class="ws-chip" data-ws-card="n" href="FIZZY_PUBLIC_URL/…">`
+  when the card is on the incident board. A card the workspace doesn't know yet, or that is on
+  another board, keeps its plain link, marked `data-ws-card`. The stored
   message is never changed. Message HTML is cached (the shared fragment cache, per message version),
   so the chip in it is the state at first render: `hermes/workspace.js` asks
   `GET /workspace/cards.json?numbers=…` on load, when messages arrive, and every 60 s, and swaps in
-  the current chips (and fills in the ones that were unknown).
-- **Drafts** (`campfire_workspace::drafts`): a message from an *active bot* whose text asks to reply
-  with a confirmation word (reply/type/say/réponds… + confirm/yes/oui/ok/valide…, in the last 600
-  characters) about filing something (Fizzy/card/incident/report/log/file…) is a draft. Its title is
+  the current chips (and fills in the ones that were unknown). A reply that was redirected (signed
+  out) is ignored.
+- **Drafts** (`campfire_workspace::drafts`): a message from an *active bot* is a draft when it has
+  the incident-report skill's step-4 shape: a preview of the card (a `Title:` line, the skill's
+  "<type> — <summary> — <location>" title, or two of the template's header fields such as
+  `Type:`/`Severity:`/`Location:`), then, in the last 600 characters, an invitation to reply with a
+  confirmation word (reply/type/say/réponds… + confirm/yes/oui/ok/valide…) whose sentence says it's
+  *to file it* (to file/create/log…, and I'll log…, pour créer/enregistrer…). "Card #12 filed … Reply
+  ok if you also want me to notify maintenance", "Say yes and I'll create it" with no card shown, or
+  "just reply yes" aren't drafts. Its title is
   a `Title:` line, else the first heading, else the first line with " — " (the skill's
   "<type> — <summary> — <location>"), else the first bold text. Severity from `sev-*` or
   `Severity:`/`Gravité :`. Text matching, as planned for phase 0; a structured marker in the bot's
   message would be more reliable (later). In the room the buttons are appended after the body; the
   page marks a draft "answered" once the same bot posted after it. On Home a draft is *to confirm*
   while it's younger than 24 h, the bot hasn't posted in that room since, and nobody answered
-  yes/no (a short message with confirm/yes/oui/ok/cancel/no…).
+  yes/no: a message that is exactly one decision word (confirm/yes/oui/ok/cancel/no…, optionally
+  after a mention), or that mentions the bot (the composer's mention or "@Name") in at most six
+  words with one. "ok thanks", "no worries" or "go ahead with lunch" aren't answers.
 - **Answering**: `POST /workspace/drafts/:message_id/reply` creates the user's message
   `<mention of the bot> confirm` (or `cancel`) through `MessagesController#create`'s path
   (`create_message` → `broadcast_create` → `deliver_webhooks_to_bots`), exactly like the live voice
   report does. The mention is what makes Campfire deliver it to the bot in a shared room (in a
   shared room only mentioned bots get the webhook), so the incident-report skill sees `confirm`.
+  The page says "Sent" only on a `201` that wasn't redirected; an expired session (the chain
+  redirects to the sign-in page, which `fetch` follows) says to sign in again.
 - **Tab bar** (`campfire_workspace::overlay`): rendered by the layout seam for signed-in, non-bot
   users; it links `hermes/workspace.css` and the `hermes/workspace.js` module itself. Report is
   `/rooms/:id/voice` for the room on screen, else the last room visited, and only when the live
   voice report is on (`GEMINI_API_KEY`). Hidden on the voice page (it has its own bar) and while
   typing in the composer (soft keyboard).
 - **Home**: `GET /workspace`, the application layout, a nav with "back to chats" and a "Home"
-  title pill. Mentions are matched by email address (the Fizzy user's `email_address` = the
-  Campfire user's), last 7 days, not your own comments. Times are `<time>` elements the layout's
-  `local-time` controller formats in the browser's time zone.
+  title pill. Mentions are comments on incident-board cards only, matched by email address (the
+  Fizzy user's `email_address` = the Campfire user's), last 7 days, not your own comments. Times
+  are `<time>` elements (date and time) the layout's `local-time` controller formats in the
+  browser's time zone. While Fizzy hasn't answered yet the page says "Boards unavailable" only; the
+  error itself is in the server log.
+- **Known limitation (mentions)**: Campfire lets users change their email address without
+  verification, so someone who sets a colleague's address sees that colleague's mentions. That is
+  why mentions are limited to the incident board, whose content this feature shows every signed-in
+  user anyway; it still exposes which incident-board comments name that colleague, and their
+  excerpts. Matching on a verified identity (a Fizzy ↔ Campfire user link) is for a later phase.
 
 ## Routes and contract
 
@@ -102,7 +126,7 @@ table (`controllers::HERMES_ROUTES`, tried after the Rails one).
 | Route | Answer |
 |---|---|
 | `GET /workspace` | The Home page (HTML) |
-| `GET /workspace/cards.json?numbers=12,13` | `200 {"cards": {"12": "<a class=\"ws-chip\" …>…</a>"}}`: the chips the workspace knows (at most 50 asked); unknown numbers are omitted and fetched at the next poll |
+| `GET /workspace/cards.json?numbers=12,13` | `200 {"cards": {"12": "<a class=\"ws-chip\" …>…</a>"}}`: the chips of the incident-board cards the workspace knows (at most 50 asked); unknown numbers are omitted and fetched at the next poll, cards on other boards are always omitted |
 | `POST /workspace/drafts/:message_id/reply` `{"decision": "confirm" \| "dismiss"}` | `201 {"message_id", "reply": "confirm" \| "cancel"}`; `404` when the message isn't in one of the user's rooms; `422 invalid_decision`; `422 not_a_draft` (not from an active bot, or not a draft) |
 
 Phase 0 lets **any member of the room** answer a draft (open question 2 of the mockup).
@@ -158,12 +182,23 @@ Not seams (fork-owned or new files): `crates/workspace/**`, `controllers/workspa
    the seam and fix that test.
 4. `cargo test -p campfire_assets --offline`: the import map and `stylesheet_link_tag :all` still
    equal the reference's; the workspace assets are served, not linked, not pinned.
-5. If upstream changed `message_presentation`, `MessageView` (`id`, `creator.id`), `ViewContext`
-   (`current_user`, `request_url`, `base_url`, `last_room_visited_id`, `asset_path`),
-   `MessagesController#create`'s helpers (`create_message`, `broadcast_create`,
-   `deliver_webhooks_to_bots`, `MessageParams`), `Message::find_reachable`, `User::active_bots_ordered`,
-   the `messages`/`memberships` columns used by `recent_messages`, or `integrations::net::http`:
-   fix `controllers/workspace.rs` (the compiler points at it).
+5. If upstream changed any of what `controllers/workspace.rs` borrows, fix that file (the compiler
+   points at it):
+   - views: `message_presentation`, `MessageView` (`id`, `creator.id`), `ViewContext`
+     (`current_user`, `request_url`, `base_url`, `last_room_visited_id`, `asset_path`/`asset`), the
+     `layouts::Application` fields (`ctx`, `page_title`, `body_class`, `head`, `nav`, `content`,
+     `footer`, `sidebar`) and `helpers::{empty, raw}`;
+   - controllers: `MessagesController#create`'s helpers (`create_message`, `broadcast_create`,
+     `deliver_webhooks_to_bots`, `MessageParams`), `before_actions`/`Before`,
+     `require_current_user`, `presenters::Presenter::new` and `Presenter::room_view` (its
+     `display_name`), `presenters::accounts::attachable_sgid`, `presenters::page::db_error`,
+     `presenters::view_context::{find_template, page_in_any_format}`;
+   - db: `Message::find_reachable`, `Message::find`/`room`/`creator`/`body_html`, `Room::find`,
+     `User::active_bots_ordered`, `User::email_address`, and the `messages`/`memberships` columns
+     used by `recent_messages`;
+   - HTTP: `campfire_richtext::uri::parse` (`host`, `port`, `scheme`, `is_http`),
+     `integrations::net::Network::system`, `integrations::net::http::{Request::net_http(…).transport(…),
+     request_uri, exchange, Endpoint, Timeouts, Body}` and the response's `status`/`header`/`read_body`.
 6. If upstream changed the room page's DOM (`.message[data-user-id]` siblings, `form#composer`,
    `[data-composer-target=text]`, the composer controller's `replaceMessageContent`) or the layout
    grid (`body`, `#main-content`, `#sidebar` z-index, the `100ch` breakpoint): check
@@ -178,12 +213,15 @@ Not seams (fork-owned or new files): `crates/workspace/**`, `controllers/workspa
   severity tags, `Link` pagination, @mention sgids incl. nested and avatar fallback); card URL
   matching (known bases, account, terminators, look-alike hosts); chips (escaping, unknown cards
   marked, idempotent); draft detection (the skill's English draft as the bridge posts it, French,
-  headed drafts; filed/other messages ignored), decisions and their reply HTML, pending drafts
-  (answered, superseded, expired); Home (grouping and ordering, mentions by email, handover window,
-  drafts need a known bot, rendering and escaping, Fizzy down/waiting); the tab bar; and a full poll
-  against a fake Fizzy (both pages, activity cards, learned origins, mention emails, token only in
-  the `Authorization` header, cards asked by chips fetched next poll, Fizzy down keeps the picture,
-  missing board looked up again).
+  headed and field-only drafts; filed messages, invitations without a card or without a filing
+  purpose ignored), decisions (single words, bot mentions; "ok thanks"/"no worries" aren't) and
+  their reply HTML, pending drafts (answered, superseded, expired, chatter); Home (grouping and
+  ordering, mentions by email, handover window, drafts need a known bot, rendering and escaping,
+  Fizzy down/waiting); the tab bar; and a full poll against a fake Fizzy (both pages, activity
+  cards, other boards' cards and mentions dropped, learned origins, mention emails, token only in
+  the `Authorization` header, cards asked by chips fetched next poll, other boards' cards never
+  chips nor re-asked at once, one failed card or user lookup doesn't fail the poll and is retried,
+  Fizzy down keeps the picture, missing board looked up again).
 - `crates/views/tests/workspace_hooks.rs`: hooks off = upstream bytes; on = overlay once in place
   and message hook applied, nothing else changed; removed = upstream bytes again.
 - `crates/assets/tests/reference.rs`: workspace assets served, not in `stylesheet_link_tag :all`,
