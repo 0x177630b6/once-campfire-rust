@@ -50,12 +50,7 @@ pub struct Env {
 
 impl Default for Env {
     fn default() -> Self {
-        Self {
-            clock: Arc::new(SystemClock),
-            sink: Arc::new(NullSink),
-            rich_text: Arc::new(BasicRichText),
-            bcrypt_cost: 12,
-        }
+        Self { clock: Arc::new(SystemClock), sink: Arc::new(NullSink), rich_text: Arc::new(BasicRichText), bcrypt_cost: 12 }
     }
 }
 
@@ -120,12 +115,7 @@ impl<'c> Tx<'c> {
         if self.in_transaction {
             self.after_commit.push(AfterCommit::Hook(Box::new(hook)));
         } else {
-            let mut tx = Tx {
-                conn: self.conn,
-                env: self.env,
-                in_transaction: false,
-                after_commit: Vec::new(),
-            };
+            let mut tx = Tx { conn: self.conn, env: self.env, in_transaction: false, after_commit: Vec::new() };
             if let Err(error) = hook(&mut tx) {
                 tracing::error!(%error, "after_commit hook failed");
             }
@@ -140,18 +130,9 @@ impl<'c> Tx<'c> {
 /// Runs `f` in `BEGIN IMMEDIATE`, commits, then runs the after-commit queue. An error from
 /// `f` rolls back and discards the queue. An error from an after-commit hook is returned
 /// after the rest of the queue has run (Rails raises it from the save that committed).
-pub fn run_write<T>(
-    conn: &Connection,
-    env: &Env,
-    f: impl FnOnce(&mut Tx<'_>) -> Result<T>,
-) -> Result<T> {
+pub fn run_write<T>(conn: &Connection, env: &Env, f: impl FnOnce(&mut Tx<'_>) -> Result<T>) -> Result<T> {
     conn.execute_batch("BEGIN IMMEDIATE TRANSACTION")?;
-    let mut tx = Tx {
-        conn,
-        env,
-        in_transaction: true,
-        after_commit: Vec::new(),
-    };
+    let mut tx = Tx { conn, env, in_transaction: true, after_commit: Vec::new() };
     let value = match f(&mut tx) {
         Ok(value) => value,
         Err(error) => {
@@ -166,12 +147,7 @@ pub fn run_write<T>(
 
     let mut queue = std::mem::take(&mut tx.after_commit);
     let mut first_error = None;
-    let mut after = Tx {
-        conn,
-        env,
-        in_transaction: false,
-        after_commit: Vec::new(),
-    };
+    let mut after = Tx { conn, env, in_transaction: false, after_commit: Vec::new() };
     for item in queue.drain(..) {
         match item {
             AfterCommit::Event(event) => env.sink.emit(event),
@@ -203,13 +179,7 @@ pub struct Config {
 
 impl Config {
     pub fn new(path: impl Into<PathBuf>) -> Self {
-        Self {
-            path: path.into(),
-            readers: 8,
-            write_queue: 256,
-            prepare: true,
-            environment: "production".into(),
-        }
+        Self { path: path.into(), readers: 8, write_queue: 256, prepare: true, environment: "production".into() }
     }
 }
 
@@ -241,9 +211,7 @@ impl Database {
             .spawn(move || {
                 while let Some(job) = receiver.blocking_recv() {
                     // A panicking write must not take the writer down with it.
-                    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        job(&conn, &writer_env)
-                    }));
+                    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job(&conn, &writer_env)));
                     if outcome.is_err() && !conn.is_autocommit() {
                         let _ = conn.execute_batch("ROLLBACK TRANSACTION");
                     }
@@ -256,16 +224,9 @@ impl Database {
             })
             .map_err(|e| Error::Other(e.to_string()))?;
 
-        let readers = (0..config.readers.max(1))
-            .map(|_| open_connection(&config.path, true))
-            .collect::<Result<Vec<_>>>()?;
+        let readers = (0..config.readers.max(1)).map(|_| open_connection(&config.path, true)).collect::<Result<Vec<_>>>()?;
 
-        Ok(Self {
-            writer: sender,
-            readers: Arc::new(ReaderPool::new(readers)),
-            env,
-            path: config.path,
-        })
+        Ok(Self { writer: sender, readers: Arc::new(ReaderPool::new(readers)), env, path: config.path })
     }
 
     pub fn env(&self) -> &Env {
@@ -314,9 +275,7 @@ impl Database {
         F: FnOnce(&Connection) -> Result<T> + Send + 'static,
     {
         let readers = self.readers.clone();
-        tokio::task::spawn_blocking(move || readers.with(f))
-            .await
-            .map_err(|e| Error::Other(e.to_string()))?
+        tokio::task::spawn_blocking(move || readers.with(f)).await.map_err(|e| Error::Other(e.to_string()))?
     }
 
     /// [`Database::read`] for synchronous callers.
@@ -407,10 +366,8 @@ fn checkpoint(conn: &Connection, mode: &str) {
 }
 
 fn open_connection(path: &Path, reader: bool) -> Result<Connection> {
-    let flags = OpenFlags::SQLITE_OPEN_READ_WRITE
-        | OpenFlags::SQLITE_OPEN_CREATE
-        | OpenFlags::SQLITE_OPEN_NO_MUTEX
-        | OpenFlags::SQLITE_OPEN_URI;
+    let flags =
+        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE | OpenFlags::SQLITE_OPEN_NO_MUTEX | OpenFlags::SQLITE_OPEN_URI;
     let conn = Connection::open_with_flags(path, flags)?;
     // rusqlite's default of 16 is fewer statements than a page like the room show runs.
     conn.set_prepared_statement_cache_capacity(STATEMENT_CACHE_CAPACITY);
@@ -428,10 +385,7 @@ struct ReaderPool {
 
 impl ReaderPool {
     fn new(connections: Vec<Connection>) -> Self {
-        Self {
-            idle: Mutex::new(connections),
-            available: Condvar::new(),
-        }
+        Self { idle: Mutex::new(connections), available: Condvar::new() }
     }
 
     fn with<T>(&self, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {

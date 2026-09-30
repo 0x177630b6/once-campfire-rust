@@ -275,12 +275,8 @@ pub async fn authenticate_by(c: &Ctx, email_address: String, password: String) -
 pub async fn start_new_session_for(c: &mut Ctx, user: User) -> Result<Session> {
     let (user_agent, ip) = (c.request.user_agent().map(str::to_string), c.request.remote_ip()?.to_string());
     let user_id = user.id;
-    let session = c
-        .app()
-        .db
-        .write(move |tx| Session::start(tx, user_id, user_agent.as_deref(), Some(&ip)))
-        .await
-        .map_err(Error::internal)?;
+    let session =
+        c.app().db.write(move |tx| Session::start(tx, user_id, user_agent.as_deref(), Some(&ip))).await.map_err(Error::internal)?;
     authenticated_as(c, session.clone(), Some(user), true).await?;
     Ok(session)
 }
@@ -346,10 +342,14 @@ pub async fn terminate_current_session(c: &mut Ctx) -> Result<()> {
     c.reset_session();
     c.cookies.delete("session_token");
     if let Some(user) = current_user(c).cloned()
-        && let Err(error) = c.app().db.write(move |tx| {
-            user.reset_remote_connections(tx);
-            Ok(())
-        }).await
+        && let Err(error) = c
+            .app()
+            .db
+            .write(move |tx| {
+                user.reset_remote_connections(tx);
+                Ok(())
+            })
+            .await
     {
         tracing::warn!("Could not disconnect remote connections on sign out: {error}");
     }
@@ -415,10 +415,15 @@ async fn render_incompatible_browser(c: &mut Ctx) -> Result {
     let response = if own_layout {
         page_in_any_format(c, StatusCode::OK, |ctx| IncompatibleBrowser { ctx }.render()).await?
     } else {
-        page_or_frame_in_any_format(c, StatusCode::OK, |ctx| IncompatibleBrowser { ctx }.render(), |ctx| {
-            let page = IncompatibleBrowser { ctx };
-            campfire_views::layouts::frame(ctx, page.as_head(), page.as_content())
-        })
+        page_or_frame_in_any_format(
+            c,
+            StatusCode::OK,
+            |ctx| IncompatibleBrowser { ctx }.render(),
+            |ctx| {
+                let page = IncompatibleBrowser { ctx };
+                campfire_views::layouts::frame(ctx, page.as_head(), page.as_content())
+            },
+        )
         .await?
     };
     Ok(response.content_type(campfire_kit::response::HTML_UTF8))

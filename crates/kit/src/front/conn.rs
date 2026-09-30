@@ -172,7 +172,9 @@ where
             async move {
                 let response = service(request, info);
                 let response = match write_deadline {
-                    Some(deadline) => tokio::time::timeout_at(deadline, response).await.map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "write timeout"))?,
+                    Some(deadline) => tokio::time::timeout_at(deadline, response)
+                        .await
+                        .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "write timeout"))?,
                     None => response.await,
                 };
                 let mut response = response;

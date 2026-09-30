@@ -12,8 +12,8 @@ use std::sync::Arc;
 
 use futures_util::stream::{AbortRegistration, Abortable, SelectAll};
 use futures_util::{FutureExt, StreamExt};
-use tokio::io::{ReadHalf, WriteHalf};
 use serde_json::Value;
+use tokio::io::{ReadHalf, WriteHalf};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
@@ -97,8 +97,7 @@ pub(crate) async fn run<U: Identified + Send + Sync + 'static>(server: Server<U>
     heartbeat.mark_unchanged();
     let mut restarts = server.restarts();
 
-    let mut connection =
-        Connection { server, user: Arc::new(user), subscriptions: Vec::new(), pending: Vec::new(), started: Vec::new() };
+    let mut connection = Connection { server, user: Arc::new(user), subscriptions: Vec::new(), pending: Vec::new(), started: Vec::new() };
 
     let mut close: Option<Close> = None;
     if sink.send(&[protocol::welcome().into()]).await.is_err() {
@@ -162,7 +161,8 @@ pub(crate) async fn run<U: Identified + Send + Sync + 'static>(server: Server<U>
             }
         }
 
-        deliveries.extend(connection.started.drain(..).map(|(subscriber, registration)| Abortable::new(subscriber.deliveries(), registration)));
+        deliveries
+            .extend(connection.started.drain(..).map(|(subscriber, registration)| Abortable::new(subscriber.deliveries(), registration)));
         if !connection.flush(&mut sink).await {
             break;
         }

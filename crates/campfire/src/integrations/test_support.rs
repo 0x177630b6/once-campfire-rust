@@ -219,10 +219,7 @@ async fn serve<S: AsyncRead + AsyncWrite + Unpin>(stream: S, routes: &[Route], l
     log.lock().unwrap().push(Received { method: method.clone(), target: target.clone(), headers, body });
 
     let not_found = Route::new(&method, &host, &target, 404).header("Content-Type", "text/plain").body("not found");
-    let route = routes
-        .iter()
-        .find(|r| r.method == method && (r.host == host || r.host == "*") && r.path == target)
-        .unwrap_or(&not_found);
+    let route = routes.iter().find(|r| r.method == method && (r.host == host || r.host == "*") && r.path == target).unwrap_or(&not_found);
     tokio::time::sleep(route.delay).await;
     let mut body = route.body.clone();
     if route.gzip {

@@ -87,12 +87,7 @@ async fn set_blob(c: &mut Ctx) -> Result<Blob> {
     let Some(blob_id) = paths::verify_signed_blob_id(&*storage.verifier, &signed_id, c.now()) else {
         return halt(head(StatusCode::NOT_FOUND));
     };
-    c.app()
-        .db
-        .read(move |conn| Blob::find(conn, blob_id).map_err(storage_error))
-        .await
-        .map_err(Error::internal)?
-        .ok_or(Error::NotFound)
+    c.app().db.read(move |conn| Blob::find(conn, blob_id).map_err(storage_error)).await.map_err(Error::internal)?.ok_or(Error::NotFound)
 }
 
 /// `set_representation`: `@blob.representation(params[:variation_key]).processed`. A bad
@@ -165,7 +160,10 @@ pub(crate) async fn processed_variant_with(
                     Ok(recorded)
                 }
                 // Another request recorded it first; ours is dropped (and its file deleted).
-                None => storage.existing_variant(conn, &blob, &variation).map_err(storage_error)?.ok_or(campfire_db::Error::RecordNotFound("ActiveStorage::VariantRecord")),
+                None => storage
+                    .existing_variant(conn, &blob, &variation)
+                    .map_err(storage_error)?
+                    .ok_or(campfire_db::Error::RecordNotFound("ActiveStorage::VariantRecord")),
             }
         })
         .await
@@ -194,7 +192,10 @@ async fn preview_image(app: &App, blob: Blob) -> Result<Blob> {
                     keep_after_commit(tx, image);
                     Ok(recorded)
                 }
-                None => storage.existing_preview_image(conn, &blob).map_err(storage_error)?.ok_or(campfire_db::Error::RecordNotFound("ActiveStorage::Blob")),
+                None => storage
+                    .existing_preview_image(conn, &blob)
+                    .map_err(storage_error)?
+                    .ok_or(campfire_db::Error::RecordNotFound("ActiveStorage::Blob")),
             }
         })
         .await
@@ -250,14 +251,7 @@ fn blob_url(c: &Ctx, blob: &Blob, disposition: Option<&str>) -> String {
     let content_type = content_types::for_serving(blob.content_type());
     let disposition = content_types::forced_disposition(blob.content_type()).or(disposition).unwrap_or("inline");
     let expires_at = c.now() + jiff::SignedDuration::from_secs(SERVICE_URLS_EXPIRE_IN);
-    let path = storage.service.url_path(
-        &*storage.verifier,
-        &blob.key,
-        Some(expires_at),
-        &blob.filename,
-        Some(content_type),
-        disposition,
-    );
+    let path = storage.service.url_path(&*storage.verifier, &blob.key, Some(expires_at), &blob.filename, Some(content_type), disposition);
     c.url_for(&path)
 }
 
@@ -266,12 +260,7 @@ fn blob_url(c: &Ctx, blob: &Blob, disposition: Option<&str>) -> String {
 fn http_cache_forever(c: &mut Ctx) -> Option<Response> {
     c.expires_in(HUNDRED_YEARS, ExpiresIn { public: true, immutable: true, ..ExpiresIn::default() });
     let last_modified: jiff::Timestamp = "2011-01-01T00:00:00Z".parse().expect("valid timestamp");
-    c.fresh_when(Freshness {
-        etag: Some(c.request.fullpath()),
-        last_modified: Some(last_modified),
-        public: true,
-        ..Freshness::default()
-    })
+    c.fresh_when(Freshness { etag: Some(c.request.fullpath()), last_modified: Some(last_modified), public: true, ..Freshness::default() })
 }
 
 /// `send_blob_stream(blob, disposition:)`: the whole file, inline unless the type is forced to
@@ -322,7 +311,9 @@ fn send_blob_byte_range_data(c: &mut Ctx, blob: &Blob, range: &str) -> Result {
         let boundary = random_hex(16);
         let mut parts = Vec::new();
         for &(start, end) in &ranges {
-            let heading = format!("\r\n--{boundary}\r\nContent-Type: {content_type_for_serving}\r\nContent-Range: bytes {start}-{end}/{size}\r\n\r\n");
+            let heading = format!(
+                "\r\n--{boundary}\r\nContent-Type: {content_type_for_serving}\r\nContent-Range: bytes {start}-{end}/{size}\r\n\r\n"
+            );
             parts.push(BodyPart::Bytes(heading.into_bytes()));
             parts.push(BodyPart::File { path: path.clone(), start, end });
         }
@@ -416,13 +407,14 @@ fn disk_serve(c: &mut Ctx) -> Result {
         range: c.request.header("range"),
         if_modified_since: c.request.header("if-modified-since"),
     };
-    let served = match file_server::serve_file(&request, &storage.service.path_for(&key.key), key.content_type.as_deref(), Some(&key.disposition)) {
-        Ok(served) => served,
-        Err(campfire_storage::Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(c.head(StatusCode::NOT_FOUND));
-        }
-        Err(error) => return Err(Error::internal(error)),
-    };
+    let served =
+        match file_server::serve_file(&request, &storage.service.path_for(&key.key), key.content_type.as_deref(), Some(&key.disposition)) {
+            Ok(served) => served,
+            Err(campfire_storage::Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(c.head(StatusCode::NOT_FOUND));
+            }
+            Err(error) => return Err(Error::internal(error)),
+        };
     let mut response = Response::new(StatusCode::from_u16(served.status).map_err(Error::internal)?);
     for (name, value) in &served.headers {
         response = response.header(name.as_str(), value);
@@ -446,9 +438,8 @@ pub async fn disk_update(c: &mut Ctx) -> Result {
     }
     let body = c.request.raw_post().clone();
     let (key, checksum) = (token.key.clone(), token.checksum.clone());
-    let uploaded = tokio::task::spawn_blocking(move || storage.service.upload(&key, body.as_ref(), Some(&checksum)))
-        .await
-        .map_err(Error::internal)?;
+    let uploaded =
+        tokio::task::spawn_blocking(move || storage.service.upload(&key, body.as_ref(), Some(&checksum))).await.map_err(Error::internal)?;
     match uploaded {
         Ok(()) => Ok(c.head(StatusCode::NO_CONTENT)),
         Err(campfire_storage::Error::Integrity) => Ok(c.head(StatusCode::UNPROCESSABLE_ENTITY)),
@@ -508,12 +499,7 @@ pub async fn direct_uploads_create(c: &mut Ctx) -> Result {
         byte_size,
         checksum: checksum.clone(),
     };
-    let blob = c
-        .app()
-        .db
-        .write(move |tx| new_blob.insert(tx.conn(), now).map_err(storage_error))
-        .await
-        .map_err(Error::internal)?;
+    let blob = c.app().db.write(move |tx| new_blob.insert(tx.conn(), now).map_err(storage_error)).await.map_err(Error::internal)?;
 
     let expires_at = now + jiff::SignedDuration::from_secs(SERVICE_URLS_EXPIRE_IN);
     let url = c.url_for(&storage.service.url_path_for_direct_upload(

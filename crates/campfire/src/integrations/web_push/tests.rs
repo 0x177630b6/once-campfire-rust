@@ -73,11 +73,8 @@ async fn push_service(status: u16, reason: &str) -> PushService {
         .collect();
     let server = FakeServer::start_tls(routes).await;
     let resolver = Arc::new(FakeResolver::new([("fcm.googleapis.com", vec![PUBLIC_IP])]));
-    let dialer = Arc::new(MappingDialer {
-        public: HashSet::from([PUBLIC_IP.parse().unwrap()]),
-        to: server.addr,
-        dialed: Mutex::new(Vec::new()),
-    });
+    let dialer =
+        Arc::new(MappingDialer { public: HashSet::from([PUBLIC_IP.parse().unwrap()]), to: server.addr, dialed: Mutex::new(Vec::new()) });
     let net = network(resolver.clone(), dialer.clone());
     PushService { server, resolver, dialer, net }
 }
@@ -111,7 +108,11 @@ fn the_longest_payload_fits_a_push_message() {
         subscription: receiver.subscription(1, "https://fcm.googleapis.com/fcm/send/abc"),
     };
     let subscription = &notification.subscription;
-    let body = encryption::encrypt(notification.encoded_message().as_bytes(), subscription.p256dh_key.as_deref(), subscription.auth_key.as_deref());
+    let body = encryption::encrypt(
+        notification.encoded_message().as_bytes(),
+        subscription.p256dh_key.as_deref(),
+        subscription.auth_key.as_deref(),
+    );
     assert_eq!(receiver.open(&body.unwrap()), notification.encoded_message());
 }
 
@@ -187,8 +188,7 @@ async fn delivers_to_the_pinned_address_with_the_gems_headers() {
     assert_eq!((request.method.as_str(), request.target.as_str()), ("POST", "/fcm/send/abc"));
 
     let expected = expected();
-    let mut expected_headers: Vec<(String, String)> =
-        serde_json::from_value(expected["headers"].clone()).unwrap();
+    let mut expected_headers: Vec<(String, String)> = serde_json::from_value(expected["headers"].clone()).unwrap();
     for (name, value) in expected_headers.iter_mut() {
         if name == "Content-Length" {
             *value = request.body.len().to_string();
@@ -197,14 +197,19 @@ async fn delivers_to_the_pinned_address_with_the_gems_headers() {
     let names: Vec<&str> = request.headers.iter().map(|(n, _)| n.as_str()).collect();
     assert_eq!(
         names,
-        ["Content-Type", "Ttl", "Urgency", "Content-Encoding", "Content-Length", "Authorization", "Accept-Encoding", "Accept", "User-Agent", "Connection", "Host"]
+        [
+            "Content-Type", "Ttl", "Urgency", "Content-Encoding", "Content-Length", "Authorization", "Accept-Encoding", "Accept",
+            "User-Agent", "Connection", "Host"
+        ]
     );
     for (name, value) in &expected_headers {
         assert_eq!(request.header(name), Some(value.as_str()), "{name}");
     }
     assert_eq!(request.header("Host"), Some("fcm.googleapis.com"));
     assert_eq!(request.header("User-Agent"), Some("Ruby"));
-    assert!(request.header("Authorization").unwrap().starts_with(&format!("vapid t={}.", expected["jwt_header_segment"].as_str().unwrap())));
+    assert!(
+        request.header("Authorization").unwrap().starts_with(&format!("vapid t={}.", expected["jwt_header_segment"].as_str().unwrap()))
+    );
     assert_eq!(receiver.open(&request.body), notification.encoded_message());
 }
 
@@ -215,7 +220,7 @@ async fn skips_endpoints_it_may_not_deliver_to() {
     let receiver = Receiver::new();
     for endpoint in [
         "https://updates.push.services.mozilla.com/wpush/v2/x", // resolves privately
-        "https://web.push.apple.com/QaBC123",                     // doesn't resolve
+        "https://web.push.apple.com/QaBC123",                   // doesn't resolve
         "https://attacker.example.com/collect",
         "https://fcm.googleapis.com:22/fcm/send/abc",
         "http://fcm.googleapis.com/fcm/send/abc",
@@ -253,14 +258,16 @@ async fn raises_what_the_gem_raises() {
 async fn only_the_subscriptions_own_faults_invalidate_it() {
     // A key that isn't a point on the curve (as in the fixtures) can never be delivered to.
     let service = push_service(201, "Created").await;
-    let bad_key = PushSubscription::new(1, Some("https://fcm.googleapis.com/fcm/send/abc"), Some("dGVzdF9rZXk"), Some("dGVzdF9hdXRo"), None);
+    let bad_key =
+        PushSubscription::new(1, Some("https://fcm.googleapis.com/fcm/send/abc"), Some("dGVzdF9rZXk"), Some("dGVzdF9hdXRo"), None);
     let error = notification(bad_key).deliver(&service.net, &vapid()).await.unwrap_err();
     assert_eq!((error.class_name(), error.invalidates_subscription()), ("OpenSSL::PKey::EC::Point::Error", true));
 
     // A certificate that doesn't verify may be our fault (an empty CA store, a skewed clock).
     let untrusted = Network { tls: crate::integrations::net::tls_config(rustls::RootCertStore::empty()), ..service.net.clone() };
     let receiver = Receiver::new();
-    let error = notification(receiver.subscription(1, "https://fcm.googleapis.com/fcm/send/abc")).deliver(&untrusted, &vapid()).await.unwrap_err();
+    let error =
+        notification(receiver.subscription(1, "https://fcm.googleapis.com/fcm/send/abc")).deliver(&untrusted, &vapid()).await.unwrap_err();
     assert_eq!((error.class_name(), error.invalidates_subscription()), ("OpenSSL::SSL::SSLError", false));
 
     let blank = PushSubscription::new(1, Some("https://fcm.googleapis.com/fcm/send/abc"), Some(""), Some("dGVzdF9hdXRo"), None);
@@ -290,10 +297,8 @@ async fn test_notification() {
 async fn pushes_messages_and_destroys_expired_subscriptions() {
     use campfire_db::{Membership, Message, NewMessage};
     let t = Arc::new(tokio::task::spawn_blocking(TestDb::new).await.unwrap());
-    let receivers: Vec<(i64, Receiver)> = ["david_chrome", "jason_chrome", "jz_chrome", "kevin_chrome"]
-        .iter()
-        .map(|label| (TestDb::id(label), Receiver::new()))
-        .collect();
+    let receivers: Vec<(i64, Receiver)> =
+        ["david_chrome", "jason_chrome", "jz_chrome", "kevin_chrome"].iter().map(|label| (TestDb::id(label), Receiver::new())).collect();
     let keys: Vec<(i64, String, String)> = receivers
         .iter()
         .map(|(id, r)| (*id, encode64_nopad(r.key.public_key().to_encoded_point(false).as_bytes()), encode64_nopad(&r.auth)))

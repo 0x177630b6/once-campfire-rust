@@ -40,12 +40,7 @@ fn parity_env(name: &str) -> Option<String> {
 pub fn david_cookie() -> String {
     let vectors: serde_json::Value =
         serde_json::from_str(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../vectors/campfire_sessions.json"))).unwrap();
-    vectors["sessions"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|s| s["user_name"] == "David")
-        .unwrap()["cookie_header"]
+    vectors["sessions"].as_array().unwrap().iter().find(|s| s["user_name"] == "David").unwrap()["cookie_header"]
         .as_str()
         .unwrap()
         .to_string()
@@ -158,10 +153,7 @@ impl Req {
     }
 
     pub fn form(mut self, pairs: &[(&str, &str)]) -> Self {
-        let body: Vec<String> = pairs
-            .iter()
-            .map(|(k, v)| format!("{}={}", encode(k), encode(v)))
-            .collect();
+        let body: Vec<String> = pairs.iter().map(|(k, v)| format!("{}={}", encode(k), encode(v))).collect();
         self.body = body.join("&").into_bytes();
         self.header("content-type", "application/x-www-form-urlencoded")
     }
@@ -176,7 +168,9 @@ impl Req {
         let boundary = "----campfiretestboundary";
         let mut body = Vec::new();
         for (name, value) in fields {
-            body.extend_from_slice(format!("--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n").as_bytes());
+            body.extend_from_slice(
+                format!("--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n").as_bytes(),
+            );
         }
         let (name, filename, content_type, data) = file;
         body.extend_from_slice(

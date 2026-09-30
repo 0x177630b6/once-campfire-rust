@@ -371,9 +371,7 @@ impl Ctx {
         if !options.allow_other_host && !self.url_host_allowed(&location) {
             return Err(Error::UnsafeRedirect(format!("Unsafe redirect to {location:?}")));
         }
-        Ok(Response::new(options.status.unwrap_or(StatusCode::FOUND))
-            .content_type(response::HTML_UTF8)
-            .header(header::LOCATION, &location))
+        Ok(Response::new(options.status.unwrap_or(StatusCode::FOUND)).content_type(response::HTML_UTF8).header(header::LOCATION, &location))
     }
 
     /// `redirect_back_or_to fallback`: the referer when it's on this host.
@@ -391,9 +389,7 @@ impl Ctx {
             let bytes = location.as_bytes();
             location.starts_with("//")
                 || (bytes.first().is_some_and(u8::is_ascii_alphabetic)
-                    && location
-                        .find(':')
-                        .is_some_and(|i| location[..i].bytes().all(|b| b.is_ascii_alphanumeric() || b"-+.".contains(&b))))
+                    && location.find(':').is_some_and(|i| location[..i].bytes().all(|b| b.is_ascii_alphanumeric() || b"-+.".contains(&b))))
         };
         let url = if is_absolute {
             location.to_string()
@@ -565,9 +561,7 @@ impl Ctx {
                 response.headers.insert(name.clone(), value.clone());
             }
         }
-        if !response.headers.contains_key(header::CONTENT_TYPE)
-            && !matches!(response.status.as_u16(), 100..=199 | 204 | 205 | 304)
-        {
+        if !response.headers.contains_key(header::CONTENT_TYPE) && !matches!(response.status.as_u16(), 100..=199 | 204 | 205 | 304) {
             response.headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(response::HTML_UTF8));
         }
         rack_etag(&mut response, !self.live);
@@ -618,8 +612,7 @@ impl Ctx {
             return;
         }
         let mut cache_control = self.cache_control.clone();
-        if cache_control.is_empty()
-            && (response.headers.contains_key(header::ETAG) || response.headers.contains_key(header::LAST_MODIFIED))
+        if cache_control.is_empty() && (response.headers.contains_key(header::ETAG) || response.headers.contains_key(header::LAST_MODIFIED))
         {
             cache_control = CacheControl { max_age: Some(0), must_revalidate: true, ..CacheControl::default() };
         }
@@ -685,15 +678,16 @@ fn rack_etag(response: &mut Response, digestible: bool) {
     }
     if digests
         && let Body::Bytes(bytes) = &response.body
-            && !bytes.is_empty() {
-                // A page of cached fragments hashes its parts' digests rather than the whole body.
-                let hex = match &response.page_parts {
-                    Some(parts) => parts.etag(bytes),
-                    None => hex::encode(Sha256::digest(bytes)),
-                };
-                response.headers.insert(header::ETAG, HeaderValue::from_str(&format!("W/\"{}\"", &hex[..32])).unwrap());
-                digested = true;
-            }
+        && !bytes.is_empty()
+    {
+        // A page of cached fragments hashes its parts' digests rather than the whole body.
+        let hex = match &response.page_parts {
+            Some(parts) => parts.etag(bytes),
+            None => hex::encode(Sha256::digest(bytes)),
+        };
+        response.headers.insert(header::ETAG, HeaderValue::from_str(&format!("W/\"{}\"", &hex[..32])).unwrap());
+        digested = true;
+    }
     if !response.headers.contains_key(header::CACHE_CONTROL) {
         let value = if digested { "max-age=0, private, must-revalidate" } else { "no-cache" };
         response.headers.insert(header::CACHE_CONTROL, HeaderValue::from_static(value));

@@ -48,10 +48,7 @@ impl Logs {
     fn capture() -> (Self, tracing::subscriber::DefaultGuard) {
         let buffer = Arc::new(StdMutex::new(Vec::new()));
         let writer = buffer.clone();
-        let subscriber = tracing_subscriber::fmt()
-            .with_ansi(false)
-            .with_writer(move || LogWriter(writer.clone()))
-            .finish();
+        let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || LogWriter(writer.clone())).finish();
         (Self(buffer), tracing::subscriber::set_default(subscriber))
     }
 

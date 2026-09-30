@@ -130,7 +130,8 @@ pub fn attach(tx: &mut Tx<'_>, record: Record, name: &str, staged: Staged) -> ca
     let now = tx.now();
     let blob = staged.insert(tx.conn(), now.jiff()).map_err(storage_error)?;
     keep_after_commit(tx, staged);
-    campfire_storage::blob::insert_attachment(tx.conn(), name, record.record_type, record.id, blob.id, now.jiff()).map_err(storage_error)?;
+    campfire_storage::blob::insert_attachment(tx.conn(), name, record.record_type, record.id, blob.id, now.jiff())
+        .map_err(storage_error)?;
     super::accounts::touch(tx.conn(), record.table, record.id, tx.now())?;
     Ok(Pending { blob })
 }
@@ -195,11 +196,7 @@ fn table_for(record_type: &str) -> Option<&'static str> {
 /// blob, or `None` when there's no attachment or it can't be transformed.
 pub async fn processed_variant(app: &App, record: Record, name: &str, transformations: Variation) -> Result<Option<Blob>> {
     let name = name.to_string();
-    let blob = app
-        .db
-        .read(move |conn| attached_blob(conn, record.record_type, record.id, &name))
-        .await
-        .map_err(Error::internal)?;
+    let blob = app.db.read(move |conn| attached_blob(conn, record.record_type, record.id, &name)).await.map_err(Error::internal)?;
     let Some(blob) = blob.filter(Blob::is_variable) else { return Ok(None) };
     crate::active_storage::processed_representation(app, blob, transformations).await.map(Some)
 }

@@ -12,7 +12,7 @@ use serde::Deserialize;
 
 use crate::ViewContext;
 use crate::fragment_cache;
-use support::{epoch_ms, iso8601, RubyNumber};
+use support::{RubyNumber, epoch_ms, iso8601};
 
 /// What the message views show of a user: `avatar_tag` and the author heading.
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -56,11 +56,7 @@ impl RoomKind {
 
 /// `dom_id(room)` / `dom_id(room, prefix)`.
 pub fn room_dom_id(kind: RoomKind, id: i64, prefix: &str) -> String {
-    if prefix.is_empty() {
-        format!("{}_{id}", kind.param_key())
-    } else {
-        format!("{prefix}_{}_{id}", kind.param_key())
-    }
+    if prefix.is_empty() { format!("{}_{id}", kind.param_key()) } else { format!("{prefix}_{}_{id}", kind.param_key()) }
 }
 
 /// A message as `messages/_message` renders it.
@@ -88,7 +84,9 @@ pub struct MessageView {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum MessageContent {
     /// The presentation filters' output after `auto_link`, from the richtext crate.
-    Text { html: String },
+    Text {
+        html: String,
+    },
     Sound(SoundView),
     Attachment(AttachmentView),
     /// Rendering raised past `message_presentation`'s own rescue (or `plain_text_body` raised):

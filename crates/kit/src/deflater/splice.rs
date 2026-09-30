@@ -56,9 +56,17 @@ pub struct PageParts {
 
 #[derive(Debug)]
 enum Part {
-    Text { range: Range<usize>, sha: Sha },
+    Text {
+        range: Range<usize>,
+        sha: Sha,
+    },
     /// `range` starts with the glue (the text since the previous fragment) and ends with the fragment.
-    Fragment { fragment: Arc<String>, sha: Sha, glue: usize, range: Range<usize> },
+    Fragment {
+        fragment: Arc<String>,
+        sha: Sha,
+        glue: usize,
+        range: Range<usize>,
+    },
 }
 
 /// What comes right before a part, which its piece may refer back into.
@@ -174,9 +182,8 @@ impl PageParts {
 
     /// Each part's compressed piece: stored ones where they fit, the rest compressed and stored.
     fn pieces(&self, body: &[u8]) -> Vec<Bytes> {
-        let befores: Vec<(Before, &[u8])> = std::iter::once((Before::Nothing, &b""[..]))
-            .chain(self.parts.iter().map(|part| part.as_before(body)))
-            .collect();
+        let befores: Vec<(Before, &[u8])> =
+            std::iter::once((Before::Nothing, &b""[..])).chain(self.parts.iter().map(|part| part.as_before(body))).collect();
         let mut pieces: Vec<Option<Bytes>> = {
             let fragments = lock(&FRAGMENTS);
             let texts = &mut lock(&TEXT_PIECES);
@@ -207,7 +214,12 @@ impl PageParts {
                 Part::Text { sha, .. } => new_texts.push(((*sha, *before), TextPiece { deflated: deflated.clone(), _pin: pin })),
                 Part::Fragment { fragment, glue, range, .. } => new_fragments.push((
                     fragment.clone(),
-                    FragmentPiece { before: *before, _pin: pin, glue: body[range.start..range.start + glue].into(), deflated: deflated.clone() },
+                    FragmentPiece {
+                        before: *before,
+                        _pin: pin,
+                        glue: body[range.start..range.start + glue].into(),
+                        deflated: deflated.clone(),
+                    },
                 )),
             }
             *piece = Some(deflated);
@@ -450,7 +462,11 @@ mod tests {
         assert_eq!(&gz[4..8], &1234u32.to_le_bytes());
         assert_eq!(gz[9], 3);
         let piece = lock(&FRAGMENTS)[&fragment_key(&messages[5])].pieces[0].clone();
-        assert_eq!(PageParts::new(body.as_bytes(), &messages).unwrap().gzip(body.as_bytes(), 1234), gz, "the same page is the same stored pieces");
+        assert_eq!(
+            PageParts::new(body.as_bytes(), &messages).unwrap().gzip(body.as_bytes(), 1234),
+            gz,
+            "the same page is the same stored pieces"
+        );
         assert!(Arc::ptr_eq(&piece, &lock(&FRAGMENTS)[&fragment_key(&messages[5])].pieces[0]));
     }
 
@@ -518,7 +534,8 @@ mod tests {
         assert_eq!(etag(&body).len(), 32);
         assert_ne!(etag(&body), etag(&page("<p>", &messages, "</p>!")));
         assert_ne!(etag(&body), etag(&page("<q>", &messages, "</p>")));
-        let glued: String = std::iter::once("<p>".to_string()).chain(messages.iter().map(|m| format!(" {m}"))).chain(["</p>".into()]).collect();
+        let glued: String =
+            std::iter::once("<p>".to_string()).chain(messages.iter().map(|m| format!(" {m}"))).chain(["</p>".into()]).collect();
         assert_ne!(etag(&body), etag(&glued));
     }
 
@@ -565,4 +582,3 @@ mod tests {
         assert!(vec.capacity() < 64 * 1024, "{} bytes of capacity for {}", vec.capacity(), vec.len());
     }
 }
-

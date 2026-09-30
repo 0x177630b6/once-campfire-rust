@@ -6,8 +6,8 @@
 mod support;
 
 use askama::Template;
-use campfire_views::*;
 use campfire_views::helpers as h;
+use campfire_views::*;
 use support::dom::{diff, normalize_html};
 use support::facts::*;
 
@@ -142,9 +142,7 @@ fn bots(name: &str) -> Vec<accounts::Bot> {
                 .unwrap()
                 .iter()
                 .filter(|m| m["user_id"].as_i64() == Some(user.id))
-                .filter_map(|m| {
-                    facts["rooms"].as_object().unwrap().values().find(|room| room["id"] == m["room_id"])
-                })
+                .filter_map(|m| facts["rooms"].as_object().unwrap().values().find(|room| room["id"] == m["room_id"]))
                 .filter(|room| room["type"] != "Rooms::Direct")
                 .map(|room| accounts::BotRoom { id: room["id"].as_i64().unwrap(), name: room["name"].as_str().unwrap().into() })
                 .collect();
@@ -165,9 +163,7 @@ fn accounts_bots() {
     assert_parity(name, "html", html);
 
     let name = "bots_new";
-    let html = with_context(name, Request::default(), |ctx| {
-        accounts::BotsNew { ctx, bot: accounts::BotForm::default() }.render().unwrap()
-    });
+    let html = with_context(name, Request::default(), |ctx| accounts::BotsNew { ctx, bot: accounts::BotForm::default() }.render().unwrap());
     assert_parity(name, "html", html);
 
     let name = "bots_edit";
@@ -280,7 +276,10 @@ fn profile_memberships(list: &serde_json::Value) -> Vec<users::ProfileMembership
 
 #[test]
 fn users_profiles_show() {
-    for ua in ["chrome_mac", "chrome_windows", "safari_mac", "safari_ios", "chrome_android", "firefox_mac", "firefox_android", "edge_windows", "kevin", "with_avatar"] {
+    for ua in [
+        "chrome_mac", "chrome_windows", "safari_mac", "safari_ios", "chrome_android", "firefox_mac", "firefox_android", "edge_windows",
+        "kevin", "with_avatar",
+    ] {
         let name = format!("profile_{ua}");
         let name = name.as_str();
         let html = with_context(name, Request::default(), |ctx| {
@@ -393,7 +392,9 @@ fn autocompletable_users() {
 fn users_avatars_show() {
     for (name, shown) in [("avatar_david", "David"), ("avatar_three_initials", "Anna Bea Cole")] {
         let user = user(name, shown);
-        let svg = users::AvatarSvg { user_id: user["id"].as_i64().unwrap(), initials: user["initials"].as_str().unwrap().into() }.render().unwrap();
+        let svg = users::AvatarSvg { user_id: user["id"].as_i64().unwrap(), initials: user["initials"].as_str().unwrap().into() }
+            .render()
+            .unwrap();
         assert_parity(name, "svg", svg.clone());
         assert_eq!(svg, golden(name, "svg"), "{name}: bytes differ");
     }
@@ -482,7 +483,9 @@ fn users_partials() {
     assert_parity(name, "html", html);
 
     let name = "ban_button_banned";
-    let html = with_context(name, Request { partial: true, ..Default::default() }, |ctx| users::BanButton { ctx, user: named(name, "Spam Ham") }.render().unwrap());
+    let html = with_context(name, Request { partial: true, ..Default::default() }, |ctx| {
+        users::BanButton { ctx, user: named(name, "Spam Ham") }.render().unwrap()
+    });
     assert_parity(name, "html", html);
 
     for (name, room_name, unread) in [("shared_room_unread", "HQ", true), ("shared_room", "All Talk", false)] {

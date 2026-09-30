@@ -6,14 +6,12 @@
 
 use serde_json::Value;
 
-use crate::attachables::{
-    self, Attachable, Attachment, PlainTextRepresentation, RenderContext, attachment_from_node,
-};
+use crate::Error;
+use crate::attachables::{self, Attachable, Attachment, PlainTextRepresentation, RenderContext, attachment_from_node};
 use crate::dom::{Dom, NodeId};
 use crate::plain_text;
 use crate::ruby::{self, is_blank, presence, strip};
 use crate::sanitizer::{self, ATTACHMENT_ATTRIBUTES, SafeList};
-use crate::Error;
 
 pub const ATTACHMENT_TAG: &str = "action-text-attachment";
 

@@ -40,16 +40,9 @@ impl RichText for BasicRichText {
             };
             let tag = &rest[start + 1..start + end];
             let closing = tag.starts_with('/');
-            let name: String = tag
-                .trim_start_matches('/')
-                .chars()
-                .take_while(|c| c.is_ascii_alphanumeric() || *c == '-')
-                .collect();
+            let name: String = tag.trim_start_matches('/').chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '-').collect();
             if name == "action-text-attachment" && !closing {
-                let mention = attribute_values(tag, "sgid")
-                    .first()
-                    .and_then(|sgid| user_id_from_sgid(sgid))
-                    .and_then(user_names);
+                let mention = attribute_values(tag, "sgid").first().and_then(|sgid| user_id_from_sgid(sgid)).and_then(user_names);
                 if let Some(name) = mention {
                     out.push('@');
                     out.push_str(&name);
@@ -60,12 +53,7 @@ impl RichText for BasicRichText {
                     continue;
                 }
             }
-            if matches!(
-                name.as_str(),
-                "br" | "p" | "div" | "li" | "h1" | "blockquote" | "pre"
-            ) && !out.is_empty()
-                && !closing
-            {
+            if matches!(name.as_str(), "br" | "p" | "div" | "li" | "h1" | "blockquote" | "pre") && !out.is_empty() && !closing {
                 out.push('\n');
             }
             rest = &rest[start + end + 1..];
@@ -103,10 +91,7 @@ fn attribute_values(html: &str, name: &str) -> Vec<String> {
 /// Reads `gid://campfire/User/<id>` out of an SGID's message without verifying it.
 pub fn user_id_from_sgid(sgid: &str) -> Option<i64> {
     let message = sgid.split("--").next()?;
-    let message = message
-        .replace("%3D", "=")
-        .replace("%2B", "+")
-        .replace("%2F", "/");
+    let message = message.replace("%3D", "=").replace("%2B", "+").replace("%2F", "/");
     let decoded = base64::engine::general_purpose::STANDARD
         .decode(message.as_bytes())
         .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(message.as_bytes()))
@@ -114,19 +99,15 @@ pub fn user_id_from_sgid(sgid: &str) -> Option<i64> {
     let text = String::from_utf8_lossy(&decoded);
     let marker = "gid://campfire/User/";
     let start = text.find(marker)? + marker.len();
-    let digits: String = text[start..]
-        .chars()
-        .take_while(|c| c.is_ascii_digit())
-        .collect();
+    let digits: String = text[start..].chars().take_while(|c| c.is_ascii_digit()).collect();
     digits.parse().ok()
 }
 
 /// A mention attachment for tests, shaped like `MentionTestHelper#mention_attachment_for`
 /// but with an unsigned SGID.
 pub fn mention_attachment_for(user_id: i64) -> String {
-    let payload = base64::engine::general_purpose::STANDARD.encode(format!(
-        r#"{{"_rails":{{"data":"gid://campfire/User/{user_id}","pur":"attachable"}}}}"#
-    ));
+    let payload = base64::engine::general_purpose::STANDARD
+        .encode(format!(r#"{{"_rails":{{"data":"gid://campfire/User/{user_id}","pur":"attachable"}}}}"#));
     format!(
         r#"<action-text-attachment sgid="{payload}--unsigned" content-type="application/vnd.campfire.mention"></action-text-attachment>"#
     )
@@ -159,28 +140,18 @@ mod tests {
             BasicRichText.to_plain_text(&memory(), "<span>My hovercraft is full of eels</span>", &no_users),
             "My hovercraft is full of eels"
         );
-        assert_eq!(
-            BasicRichText.to_plain_text(&memory(), "Hello <b>there</b>", &no_users),
-            "Hello there"
-        );
+        assert_eq!(BasicRichText.to_plain_text(&memory(), "Hello <b>there</b>", &no_users), "Hello there");
     }
 
     #[test]
     fn plain_text_renders_mentions() {
         let html = format!("Hey {}", mention_attachment_for(7));
-        assert_eq!(
-            BasicRichText.to_plain_text(&memory(), &html, &|id| (id == 7).then(|| "Kevin".to_string())),
-            "Hey @Kevin"
-        );
+        assert_eq!(BasicRichText.to_plain_text(&memory(), &html, &|id| (id == 7).then(|| "Kevin".to_string())), "Hey @Kevin");
     }
 
     #[test]
     fn mentioned_user_ids_from_sgids() {
-        let html = format!(
-            "<div>Hey {} {}</div>",
-            mention_attachment_for(127326141),
-            mention_attachment_for(127326141)
-        );
+        let html = format!("<div>Hey {} {}</div>", mention_attachment_for(127326141), mention_attachment_for(127326141));
         assert_eq!(BasicRichText.mentioned_user_ids(&memory(), &html), vec![127326141]);
     }
 }

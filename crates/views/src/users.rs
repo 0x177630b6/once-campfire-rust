@@ -20,8 +20,12 @@ pub struct New<'a> {
 }
 
 impl Page for New<'_> {
-    fn page_title(&self) -> Option<String> { Some("Sign up".into()) }
-    fn body_class(&self) -> Option<&str> { Some("signup") }
+    fn page_title(&self) -> Option<String> {
+        Some("Sign up".into())
+    }
+    fn body_class(&self) -> Option<&str> {
+        Some("signup")
+    }
 }
 
 /// `users/show.html.erb`.
@@ -35,7 +39,9 @@ pub struct Show<'a> {
 }
 
 impl Page for Show<'_> {
-    fn page_title(&self) -> Option<String> { Some(self.user.name.clone()) }
+    fn page_title(&self) -> Option<String> {
+        Some(self.user.name.clone())
+    }
 }
 
 /// `users/_ban_button.html.erb` on its own.
@@ -56,7 +62,9 @@ pub struct MentionUser {
 
 impl std::ops::Deref for MentionUser {
     type Target = UserSummary;
-    fn deref(&self) -> &UserSummary { &self.user }
+    fn deref(&self) -> &UserSummary {
+        &self.user
+    }
 }
 
 /// `users/_mention.html.erb`: the mention attachment's HTML.
@@ -121,7 +129,9 @@ impl<'a> ProfileShow<'a> {
 }
 
 impl Page for ProfileShow<'_> {
-    fn page_title(&self) -> Option<String> { Some(self.user.name.clone()) }
+    fn page_title(&self) -> Option<String> {
+        Some(self.user.name.clone())
+    }
 }
 
 /// `users/profiles/_transfer.html.erb` on its own.
@@ -152,7 +162,9 @@ pub struct PushSubscriptionsIndex<'a> {
 }
 
 impl Page for PushSubscriptionsIndex<'_> {
-    fn page_title(&self) -> Option<String> { Some("Push notification subscriptions".into()) }
+    fn page_title(&self) -> Option<String> {
+        Some("Push notification subscriptions".into())
+    }
 }
 
 /// A direct room in the sidebar (`users/sidebars/rooms/_direct`).

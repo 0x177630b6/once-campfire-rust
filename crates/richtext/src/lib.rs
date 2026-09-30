@@ -120,9 +120,10 @@ pub fn mentioned_users(body: &str, ctx: &RenderContext) -> Result<Vec<MentionUse
     let mut users: Vec<MentionUser> = Vec::new();
     for node in attachment_nodes(&content.dom, content.root) {
         if let attachables::Attachable::User(user) = attachables::action_text_attachable_from_node(&content.dom, node, ctx)
-            && !users.iter().any(|u| u.id == user.id) {
-                users.push(user);
-            }
+            && !users.iter().any(|u| u.id == user.id)
+        {
+            users.push(user);
+        }
     }
     Ok(users)
 }

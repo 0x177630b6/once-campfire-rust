@@ -366,9 +366,7 @@ async fn http_get(url: &str, headers: &[(&str, &str)]) -> (u16, Option<String>, 
     stream.read_to_string(&mut response).await.unwrap();
     let (head, body) = response.split_once("\r\n\r\n").unwrap();
     let status = head.split(' ').nth(1).unwrap().parse().unwrap();
-    let content_type = head
-        .lines()
-        .find_map(|line| line.to_ascii_lowercase().strip_prefix("content-type: ").map(str::to_string));
+    let content_type = head.lines().find_map(|line| line.to_ascii_lowercase().strip_prefix("content-type: ").map(str::to_string));
     (status, content_type, body.to_string())
 }
 

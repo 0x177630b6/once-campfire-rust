@@ -13,9 +13,9 @@ use crate::dom::{Dom, NodeId, ParseError};
 
 /// `Rails::HTML::Concern::Scrubber::SafeList::DEFAULT_ALLOWED_TAGS`
 pub const DEFAULT_ALLOWED_TAGS: &[&str] = &[
-    "a", "abbr", "acronym", "address", "b", "big", "blockquote", "br", "cite", "code", "dd", "del", "dfn", "div",
-    "dl", "dt", "em", "h1", "h2", "h3", "h4", "h5", "h6", "hr", "i", "img", "ins", "kbd", "li", "mark", "ol", "p",
-    "pre", "samp", "small", "span", "strong", "sub", "sup", "time", "tt", "ul", "var",
+    "a", "abbr", "acronym", "address", "b", "big", "blockquote", "br", "cite", "code", "dd", "del", "dfn", "div", "dl", "dt", "em", "h1",
+    "h2", "h3", "h4", "h5", "h6", "hr", "i", "img", "ins", "kbd", "li", "mark", "ol", "p", "pre", "samp", "small", "span", "strong", "sub",
+    "sup", "time", "tt", "ul", "var",
 ];
 
 /// `Rails::HTML::Concern::Scrubber::SafeList::DEFAULT_ALLOWED_ATTRIBUTES` without `name`, which let
@@ -32,8 +32,7 @@ pub const EDITOR_FORMATTING_ATTRIBUTES: &[&str] = &["data-language"];
 
 /// `ActionText::Attachment::ATTRIBUTES`
 pub const ATTACHMENT_ATTRIBUTES: &[&str] = &[
-    "sgid", "content-type", "url", "href", "filename", "filesize", "width", "height", "previewable", "presentation",
-    "caption", "content",
+    "sgid", "content-type", "url", "href", "filename", "filesize", "width", "height", "previewable", "presentation", "caption", "content",
 ];
 
 /// A tag and attribute allowlist, as passed to `sanitize(html, tags:, attributes:)`.
@@ -106,9 +105,9 @@ impl SafeList {
 /// `ContentFilters::SanitizeTags::ALLOWED_TAGS`
 pub fn sanitize_tags_allowed_tags() -> Vec<&'static str> {
     let mut tags = vec![
-        "a", "abbr", "acronym", "address", "b", "big", "blockquote", "br", "cite", "code", "dd", "del", "dfn", "div",
-        "dl", "dt", "em", "h1", "h2", "h3", "h4", "h5", "h6", "hr", "i", "ins", "kbd", "li", "ol", "p", "pre", "samp",
-        "small", "span", "strong", "sub", "sup", "time", "tt", "ul", "var",
+        "a", "abbr", "acronym", "address", "b", "big", "blockquote", "br", "cite", "code", "dd", "del", "dfn", "div", "dl", "dt", "em",
+        "h1", "h2", "h3", "h4", "h5", "h6", "hr", "i", "ins", "kbd", "li", "ol", "p", "pre", "samp", "small", "span", "strong", "sub",
+        "sup", "time", "tt", "ul", "var",
     ];
     tags.extend(EDITOR_FORMATTING_TAGS);
     tags.extend(["action-text-attachment", "figure", "figcaption"]);
@@ -265,8 +264,8 @@ fn force_correct_attribute_escaping(dom: &mut Dom, node: NodeId) {
 }
 
 const ALLOWED_PROTOCOLS: &[&str] = &[
-    "afs", "aim", "callto", "data", "ed2k", "fax", "ftp", "gopher", "http", "https", "irc", "line", "mailto", "modem",
-    "news", "nntp", "rsync", "rtsp", "sftp", "sms", "ssh", "tag", "tel", "telnet", "urn", "webcal", "xmpp",
+    "afs", "aim", "callto", "data", "ed2k", "fax", "ftp", "gopher", "http", "https", "irc", "line", "mailto", "modem", "news", "nntp",
+    "rsync", "rtsp", "sftp", "sms", "ssh", "tag", "tel", "telnet", "urn", "webcal", "xmpp",
 ];
 
 const ALLOWED_URI_DATA_MEDIATYPES: &[&str] = &["image/gif", "image/jpeg", "image/png", "text/css", "text/plain"];
@@ -302,7 +301,8 @@ fn protocol_before_separator(s: &str) -> Option<&str> {
         return None;
     }
     let mut end = 1;
-    while end < bytes.len() && (bytes[end].is_ascii_lowercase() || bytes[end].is_ascii_digit() || matches!(bytes[end], b'+' | b'-' | b'.')) {
+    while end < bytes.len() && (bytes[end].is_ascii_lowercase() || bytes[end].is_ascii_digit() || matches!(bytes[end], b'+' | b'-' | b'.'))
+    {
         end += 1;
     }
     // The class can't contain the start of a separator, so the scheme is the longest run.
@@ -340,7 +340,8 @@ fn data_uri_mediatype(s: &str) -> Option<String> {
     let rest = s.strip_prefix("data:").unwrap_or(s);
     let (metadata, _) = rest.split_once(',')?;
     let metadata = metadata.strip_suffix(";base64").unwrap_or(metadata);
-    let mediatype = metadata.split(';').next().unwrap_or("").trim_matches(|c: char| matches!(c, ' ' | '\t' | '\n' | '\u{0b}' | '\u{0c}' | '\r' | '\0'));
+    let mediatype =
+        metadata.split(';').next().unwrap_or("").trim_matches(|c: char| matches!(c, ' ' | '\t' | '\n' | '\u{0b}' | '\u{0c}' | '\r' | '\0'));
     let tchar = |c: char| c.is_ascii_alphanumeric() || "!#$%&'*+-.^_`|~".contains(c);
     let valid = mediatype
         .split_once('/')
@@ -380,7 +381,9 @@ fn unescape_one(s: &str) -> (Option<String>, usize) {
     let Some(end) = s.find(';') else { return (None, 0) };
     let body = &s[1..end];
     let code = if let Some(hex) = body.strip_prefix("#x").or_else(|| body.strip_prefix("#X")) {
-        (!hex.is_empty() && hex.len() <= 8 && hex.bytes().all(|b| b.is_ascii_hexdigit())).then(|| u32::from_str_radix(hex, 16).ok()).flatten()
+        (!hex.is_empty() && hex.len() <= 8 && hex.bytes().all(|b| b.is_ascii_hexdigit()))
+            .then(|| u32::from_str_radix(hex, 16).ok())
+            .flatten()
     } else if let Some(dec) = body.strip_prefix('#') {
         (!dec.is_empty() && dec.len() <= 10 && dec.bytes().all(|b| b.is_ascii_digit())).then(|| dec.parse::<u32>().ok()).flatten()
     } else {
@@ -468,7 +471,10 @@ mod tests {
             "",
         ] {
             let html = sanitize(&format!("<span style=\"{hostile}\">x</span>"), &list).unwrap();
-            assert!(!html.contains("url") && !html.contains("expression") && !html.contains('\\') && !html.contains("width"), "{hostile}: {html}");
+            assert!(
+                !html.contains("url") && !html.contains("expression") && !html.contains('\\') && !html.contains("width"),
+                "{hostile}: {html}"
+            );
         }
         assert_eq!(sanitize("<span style=\"position: fixed\">x</span>", &list).unwrap(), "<span>x</span>");
     }

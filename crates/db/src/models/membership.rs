@@ -49,8 +49,7 @@ impl ToSql for Involvement {
 impl FromSql for Involvement {
     fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
         let name = value.as_str()?;
-        Involvement::from_name(name)
-            .ok_or_else(|| FromSqlError::Other(format!("unknown involvement {name:?}").into()))
+        Involvement::from_name(name).ok_or_else(|| FromSqlError::Other(format!("unknown involvement {name:?}").into()))
     }
 }
 
@@ -87,13 +86,8 @@ impl Membership {
     }
 
     pub fn find(conn: &Connection, id: i64) -> Result<Self> {
-        query_one(
-            conn,
-            r#"SELECT * FROM "memberships" WHERE "memberships"."id" = ? LIMIT 1"#,
-            [id],
-            Self::from_row,
-        )?
-        .or_not_found("Membership")
+        query_one(conn, r#"SELECT * FROM "memberships" WHERE "memberships"."id" = ? LIMIT 1"#, [id], Self::from_row)?
+            .or_not_found("Membership")
     }
 
     pub fn count(conn: &Connection) -> Result<i64> {
@@ -101,29 +95,15 @@ impl Membership {
     }
 
     pub fn for_user(conn: &Connection, user_id: i64) -> Result<Vec<Self>> {
-        query_all(
-            conn,
-            r#"SELECT * FROM "memberships" WHERE "memberships"."user_id" = ?"#,
-            [user_id],
-            Self::from_row,
-        )
+        query_all(conn, r#"SELECT * FROM "memberships" WHERE "memberships"."user_id" = ?"#, [user_id], Self::from_row)
     }
 
     pub fn for_room(conn: &Connection, room_id: i64) -> Result<Vec<Self>> {
-        query_all(
-            conn,
-            r#"SELECT * FROM "memberships" WHERE "memberships"."room_id" = ?"#,
-            [room_id],
-            Self::from_row,
-        )
+        query_all(conn, r#"SELECT * FROM "memberships" WHERE "memberships"."room_id" = ?"#, [room_id], Self::from_row)
     }
 
     /// `room.memberships.find_by(user:)` / `user.memberships.find_by(room_id:)`
-    pub fn find_by_room_and_user(
-        conn: &Connection,
-        room_id: i64,
-        user_id: i64,
-    ) -> Result<Option<Self>> {
+    pub fn find_by_room_and_user(conn: &Connection, room_id: i64, user_id: i64) -> Result<Option<Self>> {
         query_one(
             conn,
             r#"SELECT * FROM "memberships" WHERE "memberships"."room_id" = ? AND "memberships"."user_id" = ? LIMIT 1"#,
@@ -229,7 +209,10 @@ impl Membership {
             return Ok(());
         }
         let now = tx.now();
-        tx.conn().execute_cached(r#"UPDATE "memberships" SET "unread_at" = ?, "updated_at" = ? WHERE "memberships"."id" = ?"#, params![None::<Timestamp>, now, self.id])?;
+        tx.conn().execute_cached(
+            r#"UPDATE "memberships" SET "unread_at" = ?, "updated_at" = ? WHERE "memberships"."id" = ?"#,
+            params![None::<Timestamp>, now, self.id],
+        )?;
         self.unread_at = None;
         self.updated_at = now;
         Ok(())
@@ -242,10 +225,7 @@ impl Membership {
     /// `destroy`: the user's sockets reconnect after commit, so their subscriptions to this
     /// room are dropped.
     pub fn destroy(&self, tx: &mut Tx<'_>) -> Result<()> {
-        tx.conn().execute_cached(
-            r#"DELETE FROM "memberships" WHERE "memberships"."id" = ?"#,
-            [self.id],
-        )?;
+        tx.conn().execute_cached(r#"DELETE FROM "memberships" WHERE "memberships"."id" = ?"#, [self.id])?;
         let user_id = self.user_id;
         tx.after_commit(move |tx| {
             User::find(tx.conn(), user_id)?.reset_remote_connections(tx);
@@ -276,17 +256,12 @@ impl Membership {
 
     /// `connected?`
     pub fn is_connected(&self, now: Timestamp) -> bool {
-        self.connected_at
-            .is_some_and(|at| at >= Self::connection_cutoff(now))
+        self.connected_at.is_some_and(|at| at >= Self::connection_cutoff(now))
     }
 
     /// `present`
     pub fn present(&mut self, tx: &mut Tx<'_>) -> Result<()> {
-        let connections = if self.is_connected(tx.now()) {
-            self.connections + 1
-        } else {
-            1
-        };
+        let connections = if self.is_connected(tx.now()) { self.connections + 1 } else { 1 };
         Self::connect(tx, self.id, connections)
     }
 
@@ -320,19 +295,11 @@ impl Membership {
     }
 
     fn increment_connections(&mut self, tx: &mut Tx<'_>) -> Result<()> {
-        if self.is_connected(tx.now()) {
-            self.update_counter(tx, 1)
-        } else {
-            self.update_connections(tx, 1)
-        }
+        if self.is_connected(tx.now()) { self.update_counter(tx, 1) } else { self.update_connections(tx, 1) }
     }
 
     fn decrement_connections(&mut self, tx: &mut Tx<'_>) -> Result<()> {
-        if self.is_connected(tx.now()) {
-            self.update_counter(tx, -1)
-        } else {
-            self.update_connections(tx, 0)
-        }
+        if self.is_connected(tx.now()) { self.update_counter(tx, -1) } else { self.update_connections(tx, 0) }
     }
 
     /// `increment!(:connections, touch: true)` / `decrement!`

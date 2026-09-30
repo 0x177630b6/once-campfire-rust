@@ -10,9 +10,9 @@ pub mod users {
 
     use crate::app::AppCtx;
     use crate::concerns::{self, Before, cast_integer};
+    use crate::controllers::presenters;
     use crate::controllers::presenters::pagination::Page;
     use crate::controllers::presenters::view_context::Layout;
-    use crate::controllers::presenters;
 
     /// `set_page_and_extract_portion_from find_autocompletable_users.with_attached_avatar.ordered, per_page: 20`
     pub async fn index(c: &mut Ctx) -> Result {

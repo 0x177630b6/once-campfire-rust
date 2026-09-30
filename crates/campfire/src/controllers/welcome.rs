@@ -5,8 +5,8 @@ use campfire_kit::{Ctx, Error, Result, StatusCode, format};
 use campfire_views::welcome;
 
 use crate::app::AppCtx;
-use crate::controllers::presenters::page::framed_page;
 use crate::concerns::{self, Before};
+use crate::controllers::presenters::page::framed_page;
 
 /// To the last room visited, or a page saying there are no rooms yet.
 pub async fn show(c: &mut Ctx) -> Result {

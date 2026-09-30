@@ -76,7 +76,12 @@ async fn presence_subscribes_and_marks_the_membership_connected() {
     let membership = app.membership("designers", "david").await.unwrap();
     assert!(!membership.is_connected(app.clock.now()));
     // A member's unread room gets cleared by `present`.
-    app.db.write(move |tx| tx.conn().execute("UPDATE memberships SET unread_at = '2024-01-01 00:00:00' WHERE id = ?", [membership.id]).map_err(Into::into)).await.unwrap();
+    app.db
+        .write(move |tx| {
+            tx.conn().execute("UPDATE memberships SET unread_at = '2024-01-01 00:00:00' WHERE id = ?", [membership.id]).map_err(Into::into)
+        })
+        .await
+        .unwrap();
 
     let presence = room_identifier("PresenceChannel", id("designers"));
     client.confirm(&presence).await;
@@ -326,7 +331,10 @@ async fn the_stock_turbo_channel_refuses_room_message_streams_but_serves_the_roo
     app.broadcasts.room_remove(&designers);
     assert_eq!(
         kevin.next_text().await,
-        delivery(&rooms, &html_json(&format!(r#"<turbo-stream action="remove" target="list_rooms_closed_{}"></turbo-stream>"#, designers.id)))
+        delivery(
+            &rooms,
+            &html_json(&format!(r#"<turbo-stream action="remove" target="list_rooms_closed_{}"></turbo-stream>"#, designers.id))
+        )
     );
 }
 

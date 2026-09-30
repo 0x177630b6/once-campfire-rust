@@ -53,7 +53,12 @@ pub fn sidebar_turbo_frame_tag(content: impl Display, _: &dyn Values) -> Result 
 }
 
 /// `link_to_room(room, **attributes) do ... end`.
-pub fn link_to_room(content: impl Display, _: &dyn Values, room_id: impl std::borrow::Borrow<i64>, options: impl std::borrow::Borrow<Attrs>) -> Result {
+pub fn link_to_room(
+    content: impl Display,
+    _: &dyn Values,
+    room_id: impl std::borrow::Borrow<i64>,
+    options: impl std::borrow::Borrow<Attrs>,
+) -> Result {
     Ok(super::rooms::link_to_room(*room_id.borrow(), options.borrow().clone(), &content.to_string()))
 }
 

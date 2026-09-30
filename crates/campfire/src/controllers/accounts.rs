@@ -7,16 +7,16 @@ pub mod logos;
 pub mod users;
 
 use campfire_db::Account;
-use campfire_kit::{Ctx, Error, Param, Redirect, Result, StatusCode, format};
 use campfire_kit::params::Permit;
+use campfire_kit::{Ctx, Error, Param, Redirect, Result, StatusCode, format};
 use campfire_views::accounts;
 
+use super::presenters;
 use super::presenters::attachments::{self, Assignment, Record};
 use super::presenters::pagination::Page;
-use super::presenters;
 use crate::app::AppCtx;
-use crate::controllers::presenters::page::framed_page;
 use crate::concerns::{self, Before, current_user};
+use crate::controllers::presenters::page::framed_page;
 
 /// `set_page_and_extract_portion_from users, per_page: 500`
 const PER_PAGE: &[i64] = &[500];
@@ -55,9 +55,10 @@ pub async fn update(c: &mut Ctx) -> Result {
 
     let params = c.params.require("account")?.permit(&[Permit::from("name"), Permit::from("logo"), Permit::AnyHash("settings".into())]);
     let name = params.get("name").and_then(Param::to_s);
-    let settings: Option<Vec<(String, String)>> = params.get("settings").and_then(Param::as_hash).map(|settings| {
-        settings.iter().map(|(key, value)| (key.clone(), value.to_s().unwrap_or_default())).collect()
-    });
+    let settings: Option<Vec<(String, String)>> = params
+        .get("settings")
+        .and_then(Param::as_hash)
+        .map(|settings| settings.iter().map(|(key, value)| (key.clone(), value.to_s().unwrap_or_default())).collect());
     let logo = Assignment::from_params(&params, "logo")?.stage(c.app()).await?;
 
     let pending = c
@@ -78,10 +79,5 @@ pub async fn update(c: &mut Ctx) -> Result {
 
 /// `Current.account` where the reference dereferences it (a nil account raises NoMethodError).
 pub async fn current_account(c: &Ctx) -> Result<Account> {
-    c.app()
-        .db
-        .read(Account::first)
-        .await
-        .map_err(Error::internal)?
-        .ok_or_else(|| Error::internal(anyhow::anyhow!("no account")))
+    c.app().db.read(Account::first).await.map_err(Error::internal)?.ok_or_else(|| Error::internal(anyhow::anyhow!("no account")))
 }

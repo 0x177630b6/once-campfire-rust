@@ -3,10 +3,10 @@
 use askama::Template;
 use serde::Deserialize;
 
+use crate::ViewContext;
 use crate::helpers as h;
 use crate::layouts::Page;
 use crate::messages::MessageItem;
-use crate::ViewContext;
 
 /// What `searches/index` shows.
 #[derive(Clone, Debug, Deserialize, PartialEq)]

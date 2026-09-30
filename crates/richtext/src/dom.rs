@@ -109,14 +109,9 @@ impl Dom {
     }
 
     pub fn create_element(&mut self, local: &str, attrs: &[(&str, &str)]) -> NodeId {
-        let attrs = attrs
-            .iter()
-            .map(|(k, v)| Attr { name: QualName::new(None, ns!(), LocalName::from(*k)), value: v.to_string() })
-            .collect();
-        self.push(NodeData::Element(ElementData {
-            name: QualName::new(None, ns!(html), LocalName::from(local)),
-            attrs,
-        }))
+        let attrs =
+            attrs.iter().map(|(k, v)| Attr { name: QualName::new(None, ns!(), LocalName::from(*k)), value: v.to_string() }).collect();
+        self.push(NodeData::Element(ElementData { name: QualName::new(None, ns!(html), LocalName::from(local)), attrs }))
     }
 
     pub fn create_text(&mut self, text: &str) -> NodeId {
@@ -188,10 +183,7 @@ impl Dom {
             if let Some(attr) = element.attrs.iter_mut().find(|a| a.qualified_name() == name) {
                 attr.value = value.to_string();
             } else {
-                element.attrs.push(Attr {
-                    name: QualName::new(None, ns!(), LocalName::from(name)),
-                    value: value.to_string(),
-                });
+                element.attrs.push(Attr { name: QualName::new(None, ns!(), LocalName::from(name)), value: value.to_string() });
             }
         }
     }
@@ -203,9 +195,7 @@ impl Dom {
     }
 
     pub fn attrs(&self, id: NodeId) -> Vec<(String, String)> {
-        self.element(id)
-            .map(|e| e.attrs.iter().map(|a| (a.qualified_name(), a.value.clone())).collect())
-            .unwrap_or_default()
+        self.element(id).map(|e| e.attrs.iter().map(|a| (a.qualified_name(), a.value.clone())).collect()).unwrap_or_default()
     }
 
     /// Element children only (Nokogiri's `Node#elements`).
@@ -423,9 +413,9 @@ impl Dom {
                 out.push('>');
             }
             NodeData::Text(text) => {
-                let raw = self.parent(id).is_some_and(|p| {
-                    self.element(p).is_some_and(|e| e.name.ns == ns!(html) && is_raw_text_element(&e.name.local))
-                });
+                let raw = self
+                    .parent(id)
+                    .is_some_and(|p| self.element(p).is_some_and(|e| e.name.ns == ns!(html) && is_raw_text_element(&e.name.local)));
                 if raw {
                     out.push_str(text);
                 } else {
@@ -461,16 +451,29 @@ fn serialized_tag_name(name: &QualName) -> String {
 pub fn is_void_element(local: &str) -> bool {
     matches!(
         local,
-        "area" | "base" | "basefont" | "bgsound" | "br" | "col" | "embed" | "frame" | "hr" | "img" | "input"
-            | "keygen" | "link" | "meta" | "param" | "source" | "track" | "wbr"
+        "area"
+            | "base"
+            | "basefont"
+            | "bgsound"
+            | "br"
+            | "col"
+            | "embed"
+            | "frame"
+            | "hr"
+            | "img"
+            | "input"
+            | "keygen"
+            | "link"
+            | "meta"
+            | "param"
+            | "source"
+            | "track"
+            | "wbr"
     )
 }
 
 fn is_raw_text_element(local: &str) -> bool {
-    matches!(
-        local,
-        "style" | "script" | "xmp" | "iframe" | "noembed" | "noframes" | "plaintext" | "noscript"
-    )
+    matches!(local, "style" | "script" | "xmp" | "iframe" | "noembed" | "noframes" | "plaintext" | "noscript")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -661,10 +664,11 @@ impl Sink {
                 // Adjacent text merges into the preceding text node, as in the DOM
                 let previous = if index > 0 { Some(self.nodes.borrow()[parent].children[index - 1]) } else { None };
                 if let Some(prev) = previous
-                    && let NodeData::Text(existing) = &mut self.nodes.borrow_mut()[prev].data {
-                        existing.push_str(&text);
-                        return;
-                    }
+                    && let NodeData::Text(existing) = &mut self.nodes.borrow_mut()[prev].data
+                {
+                    existing.push_str(&text);
+                    return;
+                }
                 let node = self.new_node(NodeData::Text(text.to_string()));
                 let mut nodes = self.nodes.borrow_mut();
                 nodes[node].parent = Some(parent);

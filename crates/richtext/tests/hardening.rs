@@ -4,9 +4,7 @@
 use std::time::{Duration, Instant};
 
 use campfire_richtext::dom::{Dom, MAX_ATTRIBUTES};
-use campfire_richtext::{
-    AttachableResolver, GidLookup, RenderContext, SignedLookup, editable_value, message_presentation, to_plain_text,
-};
+use campfire_richtext::{AttachableResolver, GidLookup, RenderContext, SignedLookup, editable_value, message_presentation, to_plain_text};
 
 struct NoRecords;
 

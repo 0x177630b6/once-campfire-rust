@@ -230,11 +230,7 @@ fn nonce() -> String {
 }
 
 fn message_request(cookie: &str, csrf: &str, body_text: &str) -> (Vec<(&'static str, String)>, Bytes) {
-    let body = form(&[
-        ("message[body]", body_text),
-        ("message[client_message_id]", &nonce()),
-        ("authenticity_token", csrf),
-    ]);
+    let body = form(&[("message[body]", body_text), ("message[client_message_id]", &nonce()), ("authenticity_token", csrf)]);
     (
         vec![
             ("cookie", cookie.to_string()),
@@ -305,7 +301,8 @@ async fn http_load(a: &Args) -> Res<Value> {
                     }
                 };
                 let t0 = Instant::now();
-                let wall0 = if tracing { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros() } else { 0 };
+                let wall0 =
+                    if tracing { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros() } else { 0 };
                 match send(conn.as_mut().unwrap(), &addr, method, &p, &headers, body).await {
                     Ok(r) => {
                         h.record(t0.elapsed().as_micros() as u64).ok();
@@ -378,7 +375,10 @@ fn markers(text: &str) -> Vec<u64> {
     while let Some(i) = rest.find("bmk") {
         rest = &rest[i + 3..];
         let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-        if !digits.is_empty() && rest[digits.len()..].starts_with('z') && let Ok(n) = digits.parse() {
+        if !digits.is_empty()
+            && rest[digits.len()..].starts_with('z')
+            && let Ok(n) = digits.parse()
+        {
             out.push(n);
         }
     }
@@ -539,7 +539,13 @@ async fn deflate_cable_client(
         };
         payload.resize(len, 0);
         reader.read_exact(&mut payload).await?;
-        let header_len = 2 + if len >= 65536 { 8 } else if len >= 126 { 2 } else { 0 };
+        let header_len = 2 + if len >= 65536 {
+            8
+        } else if len >= 126 {
+            2
+        } else {
+            0
+        };
         delivery.wire_bytes.fetch_add((header_len + len) as u64, Ordering::Relaxed);
         match head[0] & 0x0f {
             0x8 => break,
@@ -584,7 +590,15 @@ fn masked_text_frame(payload: &[u8]) -> Vec<u8> {
     frame
 }
 
-async fn post_marked(sender: &mut Option<SendRequest<Full<Bytes>>>, addr: &str, room: &str, cookie: &str, csrf: &str, seq: u64, delivery: &Delivery) -> Option<u64> {
+async fn post_marked(
+    sender: &mut Option<SendRequest<Full<Bytes>>>,
+    addr: &str,
+    room: &str,
+    cookie: &str,
+    csrf: &str,
+    seq: u64,
+    delivery: &Delivery,
+) -> Option<u64> {
     if sender.is_none() {
         *sender = connect(addr).await.ok();
     }
@@ -684,8 +698,16 @@ async fn cable(a: &Args) -> Res<Value> {
     for n in 0..clients {
         let permit = gate.clone().acquire_owned().await?;
         let source = (!sources.is_empty()).then(|| sources[n % sources.len()]);
-        let (addr, cookie, subs, confirmed, connected, stop, delivery, failed) =
-            (addr.clone(), cookie.clone(), subs.clone(), confirmed.clone(), connected.clone(), stop.clone(), delivery.clone(), failed.clone());
+        let (addr, cookie, subs, confirmed, connected, stop, delivery, failed) = (
+            addr.clone(),
+            cookie.clone(),
+            subs.clone(),
+            confirmed.clone(),
+            connected.clone(),
+            stop.clone(),
+            delivery.clone(),
+            failed.clone(),
+        );
         let before = connected.load(Ordering::Relaxed);
         handles.push(tokio::spawn(async move {
             let c2 = connected.clone();
@@ -759,7 +781,8 @@ async fn cable(a: &Args) -> Res<Value> {
     let tput_deadline = tput_start + Duration::from_secs_f64(tput_secs);
     let mut ptasks = Vec::new();
     for _ in 0..posters {
-        let (addr, room, cookie, csrf, delivery, next) = (addr.clone(), room.clone(), cookie.clone(), csrf.clone(), delivery.clone(), next.clone());
+        let (addr, room, cookie, csrf, delivery, next) =
+            (addr.clone(), room.clone(), cookie.clone(), csrf.clone(), delivery.clone(), next.clone());
         ptasks.push(tokio::spawn(async move {
             let mut conn = None;
             let mut mine = Vec::new();
@@ -911,7 +934,9 @@ async fn fetch(a: &Args) -> Res<Value> {
     let path = a.get("path");
     let r = one_shot(&addr, "GET", &path, &[("cookie", a.opt("cookie").unwrap_or_default())], Bytes::new()).await?;
     std::fs::write(a.get("out"), &r.body)?;
-    Ok(json!({"status": r.status, "bytes": r.body.len(), "content_encoding": r.headers.get("content-encoding").map(|v| v.to_str().unwrap_or("").to_string())}))
+    Ok(
+        json!({"status": r.status, "bytes": r.body.len(), "content_encoding": r.headers.get("content-encoding").map(|v| v.to_str().unwrap_or("").to_string())}),
+    )
 }
 
 /// CPU per compression of one body. zlib-rs is the app's backend; the app's `Rack::Deflater` port

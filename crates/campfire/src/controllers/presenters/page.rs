@@ -65,7 +65,12 @@ pub async fn content_in_application_layout(
 
 /// A template rendered with `layout false` (or a turbo stream), no layout, labelled with the
 /// template's format.
-pub async fn bare(c: &mut Ctx, status: StatusCode, template: Format, render: impl FnOnce(&ViewContext) -> askama::Result<String>) -> Result {
+pub async fn bare(
+    c: &mut Ctx,
+    status: StatusCode,
+    template: Format,
+    render: impl FnOnce(&ViewContext) -> askama::Result<String>,
+) -> Result {
     find_template(c, template)?;
     let layout = Layout::load(c).await?;
     let html = layout.render(c, render)?;

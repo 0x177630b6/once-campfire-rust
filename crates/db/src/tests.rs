@@ -31,43 +31,24 @@ impl TestDb {
         let dir = tempfile::tempdir().unwrap();
         let sink = RecordingSink::new();
         let clock = TestClock::new();
-        let env = Env {
-            clock: Arc::new(clock.clone()),
-            sink: Arc::new(sink.clone()),
-            rich_text: Arc::new(BasicRichText),
-            bcrypt_cost: 4,
-        };
+        let env = Env { clock: Arc::new(clock.clone()), sink: Arc::new(sink.clone()), rich_text: Arc::new(BasicRichText), bcrypt_cost: 4 };
         let mut config = Config::new(dir.path().join("test.sqlite3"));
         config.readers = 2;
         config.environment = "test".into();
         let db = Database::open(config, env).unwrap();
         db.write_blocking(|tx| {
-            let options = fixtures::Options {
-                now: tx.now(),
-                bcrypt_cost: 4,
-            };
+            let options = fixtures::Options { now: tx.now(), bcrypt_cost: 4 };
             fixtures::load(tx.conn(), &fixtures::reference_dir(), &options)
         })
         .unwrap();
-        Self {
-            db,
-            sink,
-            clock,
-            _dir: dir,
-        }
+        Self { db, sink, clock, _dir: dir }
     }
 
-    pub fn write<T: Send + 'static>(
-        &self,
-        f: impl FnOnce(&mut Tx<'_>) -> Result<T> + Send + 'static,
-    ) -> T {
+    pub fn write<T: Send + 'static>(&self, f: impl FnOnce(&mut Tx<'_>) -> Result<T> + Send + 'static) -> T {
         self.db.write_blocking(f).unwrap()
     }
 
-    pub fn try_write<T: Send + 'static>(
-        &self,
-        f: impl FnOnce(&mut Tx<'_>) -> Result<T> + Send + 'static,
-    ) -> Result<T> {
+    pub fn try_write<T: Send + 'static>(&self, f: impl FnOnce(&mut Tx<'_>) -> Result<T> + Send + 'static) -> Result<T> {
         self.db.write_blocking(f)
     }
 

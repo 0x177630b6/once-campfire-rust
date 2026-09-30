@@ -225,14 +225,16 @@ async fn the_application_chain_blocks_banned_ips_forgeries_and_old_browsers() {
     assert_eq!(forged.status, StatusCode::UNPROCESSABLE_ENTITY);
 
     let outdated = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.0.0 Safari/537.36";
-    let request = Request::get("/whoami").header(header::HOST, "campfire.test").header(header::COOKIE, cookie).header(header::USER_AGENT, outdated);
+    let request =
+        Request::get("/whoami").header(header::HOST, "campfire.test").header(header::COOKIE, cookie).header(header::USER_AGENT, outdated);
     let old_browser = send(&router, request.body(Body::empty()).unwrap()).await;
     assert_eq!(old_browser.status, StatusCode::OK);
     assert_ne!(old_browser.text(), vectors.sessions[0].user_name);
 
     // The incompatible-browser page is an explicit `render template:`: HTML whatever the format.
     for (path, accept) in [("/webmanifest.json", "*/*"), ("/service-worker.js", "*/*"), ("/session/new", "application/json")] {
-        let request = Request::get(path).header(header::HOST, "campfire.test").header(header::USER_AGENT, outdated).header(header::ACCEPT, accept);
+        let request =
+            Request::get(path).header(header::HOST, "campfire.test").header(header::USER_AGENT, outdated).header(header::ACCEPT, accept);
         let blocked = send(&test.booted.router, request.body(Body::empty()).unwrap()).await;
         assert_eq!((blocked.status, blocked.header("content-type")), (StatusCode::OK, Some("text/html; charset=utf-8")), "{path} {accept}");
     }
@@ -319,7 +321,11 @@ async fn backup_snapshots_the_live_database() {
     let snapshot = rusqlite::Connection::open(config.storage.backup_file()).unwrap();
     let users: i64 = snapshot.query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0)).unwrap();
     assert!(users > 0);
-    let leftovers: Vec<_> = std::fs::read_dir(&config.storage.backups).unwrap().flatten().filter(|entry| entry.file_name().to_string_lossy().starts_with(".backup-")).collect();
+    let leftovers: Vec<_> = std::fs::read_dir(&config.storage.backups)
+        .unwrap()
+        .flatten()
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with(".backup-"))
+        .collect();
     assert!(leftovers.is_empty(), "{leftovers:?}");
 }
 
@@ -419,9 +425,12 @@ async fn concurrent_message_posts_all_complete() {
         assert_eq!(status.unwrap(), StatusCode::OK);
     }
 
-    let after = tokio::time::timeout(std::time::Duration::from_secs(10), send(&router, get_with_cookie(&format!("/rooms/{room_id}"), &session.cookie_header)))
-        .await
-        .expect("the server stopped answering");
+    let after = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        send(&router, get_with_cookie(&format!("/rooms/{room_id}"), &session.cookie_header)),
+    )
+    .await
+    .expect("the server stopped answering");
     assert_eq!(after.status, StatusCode::OK);
 }
 
@@ -468,7 +477,8 @@ async fn blob_byte_ranges_are_served_from_the_file() {
     let proxy_path = vectors().blobs[0].redirect_path.replacen("/redirect/", "/proxy/", 1);
     let blob = test.booted.app.db.read(|conn| Ok(campfire_storage::Blob::find(conn, 5).unwrap().unwrap())).await.unwrap();
     let file = std::fs::read(test.booted.app.storage.path_for(&blob)).unwrap();
-    let ranged = |range: &str| Request::get(&proxy_path).header(header::HOST, "campfire.test").header("range", range).body(Body::empty()).unwrap();
+    let ranged =
+        |range: &str| Request::get(&proxy_path).header(header::HOST, "campfire.test").header("range", range).body(Body::empty()).unwrap();
 
     let single = send(router, ranged("bytes=100-")).await;
     assert_eq!(single.status, StatusCode::PARTIAL_CONTENT);
@@ -480,7 +490,8 @@ async fn blob_byte_ranges_are_served_from_the_file() {
     assert_eq!(multiple.status, StatusCode::PARTIAL_CONTENT);
     let boundary = multiple.header("content-type").unwrap().strip_prefix("multipart/byteranges; boundary=").unwrap().to_string();
     let part = |start: usize, end: usize| {
-        let mut part = format!("\r\n--{boundary}\r\nContent-Type: image/jpeg\r\nContent-Range: bytes {start}-{end}/{}\r\n\r\n", file.len()).into_bytes();
+        let mut part = format!("\r\n--{boundary}\r\nContent-Type: image/jpeg\r\nContent-Range: bytes {start}-{end}/{}\r\n\r\n", file.len())
+            .into_bytes();
         part.extend_from_slice(&file[start..=end]);
         part
     };
@@ -498,7 +509,12 @@ async fn blob_byte_ranges_are_served_from_the_file() {
 async fn proxied_blobs_name_their_file_like_rails() {
     let Some(test) = boot_seeded().await else { return };
     let router = &test.booted.router;
-    test.booted.app.db.write(|tx| Ok(tx.conn().execute("UPDATE active_storage_blobs SET filename = 'Łódź.jpg' WHERE id = 5", [])?)).await.unwrap();
+    test.booted
+        .app
+        .db
+        .write(|tx| Ok(tx.conn().execute("UPDATE active_storage_blobs SET filename = 'Łódź.jpg' WHERE id = 5", [])?))
+        .await
+        .unwrap();
     let proxy_path = vectors().blobs[0].redirect_path.replacen("/redirect/", "/proxy/", 1);
     let request = |range: Option<&str>| {
         let mut request = Request::get(&proxy_path).header(header::HOST, "campfire.test");

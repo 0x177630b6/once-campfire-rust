@@ -24,10 +24,8 @@ async fn malformed_params_are_logged_as_they_were_rejected() {
     let logs = Logs::default();
     let _guard = tracing::subscriber::set_default(logs.subscriber());
     let query = Request::get("/echo/1?a=%").body(AxumBody::empty()).unwrap();
-    let form = Request::post("/echo/1")
-        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-        .body(AxumBody::from("b=%"))
-        .unwrap();
+    let form =
+        Request::post("/echo/1").header(header::CONTENT_TYPE, "application/x-www-form-urlencoded").body(AxumBody::from("b=%")).unwrap();
     for request in [query, form] {
         assert_eq!(app().oneshot(request).await.unwrap().status(), StatusCode::BAD_REQUEST);
     }

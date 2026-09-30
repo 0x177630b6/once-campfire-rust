@@ -7,9 +7,9 @@ pub mod attachments;
 pub mod page;
 pub mod pagination;
 pub mod rich_text;
-pub mod view_context;
 #[cfg(test)]
 pub mod test_support;
+pub mod view_context;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -18,13 +18,13 @@ use std::sync::LazyLock;
 use campfire_db::{Boost, Connection, Membership, Message, RichText, Room, RoomType, User};
 use campfire_richtext::Presentation;
 use campfire_storage::{Storage, Variation};
+use campfire_views::fragment_cache;
 use campfire_views::messages::json::{BoostJson, BoostMessageJson, IdJson, MessageBodyJson, MessageJson, UserJson};
+use campfire_views::messages::support::RubyNumber;
 use campfire_views::messages::support::json_time;
 use campfire_views::messages::{
     AttachmentPreview, AttachmentView, BoostView, MessageContent, MessageItem, MessageView, RoomKind, SoundImage, SoundView, UserView,
 };
-use campfire_views::messages::support::RubyNumber;
-use campfire_views::fragment_cache;
 use campfire_views::rooms::{RoomView, room_display_name};
 use rails_compat::Secrets;
 use regex::Regex;
@@ -306,9 +306,7 @@ impl<'a> Presenter<'a> {
                         ]),
                     ),
                 ]);
-                AttachmentPreview::Video {
-                    poster_url: campfire_storage::paths::representation_redirect_path(verifier, &blob, &poster),
-                }
+                AttachmentPreview::Video { poster_url: campfire_storage::paths::representation_redirect_path(verifier, &blob, &poster) }
             } else {
                 AttachmentPreview::Image { thumb_url: self.thumb_path(&blob)? }
             }
@@ -337,9 +335,7 @@ impl<'a> Presenter<'a> {
         let Some(body) = message.body_html(self.conn)? else { return Ok(String::new()) };
         let resolver = self.resolver();
         let ctx = resolver.render_context(self.request_host.clone());
-        Ok(campfire_richtext::Content::load(&body, &ctx)
-            .and_then(|content| content.to_rendered_html_with_layout(&ctx))
-            .unwrap_or_default())
+        Ok(campfire_richtext::Content::load(&body, &ctx).and_then(|content| content.to_rendered_html_with_layout(&ctx)).unwrap_or_default())
     }
 
     /// `editable_body(message)` as the editor's `value`.
@@ -355,7 +351,8 @@ impl<'a> Presenter<'a> {
 
     /// `messages/_message.json.jbuilder` (`json.cache! message`).
     pub fn message_json(&self, message: &Message, base_url: &str) -> Result<MessageJson> {
-        let key = || jbuilder_key("messages/_message", &cache_key_with_version("messages", message.id, message.updated_at.jiff()), base_url);
+        let key =
+            || jbuilder_key("messages/_message", &cache_key_with_version("messages", message.id, message.updated_at.jiff()), base_url);
         fragment_cache::try_fetch_value(key, || self.render_message_json(message, base_url))
     }
 

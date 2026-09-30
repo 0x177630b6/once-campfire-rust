@@ -71,9 +71,7 @@ impl Notification {
     pub async fn deliver(&self, net: &Network, vapid: &VapidConfig) -> Result<Option<u16>, DeliveryError> {
         let Some(endpoint_ip) = self.resolved_endpoint_ip(net).await else { return Ok(None) };
         let endpoint = self.subscription.endpoint.as_deref().unwrap_or_default();
-        payload_send(net, vapid, endpoint, endpoint_ip, &self.subscription, self.encoded_message().as_bytes(), unix_now())
-            .await
-            .map(Some)
+        payload_send(net, vapid, endpoint, endpoint_ip, &self.subscription, self.encoded_message().as_bytes(), unix_now()).await.map(Some)
     }
 
     /// `Push::Subscription#resolved_endpoint_ip`
@@ -161,7 +159,8 @@ async fn payload_send(
     message: &[u8],
     now: i64,
 ) -> Result<u16, DeliveryError> {
-    let uri = campfire_richtext::uri::parse(endpoint).map_err(|_| DeliveryError::Argument(format!("bad URI(is not URI?): {endpoint:?}")))?;
+    let uri =
+        campfire_richtext::uri::parse(endpoint).map_err(|_| DeliveryError::Argument(format!("bad URI(is not URI?): {endpoint:?}")))?;
     let host = uri.host.clone().unwrap_or_default();
     let payload = encryption::encrypt(message, subscription.p256dh_key.as_deref(), subscription.auth_key.as_deref())?;
 
@@ -224,7 +223,13 @@ pub async fn deliver_test_notification(
 /// `Room::PushMessageJob#perform` / `Room::MessagePusher#push`: the payload goes to the
 /// subscriptions of everyone involved in everything, then to mentioned users involved in
 /// mentions. Badges are counted here; delivery happens on the pool.
-pub fn push_message(pool: &Pool, conn: &Connection, rich_text: &dyn RichText, message: &Message, now: Timestamp) -> campfire_db::Result<PushPayload> {
+pub fn push_message(
+    pool: &Pool,
+    conn: &Connection,
+    rich_text: &dyn RichText,
+    message: &Message,
+    now: Timestamp,
+) -> campfire_db::Result<PushPayload> {
     let (payload, everything, mentions) = PushSubscription::pushes_for(conn, rich_text, message, now)?;
     pool.queue(conn, &payload, everything)?;
     pool.queue(conn, &payload, mentions)?;

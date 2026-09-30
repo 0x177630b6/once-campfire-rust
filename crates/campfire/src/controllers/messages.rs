@@ -17,8 +17,8 @@ use campfire_views::messages as views;
 use crate::active_storage::{self, keep_after_commit};
 use crate::app::{App, AppCtx};
 use crate::concerns::{self, Before, before_actions, cast_integer, require_current_user};
-use crate::controllers::presenters::page::{self, Rendered, db_error};
 use crate::controllers::presenters::attachments::Assignment;
+use crate::controllers::presenters::page::{self, Rendered, db_error};
 use crate::controllers::presenters::{DbResolver, Presenter, cache_key_with_version, room_kind, storage_error};
 
 // --- Actions ------------------------------------------------------------------------------------
@@ -80,8 +80,10 @@ pub async fn create(c: &mut Ctx) -> Result {
             let presenter = Presenter::new(conn, &app, None);
             let item = campfire_views::fragment_cache::with(&app.fragment_cache, || presenter.message_item(&message))?;
             let account = campfire_db::Account::first(conn)?;
-            page::render_detached_at(&app, account.as_ref(), &base_url, |ctx| views::CreateStream { ctx, message: &item, room_kind: kind }.render())
-                .map_err(|e| campfire_db::Error::Other(e.to_string()))
+            page::render_detached_at(&app, account.as_ref(), &base_url, |ctx| {
+                views::CreateStream { ctx, message: &item, room_kind: kind }.render()
+            })
+            .map_err(|e| campfire_db::Error::Other(e.to_string()))
         })
         .await
         .map_err(db_error)?;
@@ -172,11 +174,7 @@ fn message_params(c: &Ctx) -> Result<MessageParams> {
     let message = c.params.require("message")?;
     let permitted = message.permit(&permit_keys(&["body", "attachment", "client_message_id"]));
     let text = |key: &str| permitted.get(key).and_then(Param::as_str).map(str::to_string);
-    Ok(MessageParams {
-        body: text("body"),
-        attachment: attachment_assignment(&permitted)?,
-        client_message_id: text("client_message_id"),
-    })
+    Ok(MessageParams { body: text("body"), attachment: attachment_assignment(&permitted)?, client_message_id: text("client_message_id") })
 }
 
 /// What assigning the permitted `attachment` does: an upload replaces the attachment, nil or ""
@@ -359,7 +357,6 @@ pub(crate) async fn update_message(c: &Ctx, message: Message, attributes: Messag
     c.app().db.read(move |conn| Message::find(conn, id)).await.map_err(db_error)
 }
 
-
 /// `@message.destroy` then `@message.broadcast_remove`.
 pub(crate) async fn destroy_message(c: &Ctx, room: &Room, message: &Message) -> Result<()> {
     let destroyed = message.clone();
@@ -419,8 +416,7 @@ pub(crate) async fn deliver_webhooks_to_bots(c: &Ctx, room: &Room, message: &Mes
         .app()
         .db
         .read(move |conn| {
-            let candidates =
-                if room.direct() { room.active_bots(conn)? } else { eligible.mentionees(conn, &*app.db.env().rich_text)? };
+            let candidates = if room.direct() { room.active_bots(conn)? } else { eligible.mentionees(conn, &*app.db.env().rich_text)? };
             Ok(candidates
                 .into_iter()
                 .filter(|user| user.role == Role::Bot && user.status == Status::Active && user.id != eligible.creator_id)
@@ -433,11 +429,7 @@ pub(crate) async fn deliver_webhooks_to_bots(c: &Ctx, room: &Room, message: &Mes
     }
     // bot.deliver_webhook_later(@message)
     let message_id = message.id;
-    c.app()
-        .db
-        .write(move |tx| bots.iter().try_for_each(|bot| bot.deliver_webhook_later(tx, message_id)))
-        .await
-        .map_err(db_error)
+    c.app().db.write(move |tx| bots.iter().try_for_each(|bot| bot.deliver_webhook_later(tx, message_id))).await.map_err(db_error)
 }
 
 // --- Rendering ------------------------------------------------------------------------------------

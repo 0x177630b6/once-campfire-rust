@@ -12,8 +12,8 @@ use jiff::{SignedDuration, Timestamp};
 
 use super::presenters;
 use crate::app::AppCtx;
-use crate::controllers::presenters::page::framed_page;
 use crate::concerns::{self, Before, current_user};
+use crate::controllers::presenters::page::framed_page;
 
 /// `rate_limit to: 10, within: 3.minutes, only: :create`
 const RATE_LIMIT_TO: u64 = 10;
@@ -84,11 +84,7 @@ async fn render_new(c: &mut Ctx, status: StatusCode) -> Result {
 async fn remove_push_subscription(c: &mut Ctx) -> Result<()> {
     let Some(endpoint) = c.param_str("push_subscription_endpoint").map(str::to_string) else { return Ok(()) };
     let Some(user_id) = current_user(c).map(|user| user.id) else { return Ok(()) };
-    c.app()
-        .db
-        .write(move |tx| PushSubscription::destroy_by_endpoint(tx, user_id, &endpoint))
-        .await
-        .map_err(Error::internal)
+    c.app().db.write(move |tx| PushSubscription::destroy_by_endpoint(tx, user_id, &endpoint)).await.map_err(Error::internal)
 }
 
 // --- Rate limiting ---------------------------------------------------------------------------------

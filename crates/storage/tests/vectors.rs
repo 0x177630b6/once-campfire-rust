@@ -13,8 +13,7 @@ use std::sync::Arc;
 
 use campfire_storage::marshal::Value;
 use campfire_storage::{
-    AppMessageVerifier, Blob, DiskService, Filename, Json, Storage, Variation, Verifier, disk, disposition, marcel,
-    paths,
+    AppMessageVerifier, Blob, DiskService, Filename, Json, Storage, Variation, Verifier, disk, disposition, marcel, paths,
 };
 use rusqlite::Connection;
 use serde_json::Value as J;
@@ -54,9 +53,9 @@ fn typed(value: &J) -> Value {
         J::Array(items) => Value::Array(items.iter().map(typed).collect()),
         J::Object(o) if o.contains_key("sym") => Value::Symbol(o["sym"].as_str().unwrap().into()),
         J::Object(o) if o.contains_key("str") => Value::Str(o["str"].as_str().unwrap().into()),
-        J::Object(o) => Value::Hash(
-            o["hash"].as_array().unwrap().iter().map(|pair| (pair[0].as_str().unwrap().to_string(), typed(&pair[1]))).collect(),
-        ),
+        J::Object(o) => {
+            Value::Hash(o["hash"].as_array().unwrap().iter().map(|pair| (pair[0].as_str().unwrap().to_string(), typed(&pair[1]))).collect())
+        }
         J::String(_) => panic!("untyped string"),
     }
 }
@@ -181,7 +180,10 @@ fn route_paths() {
         assert_eq!(paths::blob_redirect_path(&verifier, &blob, None), m["rails_blob_path"]);
         assert_eq!(paths::blob_redirect_path(&verifier, &blob, Some("attachment")), m["rails_blob_download_path"]);
         assert_eq!(paths::blob_proxy_path(&verifier, &blob, None), m["rails_blob_proxy_path"]);
-        assert_eq!(paths::verify_signed_blob_id(&verifier, m["rails_blob_path"].as_str().unwrap().split('/').nth(5).unwrap(), now()), Some(blob.id));
+        assert_eq!(
+            paths::verify_signed_blob_id(&verifier, m["rails_blob_path"].as_str().unwrap().split('/').nth(5).unwrap(), now()),
+            Some(blob.id)
+        );
 
         // `blob.url` → the disk service URL, with the forced disposition for non-inline types.
         let content_type = blob.content_type();
@@ -190,7 +192,14 @@ fn route_paths() {
             let d = campfire_storage::content_types::forced_disposition(content_type).unwrap_or(disposition);
             format!(
                 "http://campfire.test{}",
-                service.url_path(&verifier, &blob.key, None, &blob.filename, Some(campfire_storage::content_types::for_serving(content_type)), d)
+                service.url_path(
+                    &verifier,
+                    &blob.key,
+                    None,
+                    &blob.filename,
+                    Some(campfire_storage::content_types::for_serving(content_type)),
+                    d
+                )
             )
         };
         assert_eq!(service_path(disposition), m["service_url"]);
@@ -328,12 +337,15 @@ fn pipeline_matches_the_reference() {
         }
     }
 
-    let named = [("avatars", Variation::resize_to_limit(512, 512, Some("webp"))), ("logos", Variation::resize_to_limit(512, 512, Some("png")))];
+    let named =
+        [("avatars", Variation::resize_to_limit(512, 512, Some("webp"))), ("logos", Variation::resize_to_limit(512, 512, Some("png")))];
     for (kind, first) in named {
         for entry in vectors[kind].as_array().unwrap() {
             let row = &entry["blob"];
             let data = std::fs::read(fixture(entry["fixture"].as_str().unwrap())).unwrap();
-            let mut blob = storage.create_and_upload(&conn, &data, Filename::new(row["filename"].as_str().unwrap()), row["content_type"].as_str(), now()).unwrap();
+            let mut blob = storage
+                .create_and_upload(&conn, &data, Filename::new(row["filename"].as_str().unwrap()), row["content_type"].as_str(), now())
+                .unwrap();
             storage.analyze(&conn, &mut blob).unwrap();
             comparison.blob(row["filename"].as_str().unwrap(), &blob, row, false, false);
             for (i, v) in entry["variants"].as_array().unwrap().iter().enumerate() {

@@ -5,14 +5,14 @@
 //!
 //! The public signatures below are the interface other crates build against.
 
-pub mod key_generator;
-pub mod message_verifier;
-pub mod message_encryptor;
 pub mod cookies;
-pub mod signed_id;
 pub mod global_id;
-pub mod turbo;
+pub mod key_generator;
+pub mod message_encryptor;
+pub mod message_verifier;
 pub mod password;
+pub mod signed_id;
+pub mod turbo;
 
 mod encoding;
 mod json;
@@ -20,8 +20,8 @@ mod marshal;
 mod metadata;
 
 pub use key_generator::KeyGenerator;
-pub use message_verifier::MessageVerifier;
 pub use message_encryptor::MessageEncryptor;
+pub use message_verifier::MessageVerifier;
 
 /// Everything derived from `secret_key_base`, built once at boot and shared.
 pub struct Secrets {
@@ -41,7 +41,12 @@ impl Secrets {
 /// and upload tokens. Use `generate_raw`/`verify_raw` to control the JSON key order.
 pub fn app_verifier(secrets: &Secrets, name: &str) -> MessageVerifier {
     use message_verifier::{Digest, Encoding, Serializer};
-    MessageVerifier::new(secrets.key_generator.generate_key(name, 64), Digest::Sha1, Encoding::Strict, Serializer::JsonWithFallback { allow_marshal: true })
+    MessageVerifier::new(
+        secrets.key_generator.generate_key(name, 64),
+        Digest::Sha1,
+        Encoding::Strict,
+        Serializer::JsonWithFallback { allow_marshal: true },
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

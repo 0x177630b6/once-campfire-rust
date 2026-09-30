@@ -12,8 +12,8 @@ use crate::ViewContext;
 
 /// `Users::AvatarsHelper::AVATAR_COLORS`.
 pub const AVATAR_COLORS: [&str; 18] = [
-    "#AF2E1B", "#CC6324", "#3B4B59", "#BFA07A", "#ED8008", "#ED3F1C", "#BF1B1B", "#736B1E", "#D07B53",
-    "#736356", "#AD1D1D", "#BF7C2A", "#C09C6F", "#698F9C", "#7C956B", "#5D618F", "#3B3633", "#67695E",
+    "#AF2E1B", "#CC6324", "#3B4B59", "#BFA07A", "#ED8008", "#ED3F1C", "#BF1B1B", "#736B1E", "#D07B53", "#736356", "#AD1D1D", "#BF7C2A",
+    "#C09C6F", "#698F9C", "#7C956B", "#5D618F", "#3B3633", "#67695E",
 ];
 
 /// `avatar_background_color(user)`: `Zlib.crc32(user.to_param)` picks the color.
@@ -52,12 +52,7 @@ pub fn initials(name: &str) -> String {
 
 /// `User#title`: `[ name, bio ].compact_blank.join(" – ")`.
 pub fn user_title(name: &str, bio: Option<&str>) -> String {
-    [Some(name), bio]
-        .into_iter()
-        .flatten()
-        .filter(|part| !part.trim().is_empty())
-        .collect::<Vec<_>>()
-        .join(" – ")
+    [Some(name), bio].into_iter().flatten().filter(|part| !part.trim().is_empty()).collect::<Vec<_>>().join(" – ")
 }
 
 /// What `avatar_tag` needs to know about a user.
@@ -74,11 +69,7 @@ pub struct AvatarUser {
 pub fn avatar_tag(ctx: &ViewContext, user: impl std::borrow::Borrow<AvatarUser>, options: Attrs) -> Html {
     let user = user.borrow();
     let image = image_tag(ctx, &user.avatar_path, attrs().aria_hidden().size(48).merge(options));
-    link_to(
-        &campfire_routes::user(user.id),
-        attrs().title(user.title.as_str()).class("btn avatar").data("turbo_frame", "_top"),
-        &image.0,
-    )
+    link_to(&campfire_routes::user(user.id), attrs().title(user.title.as_str()).class("btn avatar").data("turbo_frame", "_top"), &image.0)
 }
 
 /// `button_to_direct_room_with(user)`.

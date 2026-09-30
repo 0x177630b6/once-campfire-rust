@@ -39,10 +39,7 @@ pub fn with_query(path: &str, params: Vec<(&str, Param)>) -> String {
 
 /// `rooms_directs_path(user_ids: [ id ])`.
 pub fn rooms_directs_with_users(user_ids: &[i64]) -> String {
-    with_query(
-        &campfire_routes::rooms_directs(),
-        vec![("user_ids", Param::Many(user_ids.iter().map(ToString::to_string).collect()))],
-    )
+    with_query(&campfire_routes::rooms_directs(), vec![("user_ids", Param::Many(user_ids.iter().map(ToString::to_string).collect()))])
 }
 
 /// `rooms_directs_path(user_ids: [ user.id ])`.
@@ -57,9 +54,6 @@ mod tests {
     #[test]
     fn builds_rails_query_strings() {
         assert_eq!(rooms_directs_with_users(&[5, 6]), "/rooms/directs?user_ids%5B%5D=5&user_ids%5B%5D=6");
-        assert_eq!(
-            with_query("/x", vec![("z", Param::One("a b".into())), ("a", Param::One("1".into()))]),
-            "/x?a=1&z=a+b"
-        );
+        assert_eq!(with_query("/x", vec![("z", Param::One("a b".into())), ("a", Param::One("1".into()))]), "/x?a=1&z=a+b");
     }
 }

@@ -16,10 +16,7 @@ impl ApplicationPlatform {
         // `match?` works on `user_agent_string.to_s`, and UserAgent.parse treats nil like "".
         let user_agent_string = user_agent.unwrap_or("").to_string();
         let user_agent = user_agent::parse(&user_agent_string);
-        Self {
-            user_agent_string,
-            user_agent,
-        }
+        Self { user_agent_string, user_agent }
     }
 
     fn matches(&self, needle: &str) -> bool {
@@ -117,13 +114,7 @@ impl ApplicationPlatform {
 
         Ok(match named {
             Some((_, name)) => Some(name.to_string()),
-            None => self.user_agent.try_os()?.map(|os| {
-                if os.contains("Linux") {
-                    "Linux".into()
-                } else {
-                    os
-                }
-            }),
+            None => self.user_agent.try_os()?.map(|os| if os.contains("Linux") { "Linux".into() } else { os }),
         })
     }
 
@@ -204,12 +195,7 @@ mod tests {
             let expected = &case["application_platform"];
             let label = &case["ua"];
             let mut field = |name: &str, actual: Rb<serde_json::Value>| {
-                check(
-                    &mut failures,
-                    &format!("{label} {name}"),
-                    &expected[name],
-                    actual,
-                );
+                check(&mut failures, &format!("{label} {name}"), &expected[name], actual);
             };
 
             field("ios", Ok(json!(platform.ios())));
@@ -223,29 +209,13 @@ mod tests {
             field("mobile", Ok(json!(platform.mobile())));
             field("desktop", Ok(json!(platform.desktop())));
             field("windows", platform.try_windows().map(|v| json!(v)));
-            field(
-                "operating_system",
-                platform.try_operating_system().map(|v| json!(v)),
-            );
-            field(
-                "browser",
-                platform.user_agent.try_browser().map(|v| json!(v)),
-            );
+            field("operating_system", platform.try_operating_system().map(|v| json!(v)));
+            field("browser", platform.user_agent.try_browser().map(|v| json!(v)));
 
-            check(
-                &mut failures,
-                &format!("{label} blocked"),
-                &case["blocked"],
-                try_browser_blocked(ua).map(|v| json!(v)),
-            );
+            check(&mut failures, &format!("{label} blocked"), &case["blocked"], try_browser_blocked(ua).map(|v| json!(v)));
         }
 
-        assert!(
-            failures.is_empty(),
-            "{} mismatches:\n{}",
-            failures.len(),
-            failures.join("\n")
-        );
+        assert!(failures.is_empty(), "{} mismatches:\n{}", failures.len(), failures.join("\n"));
     }
 
     #[test]

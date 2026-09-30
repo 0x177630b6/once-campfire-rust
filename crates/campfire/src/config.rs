@@ -67,11 +67,7 @@ pub struct StoragePaths {
 impl StoragePaths {
     pub fn new(root: impl Into<PathBuf>, environment: &str) -> Self {
         let root = root.into();
-        Self {
-            database: root.join("db").join(format!("{environment}.sqlite3")),
-            files: root.join("files"),
-            backups: root.join("backups"),
-        }
+        Self { database: root.join("db").join(format!("{environment}.sqlite3")), files: root.join("files"), backups: root.join("backups") }
     }
 
     /// `config/initializers/storage_paths.rb`: `storage/{db,files}` exist after boot.
@@ -221,12 +217,9 @@ mod tests {
 
     #[test]
     fn storage_overrides() {
-        let config = config(&[
-            ("SECRET_KEY_BASE", "abc"),
-            ("CAMPFIRE_STORAGE_PATH", "/rails/storage"),
-            ("CAMPFIRE_FILES_PATH", "/seed/storage"),
-        ])
-        .unwrap();
+        let config =
+            config(&[("SECRET_KEY_BASE", "abc"), ("CAMPFIRE_STORAGE_PATH", "/rails/storage"), ("CAMPFIRE_FILES_PATH", "/seed/storage")])
+                .unwrap();
         assert_eq!(config.storage.database, PathBuf::from("/rails/storage/db/production.sqlite3"));
         assert_eq!(config.storage.files, PathBuf::from("/seed/storage"));
     }

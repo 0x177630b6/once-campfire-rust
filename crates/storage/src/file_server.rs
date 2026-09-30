@@ -20,7 +20,11 @@ pub struct Served {
 pub enum BodyPart {
     Bytes(Vec<u8>),
     /// Inclusive byte range of `path`.
-    File { path: PathBuf, start: u64, end: u64 },
+    File {
+        path: PathBuf,
+        start: u64,
+        end: u64,
+    },
 }
 
 pub struct Request<'a> {

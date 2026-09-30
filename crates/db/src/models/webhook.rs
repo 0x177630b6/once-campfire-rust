@@ -34,12 +34,7 @@ impl Webhook {
     }
 
     pub fn find_by_user(conn: &Connection, user_id: i64) -> Result<Option<Self>> {
-        query_one(
-            conn,
-            r#"SELECT "webhooks".* FROM "webhooks" WHERE "webhooks"."user_id" = ? LIMIT 1"#,
-            [user_id],
-            Self::from_row,
-        )
+        query_one(conn, r#"SELECT "webhooks".* FROM "webhooks" WHERE "webhooks"."user_id" = ? LIMIT 1"#, [user_id], Self::from_row)
     }
 
     /// `create_webhook!(url:)`
@@ -50,13 +45,7 @@ impl Webhook {
             params![now, now, url, user_id],
             |r| r.get(0),
         )?;
-        Ok(Self {
-            id,
-            user_id,
-            url: url.map(Into::into),
-            created_at: now,
-            updated_at: now,
-        })
+        Ok(Self { id, user_id, url: url.map(Into::into), created_at: now, updated_at: now })
     }
 
     /// `webhook.update!(url:)`
@@ -65,20 +54,15 @@ impl Webhook {
             return Ok(());
         }
         let now = tx.now();
-        tx.conn().execute_cached(
-            r#"UPDATE "webhooks" SET "updated_at" = ?, "url" = ? WHERE "webhooks"."id" = ?"#,
-            params![now, url, self.id],
-        )?;
+        tx.conn()
+            .execute_cached(r#"UPDATE "webhooks" SET "updated_at" = ?, "url" = ? WHERE "webhooks"."id" = ?"#, params![now, url, self.id])?;
         self.url = Some(url.into());
         self.updated_at = now;
         Ok(())
     }
 
     pub fn destroy(&self, tx: &Tx<'_>) -> Result<()> {
-        tx.conn().execute_cached(
-            r#"DELETE FROM "webhooks" WHERE "webhooks"."id" = ?"#,
-            [self.id],
-        )?;
+        tx.conn().execute_cached(r#"DELETE FROM "webhooks" WHERE "webhooks"."id" = ?"#, [self.id])?;
         Ok(())
     }
 
@@ -96,8 +80,7 @@ impl Webhook {
         let room = Room::find(conn, message.room_id)?;
         let recipient = User::find(conn, self.user_id)?;
         let html = message.body_html(conn)?;
-        let plain =
-            without_recipient_mentions(&message.plain_text_body(conn, rich_text)?, &recipient);
+        let plain = without_recipient_mentions(&message.plain_text_body(conn, rich_text)?, &recipient);
 
         // Hash order as written in `Webhook#payload`, encoded like `ActiveSupport::JSON`.
         let body = format!(
@@ -105,15 +88,10 @@ impl Webhook {
             creator.id,
             json_string(&creator.name),
             room.id,
-            room.name
-                .as_deref()
-                .map(json_string)
-                .unwrap_or_else(|| "null".into()),
+            room.name.as_deref().map(json_string).unwrap_or_else(|| "null".into()),
             json_string(room_bot_messages_path),
             message.id,
-            html.as_deref()
-                .map(json_string)
-                .unwrap_or_else(|| "null".into()),
+            html.as_deref().map(json_string).unwrap_or_else(|| "null".into()),
             json_string(&plain),
             json_string(message_path),
         );
@@ -123,9 +101,7 @@ impl Webhook {
 
 /// Removes `@Recipient` mentions and leading/trailing (Unicode) whitespace.
 fn without_recipient_mentions(body: &str, recipient: &User) -> String {
-    body.replace(&recipient.attachable_plain_text_representation(), "")
-        .trim_matches(char::is_whitespace)
-        .to_string()
+    body.replace(&recipient.attachable_plain_text_representation(), "").trim_matches(char::is_whitespace).to_string()
 }
 
 /// `ActiveSupport::JSON.encode` of a string: JSON with `<`, `>` and `&` escaped as `\uXXXX`.
