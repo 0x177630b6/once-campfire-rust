@@ -2,12 +2,15 @@
 //! "not now" it, change its severity or departments, tick its steps, comment, and create a card
 //! (from a message). Every write:
 //!
-//! 1. is authorized by the settings' [`Policy`](crate::settings::Policy) ([`Workspace::authorize`]);
-//! 2. validates its input ([`Change::parse`], [`NewCard::parse`]) and answers 404 for a card that
-//!    isn't on the incident board (a fresh read, before anything is written);
-//! 3. goes through a [`Writer`] as the actor's [`ActingIdentity`](crate::writes::ActingIdentity),
+//! 1. has its input validated ([`Change::parse`], [`NewCard::parse`]: 422) and its source message
+//!    or room found (404) by the adapter;
+//! 2. is authorized by the settings' [`Policy`](crate::settings::Policy) ([`Workspace::authorize`]:
+//!    403), before Fizzy is asked anything;
+//! 3. answers 404 for a card that isn't on the incident board (a fresh read, before anything is
+//!    written);
+//! 4. goes through a [`Writer`] as the actor's [`ActingIdentity`](crate::writes::ActingIdentity),
 //!    which logs it, one write sequence per card at a time (`Workspace::lock_card`);
-//! 4. reads the card again, checks the change took, and puts it in the cache at once
+//! 5. reads the card again, checks the change took, and puts it in the cache at once
 //!    ([`Workspace::remember`]) instead of waiting for the next poll.
 
 use serde_json::Value;

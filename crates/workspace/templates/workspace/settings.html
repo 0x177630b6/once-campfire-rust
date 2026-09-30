@@ -61,6 +61,7 @@
       {%- for policy in policies %}
       <label class="ws-radio"><input type="radio" name="confirm_policy" value="{{ policy.value }}"{% if policy.selected %} checked{% endif %}> {{ policy.label }}</label>
       {%- endfor %}
+      <p class="ws-muted" data-ws-policy-scope>This applies to the workspace’s buttons only (File and Dismiss, the card sheet, the board, the room panel, new cards). Anyone in a room can still type “@Hermes confirm” or ask Hermes to change a card, and Hermes doesn’t check this setting yet; people with a Fizzy account on the board can change cards there.</p>
     </section>
 
     <div class="ws-form__actions">

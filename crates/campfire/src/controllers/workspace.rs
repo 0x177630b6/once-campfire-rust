@@ -294,8 +294,8 @@ pub async fn reply(c: &mut Ctx) -> Result {
     c.json(StatusCode::CREATED, &json!({ "message_id": message.id, "reply": decision.reply() }))
 }
 
-/// Who reported what a draft is about: the last person (not a bot) who wrote in the room before
-/// it. The policy's "author" of a draft.
+/// Who reported what a draft is about, for the policy's "author" of a draft. A heuristic: the last
+/// person (not a bot) who wrote in the room before it, who may be a bystander in a busy room.
 fn reporter_of(conn: &campfire_db::Connection, draft: &Message) -> campfire_db::Result<Option<i64>> {
     let mut statement = conn.prepare_cached(concat!(
         r#"SELECT "messages"."creator_id" FROM "messages" INNER JOIN "users" ON "users"."id" = "messages"."creator_id""#,

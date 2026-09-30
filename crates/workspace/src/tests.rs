@@ -971,6 +971,7 @@ async fn the_settings_page_and_the_bot_view() {
     let html = askama::Template::render(&page).unwrap();
     assert!(html.contains(r#"value="engineering""#) && html.contains("security &#60;desk&#62;"));
     assert!(html.contains(r#"value="admins" checked"#) && html.contains(r#"value="anyone" checked"#));
+    assert!(html.contains("data-ws-policy-scope") && html.contains("Hermes doesn’t check this setting yet"));
 
     let broken = crate::pages::settings_page(
         workspace.config(),

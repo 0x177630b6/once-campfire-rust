@@ -184,14 +184,23 @@ are never changed.
 
 In `campfire_workspace::actions` (what) and `::writes` (how):
 
-1. **Policy first** (`Workspace::authorize`, the only place): refused → `403 forbidden`, before
-   anything is read or written.
-2. **Input validated** (`Change::parse`, `NewCard::parse`): `422` with a code (`invalid_target`,
-   `invalid_severity`, `unknown_department`, `unknown_column`, `unknown_step`, `blank_title`,
+The checks run in this order, each answering before the next one runs and before anything is
+written to Fizzy:
+
+1. **Request shape and input** (in the adapter, before the policy): an unknown change or a
+   non-numeric card number is `404`; bad input is `422` with a code (`Change::parse`,
+   `NewCard::parse`: `invalid_target`, `invalid_severity`, `unknown_department`, `blank_title`,
    `title_too_long` (255), `description_too_long` (10 000), `blank_comment`, `comment_too_long`
-   (5 000)…). Department tags must be configured departments'.
-3. **Incident board only**: the card is read fresh first; a card on another board (or none) is
-   `404`, and nothing is written.
+   (5 000)…; department tags must be configured departments'); a card's source message or room
+   that isn't the user's is `404`; for drafts, `422 invalid_decision`, `404` outside the user's
+   rooms, `422 not_a_draft`. So someone the policy refuses can still learn that their input was
+   malformed or that a message isn't theirs, never anything about a card.
+2. **Policy** (`Workspace::authorize`, the only place): refused → `403 forbidden`, before Fizzy
+   is asked anything.
+3. **Incident board only**: the card is read fresh (`502` if the board isn't known yet or Fizzy
+   doesn't answer); a card on another board (or none) is `404`, and nothing is written. Checks
+   that need the fresh card come after it: `422 unknown_column` (the board's columns are read
+   again) and `422 unknown_step`.
 4. **Toggles handled**: Fizzy's taggings are toggles (posting a tag the card has removes it;
    titles are lowercased). Severity and departments are computed against the fresh card: only the
    differences are posted (old severity off, new one on; a card with two `sev-*` tags ends with
@@ -235,9 +244,21 @@ as the author. Per-person Fizzy tokens later = another `TokenSource`
 | Change a card (move, close, not now, severity, departments, steps) | everyone | duty managers | duty managers |
 
 Duty managers: those listed in the settings, else Campfire's administrators. A draft's reporter
-is the last person (not a bot) who wrote in the room before the draft. The page disables what the
-viewer can't do; the draft buttons can't (they're in the shared message cache), so a refused File
-says why.
+(`reporter_of` in the adapter) is a heuristic: the last person (not a bot) who wrote in the room
+before the draft. In a busy room that can be a bystander who spoke in between, who then counts as
+the reporter under `author_or_duty_manager`, while the real reporter doesn't; a draft with no
+earlier human message has no reporter (duty managers only). A structured marker in Hermes's
+draft naming the reporter would fix this (later). The page disables what the viewer can't do;
+the draft buttons can't (they're in the shared message cache), so a refused File says why.
+
+**What the policy does not cover.** It gates only the workspace's own buttons and routes (File /
+Dismiss, the sheet's controls, the panel's and board's actions, card creation). It is not a
+permission on Hermes or on Fizzy: any member of a room can still type "@Hermes confirm" (or
+"cancel", "change: …") under a draft, or ask Hermes to create, move or comment on a card, and
+Hermes acts with its own Fizzy account; the incident-report skill doesn't read the policy
+(`GET /hermes/:bot_key/workspace/settings.json` exposes it, unused so far). Anyone with a Fizzy
+account on the incident board can change cards there too. The settings page says so next to the
+policy choice. Enforcing it for Hermes means teaching the skill to check it (a later phase).
 
 ### Settings
 
