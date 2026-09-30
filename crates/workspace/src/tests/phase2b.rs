@@ -439,3 +439,88 @@ async fn the_handover_is_built_from_the_board_for_the_room_s_members() {
     assert!(!page.can_post && page.text.contains("Lift B"), "no room: the duty manager's own view");
     assert_eq!(workspace.handover_message(&manager(), "x").unwrap_err().code(), "no_room");
 }
+
+// --- Review fixes ------------------------------------------------------------------------------------
+
+/// The cards of the Raised alerts in `sent` to the administrator (the duty manager).
+fn raised_cards(sent: &[crate::alerts::Delivery]) -> Vec<String> {
+    let html = html_for(sent, To::Person(1));
+    html.split("<p>")
+        .filter(|line| line.starts_with("<strong>Critical</strong>") || line.starts_with("<strong>High</strong>"))
+        .filter_map(|line| line.split(" · #").nth(1)?.split(' ').next().map(str::to_string))
+        .collect()
+}
+
+#[tokio::test]
+async fn cards_changed_through_campfire_alert_at_the_next_poll() {
+    // Everything Campfire writes or reads is remembered in the live picture at once: the alerts
+    // compare with what the last poll saw, not with that.
+    let mut settings = restricted();
+    settings.autonomy.create = Dial::Alone;
+    let (fizzy, workspace, clock) = alerting(settings).await;
+    assert!(poll_at(&fizzy, &workspace, &clock, 0).await.is_empty());
+    let mut listed: Vec<Value> = Vec::new();
+
+    // 1. Created from the workspace, critical.
+    let new =
+        NewCard::parse(&json!({"title": "Smoke in kitchen", "severity": "critical", "department": "engineering"}), &workspace.settings())
+            .unwrap();
+    let created = workspace.create_card(&fizzy, &manager(), new).await.unwrap().card.number;
+    listed.push(card_at(created, "Smoke in kitchen", &["engineering", "sev-critical"], "2026-09-30T09:01:00Z"));
+    with_cards(&fizzy, &listed);
+    let sent = poll_at(&fizzy, &workspace, &clock, 2).await;
+    assert_eq!(raised_cards(&sent), [created.to_string()], "{sent:?}");
+    assert!(poll_at(&fizzy, &workspace, &clock, 3).await.is_empty(), "once");
+
+    // 2. Severity raised from the sheet: 15, low → high.
+    workspace.change_card(&fizzy, &manager(), 15, Change::Severity(Some(Severity::High))).await.unwrap();
+    let mut page = vec![
+        card(12, "Lift B out of service", &["security", "sev-high"], Some("In progress")),
+        card(14, "Door forced, service entrance", &["engineering", "security", "sev-medium"], None),
+        card(15, "Puddle by the bar", &["sev-high"], None),
+    ];
+    page.extend(listed.iter().cloned());
+    fizzy.reply(LIST_PAGE2, json!(page));
+    let sent = poll_at(&fizzy, &workspace, &clock, 4).await;
+    assert_eq!(raised_cards(&sent), ["15"]);
+    assert!(html_for(&sent, To::Person(1)).contains("<strong>High</strong> (was low): Puddle by the bar"));
+    assert!(poll_at(&fizzy, &workspace, &clock, 5).await.is_empty(), "once");
+
+    // 3. A proposal Campfire runs alone.
+    let alone = json!({"action": "create", "title": "Flood, basement", "severity": "critical", "department": "engineering"});
+    let proposal = match workspace.propose(&fizzy, &hermes_bot(), &alone, for_maya(), None).await.unwrap() {
+        Proposed::Done { proposal } => proposal,
+        other => panic!("{other:?}"),
+    };
+    let flood = proposal.result_card.unwrap();
+    page.push(card_at(flood, "Flood, basement", &["engineering", "sev-critical"], "2026-09-30T09:05:30Z"));
+    fizzy.reply(LIST_PAGE2, json!(page));
+    let sent = poll_at(&fizzy, &workspace, &clock, 6).await;
+    assert_eq!(raised_cards(&sent), [flood.to_string()]);
+    assert!(poll_at(&fizzy, &workspace, &clock, 7).await.is_empty(), "once");
+
+    // 4. A proposal someone confirms.
+    let mut asking = workspace.settings().as_ref().clone();
+    asking.autonomy.create = Dial::AskFirst;
+    workspace.settings_store().save(asking).unwrap();
+    let ask = json!({"action": "create", "title": "Gas smell, laundry", "severity": "high", "department": "engineering"});
+    let id = pending_id(workspace.propose(&fizzy, &hermes_bot(), &ask, for_maya(), None).await.unwrap());
+    let confirmed = workspace.decide(&fizzy, &manager(), &id, crate::drafts::Decision::Confirm).await.unwrap();
+    let gas = confirmed.result_card.unwrap();
+    page.push(card_at(gas, "Gas smell, laundry", &["engineering", "sev-high"], "2026-09-30T09:07:30Z"));
+    fizzy.reply(LIST_PAGE2, json!(page));
+    let sent = poll_at(&fizzy, &workspace, &clock, 8).await;
+    assert_eq!(raised_cards(&sent), [gas.to_string()]);
+    assert!(poll_at(&fizzy, &workspace, &clock, 9).await.is_empty(), "once");
+
+    // 5. Raised in Fizzy, and the sheet opened before the next poll: 14, medium → critical.
+    let mut raised = fizzy.live_card(14);
+    raised["tags"] = json!(["engineering", "security", "sev-critical"]);
+    fizzy.live(raised.clone());
+    workspace.card_sheet(&fizzy, &manager(), 14).await.unwrap();
+    page[1] = raised;
+    fizzy.reply(LIST_PAGE2, json!(page));
+    let sent = poll_at(&fizzy, &workspace, &clock, 10).await;
+    assert_eq!(raised_cards(&sent), ["14"]);
+    assert!(poll_at(&fizzy, &workspace, &clock, 11).await.is_empty(), "once");
+}

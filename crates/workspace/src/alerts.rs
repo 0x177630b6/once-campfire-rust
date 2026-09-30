@@ -1,6 +1,7 @@
 //! Phase 2.5: alerts for serious incidents, and reminders (decision D9).
 //!
-//! At every poll, [`detect`] compares the new picture with the previous one:
+//! At every poll, [`detect`] compares the new picture with the one the previous poll produced (not
+//! the live picture, which what Campfire writes or reads updates between polls):
 //!
 //! - a card that **becomes** critical or high (`notifications.severities`): filed since the first
 //!   poll, or its severity raised to one of them. Each duty manager gets a direct message from

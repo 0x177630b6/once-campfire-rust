@@ -103,6 +103,10 @@ pub struct Workspace {
     notified: alerts::NotifiedStore,
     /// When the first poll since the start ran: it records alerts without sending them.
     alerts_primed: Mutex<Option<Timestamp>>,
+    /// The picture the last successful poll produced, as the alerts saw it. Not the live picture:
+    /// [`Workspace::remember`] puts what Campfire writes or reads into that one at once, and a card
+    /// created or raised through Campfire must still count as new or raised at the next poll.
+    alerts_seen: Mutex<Option<Arc<Snapshot>>>,
     /// Alerts detected and claimed, waiting for the app to deliver them.
     outbox: Mutex<Vec<alerts::Event>>,
     clock: Box<dyn Fn() -> Timestamp + Send + Sync>,
@@ -156,6 +160,7 @@ impl Workspace {
             directory: RwLock::new(Arc::new(Directory::default())),
             notified,
             alerts_primed: Mutex::new(None),
+            alerts_seen: Mutex::new(None),
             outbox: Mutex::new(Vec::new()),
             clock: Box::new(Timestamp::now),
         }
@@ -317,17 +322,20 @@ impl Workspace {
         let next = Arc::new(next);
         *self.snapshot.write().unwrap_or_else(|e| e.into_inner()) = next.clone();
         if result.is_ok() {
-            self.detect_alerts(&previous, &next, now);
+            self.detect_alerts(&next, now);
         }
         result.map(|_| ())
     }
 
     /// Phase 2.5: what should alert after this poll, claimed in `notified.json` (so never twice)
     /// and queued for the app ([`Workspace::take_alerts`]). The first poll since the start only
-    /// records.
-    fn detect_alerts(&self, previous: &Snapshot, next: &Snapshot, now: Timestamp) {
+    /// records. Compared with the previous poll's picture (never the live one, which
+    /// [`Workspace::remember`] updates between polls).
+    fn detect_alerts(&self, next: &Arc<Snapshot>, now: Timestamp) {
         let mut primed = self.alerts_primed.lock().unwrap_or_else(|e| e.into_inner());
-        let events = alerts::detect(previous, next, &self.settings(), &self.proposals.all(), now, *primed);
+        let mut seen = self.alerts_seen.lock().unwrap_or_else(|e| e.into_inner());
+        let previous = seen.replace(next.clone()).unwrap_or_default();
+        let events = alerts::detect(&previous, next, &self.settings(), &self.proposals.all(), now, *primed);
         let fresh = self.notified.claim(events, now);
         match *primed {
             None => *primed = Some(now),
