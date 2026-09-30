@@ -33,6 +33,16 @@
 // that was redirected means the session expired (fetch follows the redirect to the sign-in page).
 
 const logic = globalThis.HermesWorkspace
+// workspace_logic.js didn't load (a failed request, a stale cached page): the page stays as the
+// server rendered it (links work, the workspace's buttons say to reload) instead of throwing on
+// every event.
+const ready = Boolean(logic)
+if (!ready) console.warn("Hermes workspace: hermes/workspace_logic.js didn't load; reload the page to use the workspace's buttons.")
+
+// A document listener that runs only once the logic is there.
+function onEvent(type, handler) {
+  document.addEventListener(type, event => ready ? handler(event) : undefined)
+}
 const CARDS_URL = "/workspace/cards.json"
 const PROPOSALS_URL = "/workspace/hermes/proposals.json"
 const REFRESH_MS = 60_000
@@ -45,11 +55,19 @@ function scheduleScan(delay = 250) {
 }
 
 function scan() {
+  if (!ready) return markUnavailable()
   markAnsweredDrafts()
   refreshProposals()
   refreshChips()
   addCardActions()
   setUpPanel()
+}
+
+function markUnavailable() {
+  for (const draft of document.querySelectorAll(".ws-draft:not([data-ws-draft-state])")) {
+    draft.dataset.wsDraftState = "sent"
+    setStatus(draft, "Reload the page to use these buttons.")
+  }
 }
 
 // --- Card chips ------------------------------------------------------------------------------------
@@ -158,7 +176,7 @@ function afterHermesChange() {
   if (document.querySelector("[data-ws-hermes]")) setTimeout(reloadPage, 900)
 }
 
-document.addEventListener("click", async event => {
+onEvent("click", async event => {
   const button = event.target.closest?.("[data-ws-undo]")
   if (!button || button.disabled) return
   event.preventDefault()
@@ -205,7 +223,7 @@ function editDraft(draft) {
   }
 }
 
-document.addEventListener("click", event => {
+onEvent("click", event => {
   const button = event.target.closest?.("[data-ws-draft-action]")
   if (!button) return
   const draft = button?.closest(".ws-draft")
@@ -334,7 +352,7 @@ function plainClick(event) {
   return event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey
 }
 
-document.addEventListener("click", event => {
+onEvent("click", event => {
   if (!plainClick(event)) return
   const opener = event.target.closest?.("a.ws-chip[data-ws-card], [data-ws-open-sheet]")
   if (opener) {
@@ -427,7 +445,7 @@ function updateChips(number, html) {
   }
 }
 
-document.addEventListener("change", event => {
+onEvent("change", event => {
   const control = event.target.closest?.(".ws-sheet [data-ws-change]")
   const sheet = control?.closest(".ws-sheet")
   if (!sheet || sheet.getAttribute("aria-busy") === "true") return
@@ -435,7 +453,7 @@ document.addEventListener("change", event => {
   if (body) changeCard(sheet, control.dataset.wsChange, body)
 })
 
-document.addEventListener("submit", event => {
+onEvent("submit", event => {
   const form = event.target
   if (form.matches?.(".ws-sheet [data-ws-comment]")) {
     event.preventDefault()
@@ -453,7 +471,7 @@ document.addEventListener("submit", event => {
 
 // --- Board -----------------------------------------------------------------------------------------
 
-document.addEventListener("click", async event => {
+onEvent("click", async event => {
   const tab = event.target.closest?.("[data-ws-coltab]")
   if (tab) {
     const board = tab.closest("[data-ws-board]")
@@ -540,7 +558,7 @@ async function refreshPanel() {
   }
 }
 
-document.addEventListener("click", event => {
+onEvent("click", event => {
   if (event.target.closest?.("[data-ws-panel-close]")) showPanel(false)
 })
 
@@ -614,7 +632,7 @@ async function createCard(form) {
 
 // --- Settings --------------------------------------------------------------------------------------
 
-document.addEventListener("click", event => {
+onEvent("click", event => {
   if (event.target.closest?.("[data-ws-add-department]")) {
     const form = event.target.closest("form")
     const template = form.querySelector("template[data-ws-department-template]")
@@ -672,6 +690,6 @@ new MutationObserver(mutations => {
 
 document.addEventListener("turbo:load", () => scheduleScan(0))
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") scheduleScan(0) })
-setInterval(() => { if (document.visibilityState === "visible") { refreshChips(); refreshProposals() } }, REFRESH_MS)
+setInterval(() => { if (ready && document.visibilityState === "visible") { refreshChips(); refreshProposals() } }, REFRESH_MS)
 
 scheduleScan(0)
