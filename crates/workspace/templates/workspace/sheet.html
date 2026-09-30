@@ -60,10 +60,11 @@
   {%- endif %}
 
   <section class="ws-sheet__section">
-    <h3 class="ws-sheet__subtitle">Thread <span class="ws-count">{{ comments.len() }}{% if more_comments %}+{% endif %}</span></h3>
+    <h3 class="ws-sheet__subtitle">Thread <span class="ws-count">{% if earlier_comments %}last {% endif %}{{ comments.len() }}</span></h3>
     {%- if comments.is_empty() %}
     <p class="ws-empty">No comments yet.</p>
     {%- else %}
+    {%- if earlier_comments %}<p class="ws-muted" data-ws-earlier-comments>Earlier comments are <a class="ws-link" href="{{ fizzy_url }}" target="_blank" rel="noopener">in Fizzy</a>.</p>{% endif %}
     <ol class="ws-thread">
       {%- for comment in comments %}
       <li class="ws-comment">
@@ -72,7 +73,6 @@
       </li>
       {%- endfor %}
     </ol>
-    {%- if more_comments %}<p class="ws-muted">Older comments are <a class="ws-link" href="{{ fizzy_url }}" target="_blank" rel="noopener">in Fizzy</a>.</p>{% endif %}
     {%- endif %}
     {%- if can_comment %}
     <form class="ws-comment-form" data-ws-comment>

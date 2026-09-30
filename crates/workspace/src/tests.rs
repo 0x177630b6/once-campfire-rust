@@ -26,6 +26,8 @@ struct FakeFizzy {
     down: Mutex<bool>,
     cards: Mutex<HashMap<u64, Value>>,
     comments: Mutex<HashMap<u64, Vec<Value>>>,
+    /// Comment lists without `X-Total-Count`.
+    no_total_count: Mutex<bool>,
     /// Writes whose path or body contains this answer that status (and change nothing).
     fail_writes: Mutex<Option<(String, u16)>>,
 }
@@ -149,7 +151,7 @@ impl HttpClient for FakeFizzy {
                 return Err("connection refused".into());
             }
             let path = url.strip_prefix("http://fizzy").unwrap_or(url);
-            let json = |status: u16, body: Value| Ok(HttpResponse { status, body: body.to_string().into_bytes(), link: None });
+            let json = |status: u16, body: Value| Ok(HttpResponse { status, body: body.to_string().into_bytes(), link: None, total: None });
             if method != "GET" {
                 let target = format!("{path} {}", body.as_ref().map(Value::to_string).unwrap_or_default());
                 if let Some((fragment, status)) = self.fail_writes.lock().unwrap().clone()
@@ -168,15 +170,27 @@ impl HttpClient for FakeFizzy {
             {
                 return json(200, card.clone());
             }
+            let (list, page) = match path.split_once("?page=") {
+                Some((list, page)) => (list, page.parse::<u32>().unwrap()),
+                None => (path, 1),
+            };
             if let Some(number) =
-                path.strip_prefix("/897/cards/").and_then(|rest| rest.strip_suffix("/comments.json")).and_then(|n| n.parse::<u64>().ok())
+                list.strip_prefix("/897/cards/").and_then(|rest| rest.strip_suffix("/comments.json")).and_then(|n| n.parse::<u64>().ok())
                 && self.cards.lock().unwrap().contains_key(&number)
             {
-                return json(200, Value::Array(self.comments.lock().unwrap().get(&number).cloned().unwrap_or_default()));
+                // Oldest first, in geared pages, as Fizzy lists them.
+                let all = self.comments.lock().unwrap().get(&number).cloned().unwrap_or_default();
+                let (from, to) = (crate::fizzy::page_offset(page) as usize, crate::fizzy::page_offset(page + 1) as usize);
+                let items = all.get(from.min(all.len())..to.min(all.len())).unwrap_or_default().to_vec();
+                let link = (to < all.len()).then(|| format!("<http://localhost:8484{list}?page={}>; rel=\"next\"", page + 1));
+                let total = (!*self.no_total_count.lock().unwrap()).then_some(all.len() as u64);
+                return Ok(HttpResponse { status: 200, body: Value::Array(items).to_string().into_bytes(), link, total });
             }
             match self.replies.lock().unwrap().get(path) {
-                Some((status, body, link)) => Ok(HttpResponse { status: *status, body: body.to_string().into_bytes(), link: link.clone() }),
-                None => Ok(HttpResponse { status: 404, body: br#"{"status":404,"error":"Not Found"}"#.to_vec(), link: None }),
+                Some((status, body, link)) => {
+                    Ok(HttpResponse { status: *status, body: body.to_string().into_bytes(), link: link.clone(), total: None })
+                }
+                None => Ok(HttpResponse { status: 404, body: br#"{"status":404,"error":"Not Found"}"#.to_vec(), link: None, total: None }),
             }
         })
     }
@@ -456,7 +470,7 @@ async fn the_home_page() {
 
 use crate::actions::{Change, NewCard, Target};
 use crate::fizzy::Severity;
-use crate::pages::BoardFilter;
+use crate::pages::{BoardFilter, CardSheet};
 use crate::settings::{Department, Policy, Settings, SettingsStore};
 
 type Records = std::sync::Arc<Mutex<Vec<WriteRecord>>>;
@@ -835,6 +849,40 @@ async fn the_card_sheet() {
     workspace.settings_store().save(settings).unwrap();
     let read_only = askama::Template::render(&workspace.card_sheet(&fizzy, &karim(), 12).await.unwrap()).unwrap();
     assert!(read_only.contains(r#"data-ws-change="severity" disabled"#) && !read_only.contains("data-ws-comment"));
+}
+
+#[tokio::test]
+async fn the_sheet_shows_the_newest_comments() {
+    let (fizzy, workspace, _) = working(departments()).await;
+    let comment = |n: usize| {
+        json!({"id": format!("c{n}"), "created_at": "2026-09-30T08:00:00Z", "creator": {"id": "u", "name": "Maya"},
+            "body": {"plain_text": format!("Comment number {n}."), "html": ""}})
+    };
+    fizzy.comments.lock().unwrap().insert(12, (1..=250).map(comment).collect());
+    let texts = |sheet: &CardSheet| sheet.comments.iter().map(|c| c.text.clone()).collect::<Vec<_>>();
+
+    let sheet = workspace.card_sheet(&fizzy, &karim(), 12).await.unwrap();
+    let expected: Vec<String> = (151..=250).map(|n| format!("Comment number {n}.")).collect();
+    assert_eq!(texts(&sheet), expected, "the newest 100, oldest first");
+    assert!(sheet.earlier_comments);
+    let pages: Vec<String> = fizzy.paths().into_iter().filter(|path| path.contains("/comments.json")).collect();
+    assert_eq!(pages, ["/897/cards/12/comments.json", "/897/cards/12/comments.json?page=4", "/897/cards/12/comments.json?page=5"]);
+    let html = askama::Template::render(&sheet).unwrap();
+    assert!(html.contains("Earlier comments are <a class=\"ws-link\" href=\"https://fizzy.example/897/cards/12\""), "{html}");
+    assert!(html.find("data-ws-earlier-comments").unwrap() < html.find("Comment number 151.").unwrap(), "above the thread");
+    assert!(html.contains("Comment number 250.") && !html.contains("Comment number 150."));
+
+    // Without X-Total-Count, the pages are walked.
+    *fizzy.no_total_count.lock().unwrap() = true;
+    let walked = workspace.card_sheet(&fizzy, &karim(), 12).await.unwrap();
+    assert_eq!(texts(&walked), expected);
+    assert!(walked.earlier_comments);
+
+    // A short thread is all there, with no note.
+    fizzy.comments.lock().unwrap().insert(12, (1..=40).map(comment).collect());
+    let short = workspace.card_sheet(&fizzy, &karim(), 12).await.unwrap();
+    assert_eq!((short.comments.len(), short.earlier_comments), (40, false));
+    assert!(!askama::Template::render(&short).unwrap().contains("Earlier comments"));
 }
 
 #[tokio::test]

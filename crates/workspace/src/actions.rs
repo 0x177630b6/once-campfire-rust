@@ -22,8 +22,8 @@ use crate::writes::{ActionError, Writer};
 pub const MAX_TITLE_CHARS: usize = 255;
 pub const MAX_TEXT_CHARS: usize = 10_000;
 pub const MAX_COMMENT_CHARS: usize = 5_000;
-/// Comment pages read for a sheet (Fizzy's pages are 15, 30, 50, then 100 long).
-const COMMENT_PAGES: u32 = 4;
+/// The newest comments a sheet shows (the earlier ones are in Fizzy).
+pub const SHEET_COMMENTS: usize = 100;
 
 /// Where a card goes.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -237,13 +237,13 @@ impl Workspace {
             Some(card) if card.board.as_ref().is_some_and(|on| on.id == board.id) => card,
             _ => return Err(ActionError::NotFound),
         };
-        let (comments, more_comments) = client.comments(&account, number, COMMENT_PAGES).await.map_err(unavailable)?;
+        let (comments, earlier_comments) = client.latest_comments(&account, number, SHEET_COMMENTS).await.map_err(unavailable)?;
         self.remember(card.clone());
         let snapshot = self.snapshot();
         let input = SheetInput {
             card: &card,
             comments: &comments,
-            more_comments,
+            earlier_comments,
             columns: &snapshot.columns,
             can_change: self.may(&Act::ChangeCard, viewer),
             can_comment: self.may(&Act::Comment, viewer),

@@ -366,8 +366,8 @@ pub struct CardSheet {
     pub steps: Vec<StepItem>,
     pub steps_done: usize,
     pub comments: Vec<CommentItem>,
-    /// The thread is longer than what's shown (the rest is in Fizzy).
-    pub more_comments: bool,
+    /// Earlier comments than those shown exist (they're in Fizzy).
+    pub earlier_comments: bool,
     pub moves: Vec<Choice>,
     /// `POST <action_url>/<change>`.
     pub action_url: String,
@@ -377,8 +377,9 @@ pub struct CardSheet {
 
 pub struct SheetInput<'a> {
     pub card: &'a Card,
+    /// The newest comments, oldest first.
     pub comments: &'a [Comment],
-    pub more_comments: bool,
+    pub earlier_comments: bool,
     pub columns: &'a [Column],
     pub can_change: bool,
     pub can_comment: bool,
@@ -435,7 +436,7 @@ pub fn card_sheet(config: &WorkspaceConfig, snapshot: &Snapshot, settings: &Sett
                 created_at: comment.created_at.map(|at| at.to_string()),
             })
             .collect(),
-        more_comments: input.more_comments,
+        earlier_comments: input.earlier_comments,
         moves: move_choices(card, input.columns),
         action_url: sheet_path(card.number),
         can_change: input.can_change,

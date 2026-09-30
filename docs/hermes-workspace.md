@@ -67,7 +67,8 @@ Fizzy JSON API ◀── poll task ──▶ Snapshot (memory) ──▶ Workspa
   user lookup that fails doesn't fail the poll: the lists still refresh, the lookup is retried next
   poll, and the log says it once (`some Fizzy lookups failed`, never with the token). Requests: `Accept: application/json`, `Authorization: Bearer`,
   pagination by `?page=N` while `Link` says `rel="next"` (the header's own URL carries Fizzy's
-  `BASE_URL`, possibly unreachable, so only its presence is used). The HTTP client is the app's
+  `BASE_URL`, possibly unreachable, so only its presence is used; the card sheet's comments also
+  read `X-Total-Count`). The HTTP client is the app's
   `integrations::net` (HTTP/1.1, rustls; 10 s connect, 20 s per read, 30 s per request).
 - **Fizzy down**: a failed poll keeps the previous picture and records the error. Chips keep their
   last state; Home says "Boards unavailable… retrying every 30 s". The log says it once when Fizzy
@@ -145,8 +146,13 @@ are never changed.
   opens; a modified click on a chip still opens Fizzy): read fresh from Fizzy. Title, severity
   (a single-choice select), column (select), owners (read-only), department tags (toggles),
   other tags, the description as text ("Report", collapsed), steps (tickable), the comment thread
-  (Fizzy comments, oldest first, newest last; the first ~195, then "older comments are in
-  Fizzy"… Fizzy pages oldest first), a comment box, "Open in Fizzy". Each control saves at once;
+  (the **newest 100** Fizzy comments, oldest first, newest last, under "Earlier comments are in
+  Fizzy" with a link when there are more), a comment box, "Open in Fizzy". Fizzy lists comments
+  oldest first in geared pages (15, 30, 50, then 100) with only a `rel="next"` link, so the sheet
+  reads page 1, takes the total from its `X-Total-Count` header (set by `geared_pagination` on
+  JSON lists), and jumps to the page holding the 100th newest comment and the ones after it: three
+  requests at most. Without that header it walks the pages (20 at most), keeping the last 100.
+  Each control saves at once;
   the sheet, the card's chips and the room panel are replaced from the reply.
 - **Create a card from this message**: an entry in every message's action menu (added by the
   script to `.message__actions-grid`), and "New card" in the panel and on the board. The form is
@@ -403,14 +409,16 @@ Not seams (fork-owned or new files): `crates/workspace/**`, `controllers/workspa
   half-applied tag change reported and cached as Fizzy has it, no writes before the board is
   known, card creation (tags, the comment linking back, the cache and the room panel updated at
   once), creation with failing tags (created, with a warning), input validation, the sheet
-  (fields, escaping, controls disabled by the policy), the board (columns, filters, Move menus,
+  (fields, escaping, controls disabled by the policy; with 250 comments in geared pages the newest
+  100, in three requests, under "Earlier comments are in Fizzy", also without `X-Total-Count`), the board (columns, filters, Move menus,
   settings link), room panels, the prefilled form, the settings page and the bot JSON; settings
   (validation, normalization, atomic save and reload, a broken, invalid or unreadable file failing
   closed while a missing one is the defaults, the settings page's warning, a failed write being an
   I/O error that changes nothing, concurrent saves ending with file and memory agreeing), the
   policy table.
 - `crates/campfire/src/controllers/workspace.rs` (needs the app to link, i.e. libvips; runs in CI):
-  route recognition (all routes), `FizzyHttp` against a fake server (headers, query, `Link`, 404,
+  route recognition (all routes), `FizzyHttp` against a fake server (headers, query, `Link`,
+  `X-Total-Count`, 404,
   errors without the token, a POST's method and body), settings ids; request tests against the
   parity seed (skip without it): phase 1 routes 404 while off, errors before Fizzy answers (502,
   422, 404, the form, the panel's 204), settings saved by an administrator and read by a bot.

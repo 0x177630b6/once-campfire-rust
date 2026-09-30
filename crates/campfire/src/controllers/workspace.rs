@@ -798,8 +798,9 @@ impl FizzyHttp {
         let timeouts = Timeouts { open: FIZZY_CONNECT_TIMEOUT, read: FIZZY_READ_TIMEOUT };
         let response = http::exchange(&self.net, &endpoint, request, &timeouts).await.map_err(|error| error.to_string())?;
         let (status, link) = (response.status, response.header("link"));
+        let total = response.header("x-total-count").and_then(|count| count.trim().parse().ok());
         match response.read_body(fizzy::MAX_BODY_BYTES).await.map_err(|error| error.to_string())? {
-            Body::Complete(body) => Ok(HttpResponse { status, body, link }),
+            Body::Complete(body) => Ok(HttpResponse { status, body, link, total }),
             Body::TooLarge => Err("reply too large".into()),
         }
     }
@@ -936,6 +937,7 @@ mod tests {
         let reply = Route::new("GET", "*", "/897/cards.json?board_ids%5B%5D=b1", 200)
             .header("Content-Type", "application/json")
             .header("Link", r#"<http://localhost:8484/897/cards.json?page=2>; rel="next""#)
+            .header("X-Total-Count", "42")
             .body("[]");
         let server = FakeServer::start(vec![reply]).await;
         let http = FizzyHttp::new();
@@ -944,6 +946,7 @@ mod tests {
         let response = http.get(&format!("http://{}/897/cards.json?board_ids%5B%5D=b1", server.addr), &headers).await.unwrap();
         assert_eq!((response.status, response.body.as_slice()), (200, b"[]".as_slice()));
         assert!(response.link.unwrap().contains(r#"rel="next""#));
+        assert_eq!(response.total, Some(42));
         let received = &server.received()[0];
         assert_eq!(received.target, "/897/cards.json?board_ids%5B%5D=b1");
         assert_eq!(received.header("Authorization"), Some("Bearer t0k3n"));

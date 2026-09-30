@@ -25,6 +25,8 @@ pub struct HttpResponse {
     pub body: Vec<u8>,
     /// The `Link` header, if any.
     pub link: Option<String>,
+    /// The `X-Total-Count` header (`geared_pagination` sets it on JSON lists), if any.
+    pub total: Option<u64>,
 }
 
 /// One HTTP request. The app implements it over its own client (`integrations::net`); tests fake
@@ -328,6 +330,10 @@ struct IdentityAccount {
 
 /// The most pages read of one list, so that a huge board can't stall a poll.
 pub const MAX_PAGES: u32 = 10;
+/// The most comment pages walked when Fizzy doesn't say how many comments there are.
+pub const MAX_COMMENT_PAGES: u32 = 20;
+/// `geared_pagination`'s default page sizes (Fizzy sets none): 15, 30, 50, then 100 per page.
+const PAGE_SIZES: [u64; 4] = [15, 30, 50, 100];
 /// The largest reply read (the app's client enforces it).
 pub const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
 
@@ -375,9 +381,8 @@ impl<'a> Client<'a> {
             if response.status != 200 {
                 return Err(FizzyError::Status(response.status));
             }
-            let values: Vec<Value> = serde_json::from_slice(&response.body).map_err(|e| FizzyError::Decode(e.to_string()))?;
             // One odd entry (a card without a number…) shouldn't lose the whole list.
-            items.extend(values.into_iter().filter_map(|value| serde_json::from_value(value).ok()));
+            items.extend(decode_list(&response.body)?);
             if !has_next_page(response.link.as_deref()) {
                 break;
             }
@@ -429,25 +434,53 @@ impl<'a> Client<'a> {
         self.get_json(&format!("/{account}/users/{id}.json")).await
     }
 
-    /// A card's comments, oldest first; `true` when there are more than `max_pages` pages.
-    pub async fn comments(&self, account: &str, number: u64, max_pages: u32) -> Result<(Vec<Comment>, bool), FizzyError> {
+    /// A card's newest `keep` comments, oldest first, and whether earlier ones were left out.
+    ///
+    /// Fizzy lists comments oldest first (`comments.chronologically`), in `geared_pagination`
+    /// pages with a `Link: rel="next"` but no "last" link. Its `X-Total-Count` gives the page
+    /// holding the `keep`-th newest comment, so the sheet reads page 1, then that page and the
+    /// ones after it (three requests at most for 100 comments). Without that header the pages are
+    /// walked (at most [`MAX_COMMENT_PAGES`]), keeping the last `keep`.
+    pub async fn latest_comments(&self, account: &str, number: u64, keep: usize) -> Result<(Vec<Comment>, bool), FizzyError> {
         let path = format!("/{account}/cards/{number}/comments.json");
-        let mut items = Vec::new();
-        for page in 1..=max_pages.max(1) {
-            let paged = if page == 1 { path.clone() } else { format!("{path}?page={page}") };
-            let response = self.get(&paged).await?;
-            match response.status {
-                200 => {}
-                404 if page == 1 => return Ok((Vec::new(), false)),
-                status => return Err(FizzyError::Status(status)),
-            }
-            let values: Vec<Value> = serde_json::from_slice(&response.body).map_err(|e| FizzyError::Decode(e.to_string()))?;
-            items.extend(values.into_iter().filter_map(|value| serde_json::from_value(value).ok()));
-            if !has_next_page(response.link.as_deref()) {
-                return Ok((items, false));
+        let first = self.get(&path).await?;
+        match first.status {
+            200 => {}
+            404 => return Ok((Vec::new(), false)),
+            status => return Err(FizzyError::Status(status)),
+        }
+        let mut items: Vec<Comment> = decode_list(&first.body)?;
+        // How many comments come before `items`.
+        let mut skipped = 0u64;
+        let mut link = first.link;
+        let mut page = 1;
+        if let Some(total) = first.total.filter(|total| *total > keep as u64)
+            && has_next_page(link.as_deref())
+        {
+            let from = page_of(total - keep as u64);
+            if from > 1 {
+                items.clear();
+                skipped = page_offset(from);
+                page = from - 1;
             }
         }
-        Ok((items, true))
+        let last = page + MAX_COMMENT_PAGES;
+        while has_next_page(link.as_deref()) && page < last {
+            page += 1;
+            let response = self.get(&format!("{path}?page={page}")).await?;
+            if response.status != 200 {
+                return Err(FizzyError::Status(response.status));
+            }
+            items.extend(decode_list(&response.body)?);
+            link = response.link;
+            let extra = items.len().saturating_sub(keep);
+            items.drain(..extra);
+            skipped += extra as u64;
+        }
+        let extra = items.len().saturating_sub(keep);
+        items.drain(..extra);
+        skipped += extra as u64;
+        Ok((items, skipped > 0))
     }
 
     /// A write (or any request) with `token`, and a JSON body. The reply is returned whatever its
@@ -469,6 +502,31 @@ fn headers(token: &Secret) -> Vec<(&'static str, String)> {
         ("Authorization", format!("Bearer {}", token.expose())),
         ("User-Agent", "campfire-workspace".into()),
     ]
+}
+
+/// A list page's items; one odd entry doesn't lose the page.
+fn decode_list<T: DeserializeOwned>(body: &[u8]) -> Result<Vec<T>, FizzyError> {
+    let values: Vec<Value> = serde_json::from_slice(body).map_err(|e| FizzyError::Decode(e.to_string()))?;
+    Ok(values.into_iter().filter_map(|value| serde_json::from_value(value).ok()).collect())
+}
+
+fn page_size(page: u32) -> u64 {
+    PAGE_SIZES[(page.max(1) as usize - 1).min(PAGE_SIZES.len() - 1)]
+}
+
+/// The index of the first item of `page` (from 1), as `geared_pagination`'s `PortionAtOffset`.
+pub fn page_offset(page: u32) -> u64 {
+    (1..page.max(1)).map(page_size).sum()
+}
+
+/// The page holding the item at `index` (from 0).
+pub fn page_of(index: u64) -> u32 {
+    let (mut page, mut end) = (1, page_size(1));
+    while index >= end {
+        page += 1;
+        end += page_size(page);
+    }
+    page
 }
 
 /// `Link: <…?page=2>; rel="next"`.
@@ -647,6 +705,12 @@ mod tests {
         assert_eq!(Severity::from_tag("incident"), None);
         assert_eq!(Severity::parse("Élevée"), Some(Severity::High));
         assert!(Severity::Critical > Severity::High);
+    }
+
+    #[test]
+    fn geared_pages() {
+        assert_eq!([1, 2, 3, 4, 5, 6].map(page_offset), [0, 15, 45, 95, 195, 295]);
+        assert_eq!([0, 14, 15, 44, 45, 94, 95, 194, 195, 250].map(page_of), [1, 1, 2, 2, 3, 3, 4, 4, 5, 5]);
     }
 
     #[test]
