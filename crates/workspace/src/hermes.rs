@@ -776,12 +776,18 @@ impl Workspace {
 
     /// Whether every member of `room_id` may see `proposal` (phase 2.7): its draft, which shows the
     /// card's title or the report, is posted there only then; otherwise it waits in the Hermes tab.
+    /// While the room's members aren't known (the people and rooms not read yet, or nobody known to
+    /// be in it), nobody is assumed to see it: it waits too.
     pub fn proposal_visible_to_room(&self, proposal: &Proposal, room_id: i64) -> bool {
         if !self.settings().visibility.restricts() {
             return true;
         }
         let directory = self.directory();
-        directory.members_of(room_id).into_iter().filter_map(|id| directory.viewer(id)).all(|member| {
+        let members = directory.members_of(room_id);
+        if !directory.loaded || members.is_empty() {
+            return false;
+        }
+        members.into_iter().filter_map(|id| directory.viewer(id)).all(|member| {
             let rooms: Vec<i64> = directory.rooms_of(member.id).into_iter().collect();
             self.proposal_visible(&member, proposal, &rooms)
         })

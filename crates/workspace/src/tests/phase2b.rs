@@ -543,3 +543,44 @@ async fn a_proposed_card_s_departments_are_those_its_request_resolves_to() {
     // Maya (front-desk only) isn't reminded of it.
     assert!(poll_at(&fizzy, &workspace, &clock, 10).await.is_empty());
 }
+
+#[tokio::test]
+async fn unknown_room_members_see_nothing_restricted() {
+    // Before the app has read the people and rooms (or for a room nobody is known to be in), a
+    // restricted card's details go nowhere: an empty member list isn't "everyone may see it".
+    let mut settings = restricted();
+    settings.handover.room_id = Some(3);
+    settings.handover.time_zone = "UTC".into();
+    let fizzy = tagged_fizzy();
+    let workspace = Workspace::new(config()).with_settings(scratch_store(settings)).with_clock(now);
+    workspace.set_bots(vec![hermes_bot()]);
+    workspace.poll(&fizzy, now()).await.unwrap();
+    assert!(!workspace.directory().loaded);
+    let engineering = json!({"action": "create", "title": "Boiler noise", "department": "engineering"});
+    let id = pending_id(workspace.propose(&fizzy, &hermes_bot(), &engineering, for_maya(), None).await.unwrap());
+    let proposal = workspace.proposals().get(&id).unwrap();
+    assert!(!workspace.proposal_visible_to_room(&proposal, 3), "the draft waits in the Hermes tab");
+
+    let page = workspace.handover_page(&manager()).unwrap();
+    assert!(!page.text.contains("Lift B") && !page.text.contains("Door forced"), "{}", page.text);
+    assert!(page.text.contains("Guest slip in lobby"), "not restricted: listed");
+    assert!(page.text.contains("Waiting for a confirmation (0)"), "{}", page.text);
+    assert_eq!(page.left_out, 3, "12, 14 and the proposal, counted");
+
+    // Loaded, but nobody is known to be in the room.
+    workspace.set_directory(directory());
+    assert!(workspace.proposal_visible_to_room(&proposal, 3));
+    assert!(!workspace.proposal_visible_to_room(&proposal, 99));
+    let mut elsewhere = workspace.settings().as_ref().clone();
+    elsewhere.handover.room_id = Some(99);
+    workspace.settings_store().save(elsewhere).unwrap();
+    let page = workspace.handover_page(&manager()).unwrap();
+    assert!(!page.text.contains("Lift B") && page.left_out == 3, "{}", page.text);
+
+    // Not restricted: a room's members don't matter to the cards.
+    let mut open = workspace.settings().as_ref().clone();
+    open.visibility.mode = Mode::Everyone;
+    workspace.settings_store().save(open).unwrap();
+    assert!(workspace.proposal_visible_to_room(&proposal, 99));
+    assert!(workspace.handover_page(&manager()).unwrap().text.contains("Lift B"));
+}

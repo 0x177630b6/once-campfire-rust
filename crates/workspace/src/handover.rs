@@ -10,7 +10,9 @@
 //! "This shift" is the shift whose end is nearest (07:00, 15:00, 23:00 in the settings' time zone
 //! by default, [`crate::shifts`]), from the end before it; it starts at the last handover posted
 //! instead when that's later. Only what every member of the handover room may see is listed
-//! (phase 2.7): the rest is counted, not named, in a note above the box (not in the message).
+//! (phase 2.7): the rest is counted, not named, in a note above the box (not in the message). While
+//! the room's members aren't known (the people and rooms not read yet, or nobody known to be in
+//! it), only what a person in no room may see is listed, and no proposal.
 //! Until a room is set the page shows the summary but can't post it.
 
 use askama::Template;
@@ -265,14 +267,21 @@ impl crate::Workspace {
             Some(room) => directory.members_of(room).into_iter().filter_map(|id| directory.viewer(id)).collect(),
             None => vec![viewer.clone()],
         };
+        // The room's members unknown (the people and rooms not read yet, or nobody known to be in
+        // it): only what someone in no room at all may see is listed, and no proposal.
+        let known = room.is_none() || (directory.loaded && !members.is_empty());
         let listable = |tags: &[String]| {
+            if !known {
+                return settings.card_visible(tags, &crate::Audience::default());
+            }
             members.iter().all(|member| settings.card_visible(tags, &settings.audience(member, directory.rooms_of(member.id))))
         };
         let proposal_listable = |proposal: &Proposal| {
-            members.iter().all(|member| {
-                let rooms: Vec<i64> = directory.rooms_of(member.id).into_iter().collect();
-                self.proposal_visible(member, proposal, &rooms)
-            })
+            known
+                && members.iter().all(|member| {
+                    let rooms: Vec<i64> = directory.rooms_of(member.id).into_iter().collect();
+                    self.proposal_visible(member, proposal, &rooms)
+                })
         };
         let posted = self.notified().handover_posted();
         let input = Input {
