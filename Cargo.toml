@@ -26,6 +26,8 @@ campfire_storage  = { path = "crates/storage" }
 campfire_cable    = { path = "crates/cable" }
 campfire_assets   = { path = "crates/assets" }
 campfire_views    = { path = "crates/views" }
+# Hermes fork: the Duty Manager Workspace (docs/hermes-workspace.md)
+campfire_workspace = { path = "crates/workspace" }
 
 tokio        = { version = "1", features = ["full"] }
 # Router plus ConnectInfo (`tokio`) only: kit parses params and multipart itself, the front server

@@ -1,0 +1,18 @@
+
+    <link rel="stylesheet" href="{{ stylesheet_url }}">
+    <script type="module" src="{{ script_url }}"></script>
+{%- if show_bar %}
+    <nav class="ws-tabbar" aria-label="Workspace" data-ws-cards-url="{{ cards_url }}">
+      <a class="ws-tab" href="{{ home_url }}"{% if active == Tab::Home %} aria-current="page"{% endif %}>
+        <img class="colorize--black" aria-hidden="true" src="{{ home_icon }}" width="22" height="22" /><span class="ws-tab__label">Home</span>
+      </a>
+{%- if let Some(report_url) = report_url %}
+      <a class="ws-tab ws-tab--report" href="{{ report_url }}" data-turbo-frame="_top" title="Live voice report">
+        <span class="ws-tab__disc"><img aria-hidden="true" src="{{ report_icon }}" width="24" height="24" /></span><span class="ws-tab__label">Report</span>
+      </a>
+{%- endif %}
+      <a class="ws-tab" href="{{ chats_url }}"{% if active == Tab::Chats %} aria-current="page"{% endif %}>
+        <img class="colorize--black" aria-hidden="true" src="{{ chats_icon }}" width="22" height="22" /><span class="ws-tab__label">Chats</span>
+      </a>
+    </nav>
+{%- endif %}

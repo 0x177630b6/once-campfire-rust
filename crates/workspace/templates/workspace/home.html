@@ -1,0 +1,79 @@
+{#- Hermes fork: the Duty Manager Workspace's Home (campfire_workspace::home). Styles:
+    hermes/workspace.css, linked by the tab bar in the layout. Times are <time> elements the
+    layout's local-time controller formats. -#}
+<section class="ws-home" aria-labelledby="ws-home-title">
+  <h1 id="ws-home-title" class="for-screen-reader">Home</h1>
+
+  {%- match fizzy %}
+  {%- when FizzyStatus::Ok %}
+  {%- when FizzyStatus::Waiting with { error } %}
+  <p class="ws-notice" role="status">
+    {%- if let Some(error) = error %}<strong>Boards unavailable.</strong> Your messages still go through. Cards will appear as soon as Fizzy responds (retrying every {{ retry_seconds }}&nbsp;s). <span class="ws-notice__detail">{{ error }}</span>
+    {%- else %}Loading the Incident Log…{% endif %}
+  </p>
+  {%- when FizzyStatus::Stale with { since } %}
+  <p class="ws-notice" role="status"><strong>Boards unavailable.</strong> Your messages still go through. Showing cards as of <time datetime="{{ since }}" data-local-time-target="time"></time>; retrying every {{ retry_seconds }}&nbsp;s.</p>
+  {%- endmatch %}
+
+  <section class="ws-section" aria-labelledby="ws-confirm">
+    <h2 id="ws-confirm" class="ws-section__title">To confirm <span class="ws-count{% if !to_confirm.is_empty() %} ws-count--ai{% endif %}">{{ to_confirm.len() }}</span></h2>
+    {%- if to_confirm.is_empty() %}
+    <p class="ws-empty">Nothing waiting for a confirmation.</p>
+    {%- else %}
+    <ul class="ws-list">
+      {%- for draft in to_confirm %}
+      <li class="ws-item ws-item--draft">
+        <p class="ws-item__meta"><span class="ws-ai">Hermes drafted an incident</span> in <a href="{{ draft.url }}" data-turbo-frame="_top">{{ draft.room_name }}</a> · <time datetime="{{ draft.created_at }}" data-local-time-target="time"></time></p>
+        <p class="ws-item__title">{{ draft.title }}{% if let Some(severity) = draft.severity %} <span class="ws-sev ws-sev--{{ severity }}">{{ severity }}</span>{% endif %}</p>
+        {{ draft.buttons|safe }}
+      </li>
+      {%- endfor %}
+    </ul>
+    {%- endif %}
+  </section>
+
+  <section class="ws-section" aria-labelledby="ws-open">
+    <h2 id="ws-open" class="ws-section__title">Open incidents <span class="ws-count">{{ open_count }}</span>
+      {%- if let Some(board_url) = board_url %} <a class="ws-section__link" href="{{ board_url }}" target="_blank" rel="noopener">{{ board_name }} ↗</a>{% endif %}</h2>
+    {%- if open.is_empty() %}
+    <p class="ws-empty">No open incidents on {{ board_name }}.</p>
+    {%- endif %}
+    {%- for group in open %}
+    <h3 class="ws-column ws-cc--{{ group.tone }}">{{ group.label }} <span class="ws-column__count">{{ group.cards.len() }}</span></h3>
+    <ul class="ws-cards">
+      {%- for card in group.cards %}
+      {% include "workspace/_card.html" %}
+      {%- endfor %}
+    </ul>
+    {%- endfor %}
+  </section>
+
+  <section class="ws-section" aria-labelledby="ws-mentions">
+    <h2 id="ws-mentions" class="ws-section__title">Mentions <span class="ws-count">{{ mentions.len() }}</span></h2>
+    {%- if mentions.is_empty() %}
+    <p class="ws-empty">No one mentioned you on a card lately.</p>
+    {%- else %}
+    <ul class="ws-list">
+      {%- for mention in mentions %}
+      <li class="ws-item">
+        <p class="ws-item__meta"><strong>{{ mention.author_name }}</strong> on <a href="{{ mention.card_url }}" target="_blank" rel="noopener">No. {{ mention.card_number }}{% if !mention.card_title.is_empty() %} · {{ mention.card_title }}{% endif %}</a> · <time datetime="{{ mention.created_at }}" data-local-time-target="time"></time></p>
+        <p class="ws-item__text">{{ mention.excerpt }}</p>
+      </li>
+      {%- endfor %}
+    </ul>
+    {%- endif %}
+  </section>
+
+  <section class="ws-section" aria-labelledby="ws-handover">
+    <h2 id="ws-handover" class="ws-section__title">Handover <span class="ws-section__hint">changed in the last 12&nbsp;h</span> <span class="ws-count">{{ handover.len() }}</span></h2>
+    {%- if handover.is_empty() %}
+    <p class="ws-empty">No incident changed in the last 12 hours.</p>
+    {%- else %}
+    <ul class="ws-cards">
+      {%- for card in handover %}
+      {% include "workspace/_card.html" %}
+      {%- endfor %}
+    </ul>
+    {%- endif %}
+  </section>
+</section>
