@@ -102,29 +102,37 @@ fn the_head_links_the_fork_stylesheets_then_the_theme_after_custom_styles() {
     let upstream_voice = voice_page();
     assert!(!upstream.contains("hermes/") && !upstream_voice.contains("hermes/"));
 
-    // The app at boot: hermes.css, then the theme, after Custom styles; nothing else changes.
+    // The app at boot: the tokens, hermes.css, then the theme, after Custom styles; nothing else
+    // changes.
     install_page_assets(Some(PageAssets { theme: true }));
     let themed = room_page();
     let themed_voice = voice_page();
-    let added = format!("{}{}", link("hermes/hermes.css"), link("hermes/theme.css"));
+    let added = format!("{}{}{}", link("hermes/tokens.css"), link("hermes/hermes.css"), link("hermes/theme.css"));
     let at = positions(&themed, &[UPSTREAM_STYLESHEET, CUSTOM_STYLES, &added]);
     assert!(at[0] < at[1] && at[1] < at[2], "upstream, Custom styles, then ours");
     assert_eq!(themed.replace(&added, ""), upstream, "nothing else changes");
     assert_eq!(themed_voice.replace(&added, ""), upstream_voice, "the voice page links nothing else");
 
-    // CAMPFIRE_THEME=off: the fork's stylesheet only.
+    // CAMPFIRE_THEME=off: the fork's stylesheets only.
     install_page_assets(Some(PageAssets { theme: false }));
     let unthemed = room_page();
     assert!(!unthemed.contains("hermes/theme.css"));
-    assert_eq!(unthemed.replace(&link("hermes/hermes.css"), ""), upstream);
+    assert_eq!(unthemed.replace(&format!("{}{}", link("hermes/tokens.css"), link("hermes/hermes.css")), ""), upstream);
 
     // The workspace on: its stylesheet between the fork's and the theme.
     install_page_assets(Some(PageAssets { theme: true }));
     install_workspace_hooks(Some(Arc::new(Workspace)));
     let with_workspace = room_page();
-    let added = format!("{}{}{}", link("hermes/hermes.css"), link("hermes/workspace.css"), link("hermes/theme.css"));
+    let added =
+        format!("{}{}{}{}", link("hermes/tokens.css"), link("hermes/hermes.css"), link("hermes/workspace.css"), link("hermes/theme.css"));
     positions(&with_workspace, &[CUSTOM_STYLES, &added]);
     assert_eq!(with_workspace.replace(&added, ""), upstream);
+
+    // The workspace's hooks without the page assets (not how the app boots): the tokens still come
+    // first, since workspace.css reads them.
+    install_page_assets(None);
+    let added = format!("{}{}", link("hermes/tokens.css"), link("hermes/workspace.css"));
+    assert_eq!(room_page().replace(&added, ""), upstream);
 
     // Removed: back to upstream's bytes.
     install_workspace_hooks(None);

@@ -16,8 +16,9 @@ use messages_support::golden;
 struct Marking;
 
 impl WorkspaceHooks for Marking {
+    // The head seam's links are tests/hermes_head.rs's (the goldens' context knows no fork asset).
     fn stylesheets(&self, _ctx: &ViewContext) -> Vec<String> {
-        vec!["/assets/ws-test.css".into()]
+        Vec::new()
     }
 
     fn layout_overlay(&self, ctx: &ViewContext) -> String {
@@ -44,11 +45,6 @@ fn the_hooks_render_nothing_until_installed_and_nothing_once_removed() {
     let decorated = room_page();
     install_workspace_hooks(None);
 
-    // The stylesheet goes once, in the head.
-    let link = "\n    <link rel=\"stylesheet\" href=\"/assets/ws-test.css\" data-turbo-track=\"reload\" />";
-    assert_eq!(decorated.matches(link).count(), 1);
-    assert!(decorated.find(link).unwrap() < decorated.find("</head>").unwrap());
-    let decorated = decorated.replace(link, "");
     // The overlay goes once, right after the lightbox, before the app logo.
     assert_eq!(decorated.matches("<nav class=\"ws-test\"").count(), 1);
     let overlay = decorated.find("<nav class=\"ws-test\"").unwrap();

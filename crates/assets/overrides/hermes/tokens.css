@@ -1,0 +1,75 @@
+/* Hermes fork: the fork's semantic design tokens (docs/hermes-theme.md, "Tokens").
+ *
+ * One small set that the Workspace (workspace.css), the voice features (hermes.css) and the
+ * product theme (theme.css) build on. Linked first by the layout's head seam (crate::hermes::head_tags
+ * in crates/views), so the fork's stylesheets can read these and theme.css, linked last, can
+ * redefine them.
+ *
+ * Every default reproduces what the fork rendered before these tokens existed. Most point at
+ * upstream's own tokens (reference/app/assets/stylesheets/colors.css, utilities.css), so
+ * recolouring upstream's `--lch-*` triplets recolours the fork too; redefine a `--ui-*` token only
+ * where the fork must differ from upstream. Colours have a light and a dark value; dark follows
+ * `prefers-color-scheme`, like upstream (tokens that point at upstream follow it by themselves). */
+
+:root {
+  /* Surfaces */
+  --ui-surface: var(--color-bg);
+  --ui-surface-raised: var(--color-message-bg);
+
+  /* Text */
+  --ui-text: var(--color-text);
+  --ui-text-reversed: var(--color-text-reversed);
+  --ui-text-muted: color-mix(in srgb, var(--ui-text) 60%, transparent);
+
+  /* Lines */
+  --ui-border: var(--color-border);
+  --ui-border-strong: var(--color-border-dark);
+  --ui-border-stronger: var(--color-border-darker);
+
+  /* Accent: links and focus, and its light tint (the person's own lines on the voice page) */
+  --ui-accent: var(--color-link);
+  --ui-accent-tint: var(--color-selected);
+
+  /* Status, and their tints (a 14% wash over the surface, as the voice page's notices use) */
+  --ui-success: var(--color-positive);
+  --ui-warning: var(--color-alert);
+  --ui-danger: var(--color-negative);
+  --ui-on-danger: oklch(100% 0 0);
+  --ui-success-tint: color-mix(in oklch, var(--ui-success) 14%, var(--ui-surface));
+  --ui-warning-tint: color-mix(in oklch, var(--ui-warning) 14%, var(--ui-surface));
+  --ui-danger-tint: color-mix(in oklch, var(--ui-danger) 14%, var(--ui-surface));
+
+  /* AI: what Hermes proposed and nobody confirmed yet (text, line, tint, text on the line colour) */
+  --ui-ai: oklch(40% 0.12 50);
+  --ui-ai-line: oklch(74% 0.184 70);
+  --ui-ai-tint: oklch(96% 0.034 100);
+  --ui-on-ai-line: oklch(26% 0.018 40);
+
+  /* Radius */
+  --ui-radius-sm: 0.25em;
+  --ui-radius-md: 0.5em;
+  --ui-radius-bubble: 0.66em;
+  --ui-radius-lg: 0.8em;
+  --ui-radius-pill: 2em;
+  --ui-radius-round: 50%;
+
+  /* Shadows: cards and menus; a lifted round button; the side sheet */
+  --ui-shadow: 0 0 0 1px oklch(0% 0 0 / 5%), 0 0.2em 0.2em oklch(0% 0 0 / 5%), 0 0.4em 0.4em oklch(0% 0 0 / 5%);
+  --ui-shadow-lifted: 0 0.4rem 0.9rem -0.25rem oklch(0% 0 0 / 35%);
+  --ui-shadow-sheet: -0.5em 0 2em oklch(0% 0 0 / 18%);
+
+  /* Spacing: upstream's --inline-space / --block-space (and their -half / -double) are the base;
+   * these are the fork's page gutter and the width of the wide-screen tab rail */
+  --ui-gutter: calc(var(--inline-space) + 1vw);
+  --ui-rail: max(5vw, 4rem);
+
+  @media (prefers-color-scheme: dark) {
+    --ui-on-danger: oklch(20% 0.0195 232.58);
+
+    --ui-ai: oklch(86% 0.103 90);
+    --ui-ai-line: oklch(62.1% 0.146 70);
+    --ui-ai-tint: oklch(27% 0.045 75);
+
+    --ui-shadow: 0 0 0 1px oklch(100% 0 0 / 10%);
+  }
+}

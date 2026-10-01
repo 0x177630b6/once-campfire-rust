@@ -4,8 +4,9 @@
  * Custom styles, before the workspace's stylesheet and the theme), never by
  * `stylesheet_link_tag :all` (build.rs leaves `hermes/` out of it). Every rule targets the voice
  * features' own markup, so pages without it look the same with or without this file. Built on
- * Campfire's own variables and components: .btn, .btn--negative, the message bubble colour, the
- * flash look, pulsing-outline, the submitting dots. */
+ * the fork's semantic tokens (`--ui-*`, hermes/tokens.css, linked before this file; most point at
+ * Campfire's own colours) and Campfire's components: .btn, .btn--negative, the message bubble
+ * colour, the flash look, pulsing-outline, the submitting dots. */
 
 /* ---------------------------------------------------------------------------------------------
  * Composer: touch targets */
@@ -49,14 +50,14 @@
 
 .hermes-voice-note__dot {
   animation: hermes-blink 1s steps(2, jump-none) infinite;
-  background: var(--color-negative);
+  background: var(--ui-danger);
   block-size: 0.6em;
-  border-radius: 50%;
+  border-radius: var(--ui-radius-round);
   inline-size: 0.6em;
 }
 
 .hermes-voice-note__level {
-  background: var(--color-border-darker);
+  background: var(--ui-border-stronger);
   block-size: 0.3rem;
   border-radius: 1rem;
   flex: 1 1 3rem;
@@ -65,7 +66,7 @@
   overflow: hidden;
 
   &::after {
-    background: var(--color-negative);
+    background: var(--ui-danger);
     block-size: 100%;
     content: "";
     display: block;
@@ -76,7 +77,7 @@
 }
 
 .hermes-voice-note__warning {
-  color: var(--color-negative);
+  color: var(--ui-danger);
   flex: 1 1 auto;
   font-weight: 600;
   line-height: 1.15;
@@ -102,13 +103,13 @@
 
   /* Looks like the composer's Send button (.btn--reversed), pulsing like .btn--pulsing. */
   .hermes-voice-note__toggle {
-    --btn-background: var(--color-text);
+    --btn-background: var(--ui-text);
     --btn-border-color: transparent;
-    --btn-color: var(--color-text-reversed);
+    --btn-color: var(--ui-text-reversed);
 
     animation: pulsing-outline 2s infinite both;
     margin-inline-start: auto;
-    outline: 0 solid var(--color-negative);
+    outline: 0 solid var(--ui-danger);
 
     img { filter: invert(100%); }
   }
@@ -130,9 +131,9 @@
 }
 
 .hermes-voice-note__error {
-  background: var(--color-text);
+  background: var(--ui-text);
   border-radius: 0.75em;
-  color: var(--color-text-reversed);
+  color: var(--ui-text-reversed);
   font-size: 0.8rem;
   font-weight: normal;
   inline-size: max-content;
@@ -278,8 +279,8 @@
 }
 
 .voice__bubble {
-  background-color: var(--color-message-bg);
-  border-radius: 0.66em;
+  background-color: var(--ui-surface-raised);
+  border-radius: var(--ui-radius-bubble);
   overflow-wrap: anywhere;
   padding: 0.5em 0.9em;
 }
@@ -291,7 +292,7 @@
   text-align: end;
 
   .voice__bubble {
-    background-color: var(--color-selected);
+    background-color: var(--ui-accent-tint);
     text-align: start;
   }
 }
@@ -311,7 +312,7 @@
 
   .voice__bubble {
     background-color: transparent;
-    border: 1px dashed var(--color-border-darker);
+    border: 1px dashed var(--ui-border-stronger);
     font-style: italic;
   }
 }
@@ -324,15 +325,15 @@
     content: " …";
   }
 
-  .voice__line--failed & { color: var(--color-negative); opacity: 1; }
+  .voice__line--failed & { color: var(--ui-danger); opacity: 1; }
 }
 
 /* Error, closed, unavailable: Campfire's flash colours, in the page flow. */
 .voice__notice {
   align-items: flex-start;
-  background: color-mix(in oklch, var(--color-negative) 14%, var(--color-bg));
-  border: 1px solid var(--color-negative);
-  border-radius: 0.8em;
+  background: var(--ui-danger-tint);
+  border: 1px solid var(--ui-danger);
+  border-radius: var(--ui-radius-lg);
   display: flex;
   gap: var(--inline-space);
   padding: 0.75em 1em;
@@ -359,8 +360,8 @@
 
 .voice__notice-icon {
   align-items: center;
-  background: var(--color-negative);
-  border-radius: 50%;
+  background: var(--ui-danger);
+  border-radius: var(--ui-radius-round);
   block-size: 1.8em;
   display: grid;
   flex-shrink: 0;
@@ -372,8 +373,8 @@
 
 .voice__confirm {
   align-items: center;
-  border: 1px solid var(--color-border-darker);
-  border-radius: 0.8em;
+  border: 1px solid var(--ui-border-stronger);
+  border-radius: var(--ui-radius-lg);
   display: flex;
   flex-wrap: wrap;
   gap: var(--block-space-half) var(--inline-space);
@@ -401,9 +402,9 @@
 }
 
 .voice__result-icon {
-  background-color: var(--color-positive);
+  background-color: var(--ui-success);
   block-size: 3.5rem;
-  border-radius: 50%;
+  border-radius: var(--ui-radius-round);
   display: grid;
   inline-size: 3.5rem;
   place-items: center;
@@ -419,7 +420,7 @@
 /* The control bar, at the bottom. */
 .voice__bar {
   align-items: center;
-  border-block-start: 1px solid var(--color-border);
+  border-block-start: 1px solid var(--ui-border);
   display: grid;
   gap: var(--block-space-half) var(--inline-space-double);
   grid-template-columns: auto minmax(0, 1fr);
@@ -431,15 +432,15 @@
 .voice__control {
   --voice-level: 0;
 
-  border-radius: 50%;
+  border-radius: var(--ui-radius-round);
   display: grid;
   place-items: center;
   position: relative;
 
   /* Mic level ring, drawn only while live. */
   &::before {
-    border: 3px solid var(--color-negative);
-    border-radius: 50%;
+    border: 3px solid var(--ui-danger);
+    border-radius: var(--ui-radius-round);
     content: "";
     inset: 0;
     opacity: 0;

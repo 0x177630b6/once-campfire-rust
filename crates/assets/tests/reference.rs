@@ -158,7 +158,9 @@ fn javascript_importmap_tags_match_the_reference() {
 fn the_hermes_stylesheets_are_served_but_not_in_the_global_list() {
     // Hermes fork: the layout's head seam (campfire_views::hermes::head_tags) links them after
     // `stylesheet_link_tag :all`, which stays the reference's list.
-    for (logical, contains) in [("hermes/hermes.css", ".hermes-voice-note"), ("hermes/theme.css", "product theme")] {
+    for (logical, contains) in
+        [("hermes/tokens.css", "--ui-surface:"), ("hermes/hermes.css", ".hermes-voice-note"), ("hermes/theme.css", "product theme")]
+    {
         assert!(added().iter().any(|added| added == logical), "{logical}");
         let path = campfire_assets::stylesheet_path(logical);
         let stem = logical.trim_end_matches(".css");

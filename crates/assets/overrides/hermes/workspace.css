@@ -2,9 +2,11 @@
  *
  * Linked from the layout's head (crate::hermes::head_tags in crates/views, after hermes.css and
  * before the theme) only while the workspace is on (FIZZY_URL and FIZZY_TOKEN) and for signed-in
- * users; build.rs leaves `hermes/` out of `stylesheet_link_tag :all`. Built on Campfire's
- * variables (colors.css, which switch for dark mode by themselves) plus the few Fizzy-side tokens
- * below, from the approved mockup: severity, Hermes-pending amber, column tones. */
+ * users; build.rs leaves `hermes/` out of `stylesheet_link_tag :all`. Built on the fork's semantic
+ * tokens (`--ui-*`, hermes/tokens.css, linked before this file; most of them point at Campfire's
+ * colors.css, which switches for dark mode by itself) plus the Workspace's own tokens below, from
+ * the approved mockup: severity and Fizzy's column tones (the rest of `--ws-*` now point at
+ * `--ui-*`; docs/hermes-theme.md lists them all). */
 
 :root {
   --ws-tabbar-height: calc(3.9rem + env(safe-area-inset-bottom, 0px));
@@ -12,12 +14,12 @@
   --ws-sev-low: oklch(56% 0.014 260);
   --ws-sev-medium: oklch(60% 0.14 78);
   --ws-sev-high: oklch(59% 0.19 38);
-  --ws-sev-critical: oklch(51% 0.2 31);
-  --ws-on-critical: oklch(100% 0 0);
+  --ws-sev-critical: var(--ui-danger);
+  --ws-on-critical: var(--ui-on-danger);
 
-  --ws-ai: oklch(40% 0.12 50);
-  --ws-ai-line: oklch(74% 0.184 70);
-  --ws-ai-soft: oklch(96% 0.034 100);
+  --ws-ai: var(--ui-ai);
+  --ws-ai-line: var(--ui-ai-line);
+  --ws-ai-soft: var(--ui-ai-tint);
 
   --ws-col-new: oklch(66% 0.196 257.82);
   --ws-col-doing: oklch(56.5% 0.142 111);
@@ -29,20 +31,14 @@
   --ws-col-violet: oklch(66% 0.206 285.52);
   --ws-col-purple: oklch(55% 0.2 310);
   --ws-col-pink: oklch(62% 0.2 350);
-  --ws-on-cc: oklch(100% 0 0);
+  --ws-on-cc: var(--ui-text-reversed);
 
-  --ws-shadow: 0 0 0 1px oklch(0% 0 0 / 5%), 0 0.2em 0.2em oklch(0% 0 0 / 5%), 0 0.4em 0.4em oklch(0% 0 0 / 5%);
+  --ws-shadow: var(--ui-shadow);
 
   @media (prefers-color-scheme: dark) {
     --ws-sev-low: oklch(73.97% 0.009 260);
     --ws-sev-medium: oklch(78% 0.14 85);
     --ws-sev-high: oklch(73.95% 0.139 42);
-    --ws-sev-critical: oklch(73.8% 0.184 29.18);
-    --ws-on-critical: oklch(20% 0.0195 232.58);
-
-    --ws-ai: oklch(86% 0.103 90);
-    --ws-ai-line: oklch(62.1% 0.146 70);
-    --ws-ai-soft: oklch(27% 0.045 75);
 
     --ws-col-new: oklch(62% 0.159 258);
     --ws-col-doing: oklch(62% 0.128 112);
@@ -54,9 +50,6 @@
     --ws-col-violet: oklch(62% 0.184 286);
     --ws-col-purple: oklch(62% 0.17 310);
     --ws-col-pink: oklch(66% 0.17 350);
-    --ws-on-cc: oklch(0% 0 0);
-
-    --ws-shadow: 0 0 0 1px oklch(100% 0 0 / 10%);
   }
 }
 
@@ -79,7 +72,7 @@
 .ws-sev {
   align-items: center;
   border: 1px solid currentColor;
-  border-radius: 2em;
+  border-radius: var(--ui-radius-pill);
   color: var(--ws-sev-low);
   display: inline-flex;
   font-size: 0.75em;
@@ -92,7 +85,7 @@
   &::before {
     background: currentColor;
     block-size: 0.45em;
-    border-radius: 50%;
+    border-radius: var(--ui-radius-round);
     content: "";
     inline-size: 0.45em;
   }
@@ -114,10 +107,10 @@ a.ws-chip {
   --ws-cc: var(--ws-col-new);
 
   align-items: stretch;
-  background: color-mix(in srgb, var(--ws-cc) 6%, var(--color-bg));
-  border-radius: 0.25em;
+  background: color-mix(in srgb, var(--ws-cc) 6%, var(--ui-surface));
+  border-radius: var(--ui-radius-sm);
   box-shadow: var(--ws-shadow);
-  color: var(--color-text);
+  color: var(--ui-text);
   display: inline-flex;
   font-size: 0.875em;
   line-height: 1.25;
@@ -158,7 +151,7 @@ a.ws-chip {
 }
 
 .ws-chip__state {
-  color: color-mix(in srgb, var(--ws-cc) 70%, var(--color-text));
+  color: color-mix(in srgb, var(--ws-cc) 70%, var(--ui-text));
   font-size: 0.8em;
   font-weight: 700;
   letter-spacing: 0.03em;
@@ -172,7 +165,7 @@ a.ws-chip {
   align-items: center;
   background: var(--ws-ai-soft);
   border: 1.5px dashed var(--ws-ai-line);
-  border-radius: 0.66em;
+  border-radius: var(--ui-radius-bubble);
   display: flex;
   flex-wrap: wrap;
   gap: var(--block-space-half, 0.5em) var(--inline-space, 1ch);
@@ -226,7 +219,7 @@ a.ws-chip {
 .ws-draft:is([data-ws-draft-state="sent"], [data-ws-draft-state="superseded"]) {
   background: transparent;
   border-style: solid;
-  border-color: var(--color-border-dark);
+  border-color: var(--ui-border-strong);
 
   .ws-draft__actions {
     display: none;
@@ -251,7 +244,7 @@ a.ws-chip {
 
 .ws-tab {
   align-items: center;
-  color: color-mix(in srgb, var(--color-text) 60%, transparent);
+  color: var(--ui-text-muted);
   display: flex;
   flex-direction: column;
   font-size: 0.7rem;
@@ -267,7 +260,7 @@ a.ws-chip {
   }
 
   &[aria-current="page"] {
-    color: var(--color-text);
+    color: var(--ui-text);
     font-weight: 700;
 
     img {
@@ -278,10 +271,10 @@ a.ws-chip {
 
 .ws-tab__disc {
   align-items: center;
-  background: var(--color-text);
+  background: var(--ui-text);
   block-size: 3.1rem;
-  border-radius: 50%;
-  box-shadow: 0 0 0 0.25rem var(--color-bg), 0 0.4rem 0.9rem -0.25rem oklch(0% 0 0 / 35%);
+  border-radius: var(--ui-radius-round);
+  box-shadow: 0 0 0 0.25rem var(--ui-surface), var(--ui-shadow-lifted);
   display: flex;
   inline-size: 3.1rem;
   justify-content: center;
@@ -297,7 +290,7 @@ a.ws-chip {
 }
 
 .ws-tab--report {
-  color: var(--color-text);
+  color: var(--ui-text);
 }
 
 @media (max-width: 100ch) {
@@ -307,9 +300,9 @@ a.ws-chip {
 
   .ws-tabbar {
     align-items: flex-end;
-    background: var(--color-bg);
+    background: var(--ui-surface);
     block-size: var(--ws-tabbar-height);
-    border-block-start: 1px solid var(--color-border-dark);
+    border-block-start: 1px solid var(--ui-border-strong);
     display: flex;
     inset: auto 0 0 0;
     justify-content: space-around;
@@ -342,7 +335,7 @@ a.ws-chip {
     display: flex;
     flex-direction: column;
     gap: 1rem;
-    inline-size: max(5vw, 4rem);
+    inline-size: var(--ui-rail);
     inset: 50% auto auto 0;
     position: fixed;
     transform: translateY(-50%);
@@ -368,18 +361,18 @@ a.ws-chip {
   gap: calc(var(--block-space, 1rem) * 1.5);
   margin-inline: auto;
   max-inline-size: 46rem;
-  padding: var(--block-space, 1rem) calc(var(--inline-space, 1ch) + 1vw) calc(var(--block-space, 1rem) * 3);
+  padding: var(--block-space, 1rem) var(--ui-gutter) calc(var(--block-space, 1rem) * 3);
   inline-size: 100%;
 
   @media (min-width: 100ch) {
-    padding-inline: max(5vw, 4rem);
+    padding-inline: var(--ui-rail);
   }
 }
 
 .ws-notice {
-  background: var(--color-message-bg);
-  border-inline-start: 0.25em solid var(--color-alert);
-  border-radius: 0.66em;
+  background: var(--ui-surface-raised);
+  border-inline-start: 0.25em solid var(--ui-warning);
+  border-radius: var(--ui-radius-bubble);
   margin: 0;
   padding: 0.75em 1em;
 }
@@ -400,7 +393,7 @@ a.ws-chip {
 }
 
 .ws-section__hint {
-  color: color-mix(in srgb, var(--color-text) 60%, transparent);
+  color: var(--ui-text-muted);
   font-size: 0.8em;
   font-weight: 400;
 }
@@ -412,19 +405,19 @@ a.ws-chip {
 }
 
 .ws-count {
-  background: var(--color-message-bg);
-  border-radius: 2em;
+  background: var(--ui-surface-raised);
+  border-radius: var(--ui-radius-pill);
   font-size: 0.75em;
   padding: 0 0.6em;
 }
 
 .ws-count--ai {
   background: var(--ws-ai-line);
-  color: oklch(26% 0.018 40);
+  color: var(--ui-on-ai-line);
 }
 
 .ws-empty {
-  color: color-mix(in srgb, var(--color-text) 60%, transparent);
+  color: var(--ui-text-muted);
   margin: 0;
 }
 
@@ -439,8 +432,8 @@ a.ws-chip {
 }
 
 .ws-item {
-  background: var(--color-message-bg);
-  border-radius: 0.66em;
+  background: var(--ui-surface-raised);
+  border-radius: var(--ui-radius-bubble);
   display: flex;
   flex-direction: column;
   gap: 0.3em;
@@ -468,7 +461,7 @@ a.ws-chip {
 }
 
 .ws-item__meta {
-  color: color-mix(in srgb, var(--color-text) 65%, transparent);
+  color: color-mix(in srgb, var(--ui-text) 65%, transparent);
   font-size: 0.85em;
 }
 
@@ -498,7 +491,7 @@ a.ws-chip {
   --ws-cc: var(--ws-col-new);
 
   align-items: center;
-  color: color-mix(in srgb, var(--ws-cc) 70%, var(--color-text));
+  color: color-mix(in srgb, var(--ws-cc) 70%, var(--ui-text));
   display: flex;
   font-size: 0.75rem;
   gap: 0.5em;
@@ -509,7 +502,7 @@ a.ws-chip {
   &::before {
     background: var(--ws-cc);
     block-size: 0.55em;
-    border-radius: 50%;
+    border-radius: var(--ui-radius-round);
     content: "";
     inline-size: 0.55em;
   }
@@ -522,8 +515,8 @@ a.ws-chip {
 .ws-card {
   --ws-cc: var(--ws-col-new);
 
-  background: color-mix(in srgb, var(--ws-cc) 4%, var(--color-bg));
-  border-radius: 0.25em;
+  background: color-mix(in srgb, var(--ws-cc) 4%, var(--ui-surface));
+  border-radius: var(--ui-radius-sm);
   box-shadow: var(--ws-shadow);
 }
 
@@ -532,7 +525,7 @@ a.ws-chip {
 }
 
 a.ws-card__link {
-  color: var(--color-text);
+  color: var(--ui-text);
   display: flex;
   flex-direction: column;
   gap: 0.35em;
@@ -554,7 +547,7 @@ a.ws-card__link {
 
 .ws-card__no {
   background: var(--ws-cc);
-  border-radius: 0.25em 0 0.25em 0;
+  border-radius: var(--ui-radius-sm) 0 var(--ui-radius-sm) 0;
   color: var(--ws-on-cc);
   font-size: 0.7rem;
   font-weight: 700;
@@ -564,14 +557,14 @@ a.ws-card__link {
 }
 
 .ws-card__title {
-  color: color-mix(in srgb, var(--ws-cc) 30%, var(--color-text));
+  color: color-mix(in srgb, var(--ws-cc) 30%, var(--ui-text));
   font-size: 1rem;
   font-weight: 800;
   line-height: 1.2;
 }
 
 .ws-card__meta {
-  color: color-mix(in srgb, var(--ws-cc) 40%, color-mix(in srgb, var(--color-text) 60%, transparent));
+  color: color-mix(in srgb, var(--ws-cc) 40%, var(--ui-text-muted));
   font-size: 0.8rem;
 }
 
@@ -602,7 +595,7 @@ a.ws-card__link {
 }
 
 .ws-muted {
-  color: color-mix(in srgb, var(--color-text) 60%, transparent);
+  color: var(--ui-text-muted);
   font-size: 0.85em;
   margin: 0;
 }
@@ -629,7 +622,7 @@ a.ws-card__link {
 }
 
 .ws-field__label {
-  color: color-mix(in srgb, var(--color-text) 60%, transparent);
+  color: var(--ui-text-muted);
   font-size: 0.72rem;
   font-weight: 700;
   letter-spacing: 0.05em;
@@ -650,8 +643,8 @@ a.ws-card__link {
 
 .ws-tag,
 .ws-tag-toggle span {
-  border: 1px solid var(--color-border-dark);
-  border-radius: 2em;
+  border: 1px solid var(--ui-border-strong);
+  border-radius: var(--ui-radius-pill);
   display: inline-block;
   font-size: 0.8em;
   padding: 0.1em 0.7em;
@@ -670,15 +663,15 @@ a.ws-card__link {
   }
 
   input:focus-visible + span {
-    outline: 2px solid var(--color-link);
+    outline: 2px solid var(--ui-accent);
     outline-offset: 1px;
   }
 }
 
 .ws-tag-toggle input:checked + span {
-  background: var(--color-text);
-  border-color: var(--color-text);
-  color: var(--color-bg);
+  background: var(--ui-text);
+  border-color: var(--ui-text);
+  color: var(--ui-surface);
   font-weight: 700;
 }
 
@@ -705,7 +698,7 @@ a.ws-card__link {
   }
 
   &[data-tone="error"] {
-    color: var(--color-negative, var(--ws-sev-critical));
+    color: var(--ui-danger);
     font-weight: 600;
   }
 }
@@ -724,10 +717,10 @@ a.ws-card__link {
   flex-direction: column;
   gap: var(--block-space-half, 0.5rem);
   inline-size: 100%;
-  padding: var(--block-space, 1rem) calc(var(--inline-space, 1ch) + 1vw) calc(var(--block-space, 1rem) * 3);
+  padding: var(--block-space, 1rem) var(--ui-gutter) calc(var(--block-space, 1rem) * 3);
 
   @media (min-width: 100ch) {
-    padding-inline: max(5vw, 4rem) 2vw;
+    padding-inline: var(--ui-rail) 2vw;
   }
 }
 
@@ -751,11 +744,14 @@ a.ws-card__link {
   margin-inline-start: auto;
 }
 
+/* The board's filters and the Hermes tab's (one rule: it used to be two, the second overriding the
+ * gap and adding the margin). */
 .ws-filters {
   align-items: center;
   display: flex;
   flex-wrap: wrap;
-  gap: 0.4em 0.6em;
+  gap: 0.4em;
+  margin-block-end: var(--block-space-half, 0.5em);
 }
 
 .ws-filters__sev {
@@ -781,10 +777,10 @@ a.ws-card__link {
 .ws-coltab {
   --ws-cc: var(--ws-col-new);
 
-  background: color-mix(in srgb, var(--ws-cc) 10%, var(--color-bg));
+  background: color-mix(in srgb, var(--ws-cc) 10%, var(--ui-surface));
   border: 1px solid color-mix(in srgb, var(--ws-cc) 35%, transparent);
-  border-radius: 2em;
-  color: color-mix(in srgb, var(--ws-cc) 60%, var(--color-text));
+  border-radius: var(--ui-radius-pill);
+  color: color-mix(in srgb, var(--ws-cc) 60%, var(--ui-text));
   cursor: pointer;
   flex: none;
   font: inherit;
@@ -821,8 +817,8 @@ a.ws-card__link {
 .ws-col {
   --ws-cc: var(--ws-col-new);
 
-  background: color-mix(in srgb, var(--ws-cc) 7%, var(--color-bg));
-  border-radius: 0.5em;
+  background: color-mix(in srgb, var(--ws-cc) 7%, var(--ui-surface));
+  border-radius: var(--ui-radius-md);
   display: flex;
   flex-direction: column;
   gap: 0.6em;
@@ -866,10 +862,10 @@ a.ws-card__link {
  * Card sheet (overlay on the right on wide screens, full screen on phones; or a page) */
 
 dialog.ws-overlay {
-  background: var(--color-bg);
+  background: var(--ui-surface);
   border: 0;
-  box-shadow: -0.5em 0 2em oklch(0% 0 0 / 18%);
-  color: var(--color-text);
+  box-shadow: var(--ui-shadow-sheet);
+  color: var(--ui-text);
   block-size: 100dvh;
   inline-size: min(34rem, 100vw);
   inset: 0 0 0 auto;
@@ -878,7 +874,7 @@ dialog.ws-overlay {
   max-inline-size: 100vw;
   overflow: auto;
   overscroll-behavior: contain;
-  padding: var(--block-space, 1rem) calc(var(--inline-space, 1ch) + 1vw) calc(var(--block-space, 1rem) * 2 + env(safe-area-inset-bottom, 0px));
+  padding: var(--block-space, 1rem) var(--ui-gutter) calc(var(--block-space, 1rem) * 2 + env(safe-area-inset-bottom, 0px));
   position: fixed;
   z-index: 10;
 
@@ -888,7 +884,7 @@ dialog.ws-overlay {
 }
 
 .ws-overlay__loading {
-  color: color-mix(in srgb, var(--color-text) 60%, transparent);
+  color: var(--ui-text-muted);
 }
 
 .ws-sheet-page {
@@ -913,7 +909,7 @@ dialog.ws-overlay {
   gap: 0.75em;
 
   .ws-card__no {
-    border-radius: 0.25em;
+    border-radius: var(--ui-radius-sm);
   }
 
   .ws-sheet__close {
@@ -943,9 +939,9 @@ dialog.ws-overlay {
 }
 
 .ws-more__menu {
-  background: var(--color-bg);
-  border: 1px solid var(--color-border-dark);
-  border-radius: 0.5em;
+  background: var(--ui-surface);
+  border: 1px solid var(--ui-border-strong);
+  border-radius: var(--ui-radius-md);
   box-shadow: var(--ws-shadow);
   inset-block-start: calc(100% + 0.3em);
   inset-inline-end: 0;
@@ -960,7 +956,7 @@ dialog.ws-overlay {
 }
 
 .ws-sheet__title {
-  color: color-mix(in srgb, var(--ws-cc, var(--color-text)) 30%, var(--color-text));
+  color: color-mix(in srgb, var(--ws-cc, var(--ui-text)) 30%, var(--ui-text));
   font-size: 1.35rem;
   font-weight: 800;
   line-height: 1.2;
@@ -996,8 +992,8 @@ dialog.ws-overlay {
 }
 
 .ws-sheet__report {
-  background: var(--color-message-bg);
-  border-radius: 0.5em;
+  background: var(--ui-surface-raised);
+  border-radius: var(--ui-radius-md);
   padding: 0.6em 0.9em;
 
   summary {
@@ -1048,7 +1044,7 @@ dialog.ws-overlay {
 }
 
 .ws-step--done span {
-  color: color-mix(in srgb, var(--color-text) 55%, transparent);
+  color: color-mix(in srgb, var(--ui-text) 55%, transparent);
   text-decoration: line-through;
 }
 
@@ -1062,8 +1058,8 @@ dialog.ws-overlay {
 }
 
 .ws-comment {
-  background: var(--color-message-bg);
-  border-radius: 0.66em;
+  background: var(--ui-surface-raised);
+  border-radius: var(--ui-radius-bubble);
   padding: 0.5em 0.8em;
 
   p {
@@ -1072,7 +1068,7 @@ dialog.ws-overlay {
 }
 
 .ws-comment__meta {
-  color: color-mix(in srgb, var(--color-text) 65%, transparent);
+  color: color-mix(in srgb, var(--ui-text) 65%, transparent);
   font-size: 0.8em;
 }
 
@@ -1107,18 +1103,18 @@ dialog.ws-overlay {
   white-space: nowrap;
 
   &[aria-expanded="true"] {
-    background: var(--color-text);
-    color: var(--color-bg);
+    background: var(--ui-text);
+    color: var(--ui-surface);
   }
 }
 
 .ws-panel {
-  background: var(--color-bg);
+  background: var(--ui-surface);
   display: flex;
   flex-direction: column;
   gap: 0.75em;
   overflow: auto;
-  padding: var(--block-space, 1rem) calc(var(--inline-space, 1ch) + 1vw);
+  padding: var(--block-space, 1rem) var(--ui-gutter);
 
   &[hidden] {
     display: none;
@@ -1131,7 +1127,7 @@ dialog.ws-overlay {
   }
 
   @media (min-width: 100ch) {
-    border-inline-start: 1px solid var(--color-border-dark);
+    border-inline-start: 1px solid var(--ui-border-strong);
     grid-area: panel;
     max-block-size: 100dvh;
   }
@@ -1174,7 +1170,7 @@ dialog.ws-overlay {
 }
 
 .ws-panel__linked {
-  color: color-mix(in srgb, var(--color-text) 60%, transparent);
+  color: var(--ui-text-muted);
   font-size: 0.85em;
   margin: 0;
 }
@@ -1201,19 +1197,12 @@ dialog.ws-overlay {
  * Phase 2: the Hermes tab (pending proposals, the log), a proposal's draft, the autonomy dial */
 
 .ws-draft[data-ws-draft-state="sent"][data-ws-proposal] .ws-draft__status {
-  color: color-mix(in srgb, var(--color-text) 70%, transparent);
-}
-
-.ws-filters {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.4em;
-  margin-block-end: var(--block-space-half, 0.5em);
+  color: color-mix(in srgb, var(--ui-text) 70%, transparent);
 }
 
 .ws-filter {
-  border: 1px solid var(--color-border-dark);
-  border-radius: 2em;
+  border: 1px solid var(--ui-border-strong);
+  border-radius: var(--ui-radius-pill);
   color: inherit;
   font-size: 0.8em;
   font-weight: 600;
@@ -1221,9 +1210,9 @@ dialog.ws-overlay {
   text-decoration: none;
 
   &[aria-current="true"] {
-    background: var(--color-text);
-    border-color: var(--color-text);
-    color: var(--color-bg);
+    background: var(--ui-text);
+    border-color: var(--ui-text);
+    color: var(--ui-surface);
   }
 }
 
@@ -1241,20 +1230,20 @@ dialog.ws-overlay {
 }
 
 .ws-via--campfire {
-  background: color-mix(in srgb, var(--color-text) 8%, transparent);
+  background: color-mix(in srgb, var(--ui-text) 8%, transparent);
 }
 
 .ws-via--chat {
-  color: color-mix(in srgb, var(--color-text) 60%, transparent);
+  color: var(--ui-text-muted);
   font-weight: 600;
 }
 
 .ws-log__item--failed .ws-item__title {
-  color: var(--color-negative, var(--ws-sev-critical));
+  color: var(--ui-danger);
 }
 
 .ws-log__error {
-  color: var(--color-negative, var(--ws-sev-critical));
+  color: var(--ui-danger);
 }
 
 .ws-log__actions {
@@ -1273,7 +1262,7 @@ dialog.ws-overlay {
 
   th,
   td {
-    border-block-end: 1px solid var(--color-border);
+    border-block-end: 1px solid var(--ui-border);
     padding: 0.4em 0.3em;
     text-align: center;
   }

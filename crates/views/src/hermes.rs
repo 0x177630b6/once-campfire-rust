@@ -136,6 +136,8 @@ pub(crate) fn workspace_message_html(message: &crate::messages::MessageView, htm
 
 // --- Page assets: the fork's stylesheets and the product theme, in <head> ------------------------
 
+/// The fork's semantic tokens (`--ui-*`), which the fork's stylesheets and the theme build on.
+pub const TOKENS_STYLESHEET: &str = "hermes/tokens.css";
 /// The voice features' styles (composer buttons, recording bar, audio player, live voice page).
 pub const HERMES_STYLESHEET: &str = "hermes/hermes.css";
 /// The product theme: loaded last, so it wins over upstream, Custom styles and the fork's CSS.
@@ -159,7 +161,7 @@ fn page_assets() -> Option<PageAssets> {
     *PAGE_ASSETS.read().unwrap_or_else(|e| e.into_inner())
 }
 
-/// The head seam, right after Custom styles (`custom_styles_tag`): `hermes.css`,
+/// The head seam, right after Custom styles (`custom_styles_tag`): the tokens, `hermes.css`,
 /// the workspace's stylesheet while it's on, then the theme, in that order, so that the theme wins
 /// every tie. Each `<link>` has `data-turbo-track="reload"`, like upstream's stylesheets: a page
 /// still open when a deploy changes one reloads at its next visit. The list is the same on every
@@ -168,7 +170,11 @@ fn page_assets() -> Option<PageAssets> {
 pub fn head_tags(ctx: &ViewContext) -> String {
     let assets = page_assets();
     let workspace = workspace_hooks().map(|hooks| hooks.stylesheets(ctx)).unwrap_or_default();
-    let mut hrefs = Vec::new();
+    if assets.is_none() && workspace.is_empty() {
+        return String::new();
+    }
+    // The tokens go with any of the fork's stylesheets: they all read them.
+    let mut hrefs = vec![ctx.asset(TOKENS_STYLESHEET)];
     if assets.is_some() {
         hrefs.push(ctx.asset(HERMES_STYLESHEET));
     }
