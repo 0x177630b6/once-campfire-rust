@@ -104,6 +104,10 @@ pub struct Workspace {
     directory: RwLock<Arc<Directory>>,
     /// What alerts were sent (`notified.json`), and the last handover.
     notified: alerts::NotifiedStore,
+    /// Sky push-to-talk's limits, usage counters (`sky-usage.json`), token receipts and presses.
+    sky: sky::Sky,
+    /// Why `sky-usage.json` couldn't be read at start, until the app logs it.
+    sky_error: Mutex<Option<String>>,
     /// When the first poll since the start ran: it records alerts without sending them.
     alerts_primed: Mutex<Option<Timestamp>>,
     /// The picture the last successful poll produced, as the alerts saw it. Not the live picture:
@@ -154,6 +158,7 @@ impl Workspace {
         let hermes_log = hermes_log::HermesLog::open(config.storage_file("hermes-log.jsonl"), Timestamp::now());
         let proposals = proposals::ProposalStore::open(config.storage_file("proposals.json"));
         let notified = alerts::NotifiedStore::open(config.storage_file("notified.json"));
+        let (sky, sky_error) = sky::Sky::open(config.sky.clone(), config.storage_file(sky::USAGE_FILE));
         Self {
             config,
             snapshot: RwLock::new(Arc::new(Snapshot::default())),
@@ -170,6 +175,8 @@ impl Workspace {
             fizzy_users: RwLock::new(hermes::FizzyUsers::default()),
             directory: RwLock::new(Arc::new(Directory::default())),
             notified,
+            sky,
+            sky_error: Mutex::new(sky_error),
             alerts_primed: Mutex::new(None),
             alerts_seen: Mutex::new(None),
             outbox: Mutex::new(Vec::new()),
@@ -210,10 +217,16 @@ impl Workspace {
     /// The storage errors since the last call (write log, Hermes log, proposals), for the app to
     /// log.
     pub fn take_storage_errors(&self) -> Vec<String> {
-        [self.journal.take_error(), self.hermes_log.take_error(), self.proposals.take_error(), self.notified.take_error()]
+        let sky = self.sky_error.lock().unwrap_or_else(|e| e.into_inner()).take();
+        [self.journal.take_error(), self.hermes_log.take_error(), self.proposals.take_error(), self.notified.take_error(), sky]
             .into_iter()
             .flatten()
             .collect()
+    }
+
+    /// Sky push-to-talk's state (`SKY_PTT`; off by default).
+    pub fn sky(&self) -> &sky::Sky {
+        &self.sky
     }
 
     /// Waits until nobody else is writing to card `number`, then holds it until the returned
