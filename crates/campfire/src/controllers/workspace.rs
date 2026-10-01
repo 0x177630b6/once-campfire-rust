@@ -250,6 +250,9 @@ async fn deliver_alerts(app: &App, workspace: &Workspace) {
     }
 }
 
+/// `Ok` once the message is created (committed: Campfire's Web Push is queued): a broadcast that
+/// fails afterwards is only logged, never an error, or the alert would be posted again (a second
+/// message and a second push). The new direct room's broadcast likewise.
 async fn post_alert(app: &App, bot_id: i64, delivery: &Delivery) -> anyhow::Result<i64> {
     let (room, created) = match delivery.to {
         To::Room(room_id) => (app.db.read(move |conn| Room::find(conn, room_id)).await?, false),
@@ -265,8 +268,8 @@ async fn post_alert(app: &App, bot_id: i64, delivery: &Delivery) -> anyhow::Resu
                 .await?
         }
     };
-    if created {
-        broadcast_direct_room(app, &room).await?;
+    if created && let Err(error) = broadcast_direct_room(app, &room).await {
+        tracing::warn!(%error, room_id = room.id, "a workspace alert's new direct room couldn't be broadcast");
     }
     let body = messages::canonicalize_body(app, delivery.html.clone(), None).await.map_err(|error| anyhow::anyhow!("{error:?}"))?;
     let room_id = room.id;
@@ -281,7 +284,8 @@ async fn post_alert(app: &App, bot_id: i64, delivery: &Delivery) -> anyhow::Resu
         .await?;
     let id = message.id;
     let (render_app, render_room) = (app.clone(), room.clone());
-    app.db
+    let broadcast = app
+        .db
         .read(move |conn| {
             let presenter = Presenter::new(conn, &render_app, None);
             let view = presenter.message(&message)?;
@@ -290,7 +294,10 @@ async fn post_alert(app: &App, bot_id: i64, delivery: &Delivery) -> anyhow::Resu
             let partials = Rendered { message: Some(html), ..Rendered::default() };
             render_app.broadcasts.message_create(conn, &render_room, &message, &partials)
         })
-        .await?;
+        .await;
+    if let Err(error) = broadcast {
+        tracing::warn!(%error, message_id = id, "a workspace alert was posted but couldn't be broadcast (it shows on reload)");
+    }
     Ok(id)
 }
 
