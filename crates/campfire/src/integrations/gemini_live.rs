@@ -58,8 +58,7 @@ impl TokenLifetime {
     /// The live voice page: [`TOKEN_LIFETIME`] (30 minutes) and [`NEW_SESSION_WINDOW`].
     pub const VOICE: Self = Self { expire: TOKEN_LIFETIME, new_session: NEW_SESSION_WINDOW };
     /// Sky push-to-talk: 10 minutes (bounds a misused token; a warm session is far shorter) and
-    /// the same 1-minute window (`campfire_workspace::sky`). Minted from batch 1a (`/sky/token`).
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// the same 1-minute window (`campfire_workspace::sky`). Minted by `/sky/token` (batch 1a).
     pub const SKY: Self =
         Self { expire: campfire_workspace::sky::TOKEN_LIFETIME, new_session: campfire_workspace::sky::NEW_SESSION_WINDOW };
 }
@@ -457,7 +456,6 @@ impl GeminiLive {
     /// Mints a single-use token with `setup` locked in it ([`locked_token_request`]), valid for
     /// `lifetime`: [`TokenLifetime::VOICE`] for the voice page, [`TokenLifetime::SKY`] for Sky
     /// (`/sky/token`, batch 1a).
-    #[cfg_attr(not(test), allow(dead_code))]
     pub async fn mint_locked(&self, setup: Value, lifetime: TokenLifetime, now: Timestamp) -> Result<String, MintError> {
         self.minter().mint(locked_token_request(setup, lifetime, now)).await
     }

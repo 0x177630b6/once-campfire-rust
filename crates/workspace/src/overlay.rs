@@ -2,7 +2,8 @@
 //! the application layout: its scripts, the phone tab bar (Home · Chats · Report ·
 //! Boards · Hermes; a small rail on wide screens), and, on the page of a room linked to a department, the
 //! room's cards panel ([`crate::pages::RoomPanel`]). Report opens the live voice report of the room
-//! on screen (or of the last room visited), only when that feature is on. Its stylesheet,
+//! on screen (or of the last room visited), only when that feature is on. For the people Sky
+//! push-to-talk is on for (`SKY_PTT`), also Sky's floating button ([`SkyButton`]). Its stylesheet,
 //! [`STYLESHEET`], is linked from the layout's head instead (`campfire_views::hermes::head_tags`).
 
 use askama::Template;
@@ -44,6 +45,55 @@ pub struct TabBar {
     /// The policy lets the viewer create cards: the script adds "Create a card" to the message
     /// menus only then (the server checks again).
     pub can_create: bool,
+    /// Sky's push-to-talk button, for the people `SKY_PTT` lets use it; `None` renders nothing.
+    pub sky: Option<SkyButton>,
+}
+
+/// Sky push-to-talk (docs/hermes-gemini-live.md, "Sky push-to-talk"): a `data-turbo-permanent`
+/// element (`#sky-ptt`, kept across Turbo visits so a reply goes on playing) after the tab bar, and
+/// the page's own hint in a non-permanent `<template data-sky-page>`, which the script reads on
+/// every visit (Turbo keeps the old permanent element and ignores the new page's copy).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkyButton {
+    pub token_url: String,
+    pub context_url: String,
+    pub usage_url: String,
+    /// The microphone's AudioWorklet (`voice/pcm-worklet.js`, digested).
+    pub worklet_url: String,
+    /// `hermes/sky_ptt_logic.js` and `hermes/sky_ptt.js` (digested), loaded with the tab bar.
+    pub logic_url: String,
+    pub script_url: String,
+    /// `home`, `chats`, `room`, `board`, `card`, `sky` or `other` (`campfire_workspace::sky::Screen`).
+    pub screen: &'static str,
+    pub room_id: Option<i64>,
+    /// A card's own page (`/workspace/cards/:n`).
+    pub card: Option<u64>,
+    /// Not on this page (the live voice report has its own microphone).
+    pub hidden: bool,
+    /// `SKY_WARM_SECONDS`: idle seconds before the page closes the session.
+    pub warm_seconds: u64,
+    /// Show the press timings in the reply (administrators: the spike's measurements).
+    pub debug: bool,
+}
+
+impl SkyButton {
+    /// The screen of a request path, for the page's hint: `(screen, room, card)`.
+    pub fn screen_of(path: &str) -> (&'static str, Option<i64>, Option<u64>) {
+        let path = path.split(['?', '#']).next().unwrap_or("");
+        if let Some(number) = path.strip_prefix("/workspace/cards/").and_then(|rest| rest.parse::<u64>().ok()) {
+            return ("card", None, Some(number));
+        }
+        if let Some(room) = room_page(path) {
+            return ("room", Some(room), None);
+        }
+        match locate(path) {
+            (Tab::Home, _) => ("home", None, None),
+            (Tab::Board, _) => ("board", None, None),
+            (Tab::Hermes, _) => ("sky", None, None),
+            (Tab::Chats, room) => ("chats", room, None),
+            (Tab::Other, _) => ("other", None, None),
+        }
+    }
 }
 
 /// The workspace's stylesheet (crates/assets/overrides), linked from the layout's head on the pages
@@ -121,7 +171,65 @@ mod tests {
             report_icon: "/assets/headset-1.svg".into(),
             panel: String::new(),
             can_create: true,
+            sky: None,
         }
+    }
+
+    fn sky_button(screen: &'static str, room_id: Option<i64>, hidden: bool) -> SkyButton {
+        SkyButton {
+            token_url: "/sky/token".into(),
+            context_url: "/sky/context".into(),
+            usage_url: "/sky/usage".into(),
+            worklet_url: "/assets/voice/pcm-worklet-1.js".into(),
+            logic_url: "/assets/hermes/sky_ptt_logic-1.js".into(),
+            script_url: "/assets/hermes/sky_ptt-1.js".into(),
+            screen,
+            room_id,
+            card: None,
+            hidden,
+            warm_seconds: 120,
+            debug: false,
+        }
+    }
+
+    #[test]
+    fn renders_skys_button_once_after_the_nav() {
+        let html = TabBar { sky: Some(sky_button("room", Some(12), false)), ..bar(Tab::Chats, None) }.render().unwrap();
+        assert_eq!(html.matches(r#"id="sky-ptt""#).count(), 1, "{html}");
+        let element = html.find(r#"<div id="sky-ptt""#).unwrap();
+        assert!(html.find("</nav>").unwrap() < element, "after the tab bar");
+        assert!(html[element..].starts_with(
+            r#"<div id="sky-ptt" class="sky-ptt" data-turbo-permanent data-sky-token-url="/sky/token" data-sky-context-url="/sky/context" data-sky-usage-url="/sky/usage" data-sky-worklet-url="/assets/voice/pcm-worklet-1.js" data-sky-warm-seconds="120" data-sky-debug="false">"#
+        ), "{html}");
+        assert!(html.contains(r#"data-sky-ptt-button"#) && html.contains(r#"aria-label="Hold to talk to Sky""#));
+        assert!(
+            html.contains(r#"<template data-sky-page data-screen="room" data-room="12" data-card="" data-hidden="false"></template>"#),
+            "{html}"
+        );
+        let logic = html.find("sky_ptt_logic-1.js").unwrap();
+        assert!(logic < html.find("sky_ptt-1.js").unwrap(), "the logic module loads first");
+        assert!(html.find("workspace-1.js").unwrap() < logic);
+
+        // The voice page: no tab bar, the element still there (Turbo keeps it), hidden.
+        let voice = TabBar { show_bar: false, sky: Some(sky_button("other", None, true)), ..bar(Tab::Chats, None) }.render().unwrap();
+        assert!(!voice.contains("<nav") && voice.contains(r#"<div id="sky-ptt""#));
+        assert!(voice.contains(r#"data-hidden="true""#) && voice.contains(r#"data-sky-debug="false" hidden>"#), "{voice}");
+
+        let off = bar(Tab::Chats, None).render().unwrap();
+        assert!(!off.contains("sky-ptt") && !off.contains("data-sky"), "nothing when off: {off}");
+    }
+
+    #[test]
+    fn the_screen_of_a_path() {
+        assert_eq!(SkyButton::screen_of("/rooms/12"), ("room", Some(12), None));
+        assert_eq!(SkyButton::screen_of("/rooms/12/@34"), ("room", Some(12), None));
+        assert_eq!(SkyButton::screen_of("/rooms/12/voice"), ("chats", Some(12), None));
+        assert_eq!(SkyButton::screen_of("/workspace"), ("home", None, None));
+        assert_eq!(SkyButton::screen_of("/workspace/board?dept=x"), ("board", None, None));
+        assert_eq!(SkyButton::screen_of("/workspace/cards/57"), ("card", None, Some(57)));
+        assert_eq!(SkyButton::screen_of("/workspace/cards/new"), ("board", None, None));
+        assert_eq!(SkyButton::screen_of("/workspace/hermes"), ("sky", None, None));
+        assert_eq!(SkyButton::screen_of("/users/1"), ("other", None, None));
     }
 
     #[test]

@@ -1,0 +1,11 @@
+    <div id="sky-ptt" class="sky-ptt" data-turbo-permanent data-sky-token-url="{{ sky.token_url }}" data-sky-context-url="{{ sky.context_url }}" data-sky-usage-url="{{ sky.usage_url }}" data-sky-worklet-url="{{ sky.worklet_url }}" data-sky-warm-seconds="{{ sky.warm_seconds }}" data-sky-debug="{{ sky.debug }}"{% if sky.hidden %} hidden{% endif %}>
+      <div class="sky-ptt__stack" data-sky-stack aria-label="Sky’s replies"></div>
+      <p class="sky-ptt__cancel" data-sky-cancel-zone hidden>Release here to cancel</p>
+      <p class="sky-ptt__status for-screen-reader" role="status" data-sky-status></p>
+      <button type="button" class="sky-ptt__button" data-sky-ptt-button data-state="ready" aria-label="Hold to talk to Sky" aria-describedby="sky-ptt-tip">
+        <svg class="sky-ptt__mic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/></svg>
+        <span class="sky-ptt__bars" aria-hidden="true"><i></i><i></i><i></i></span>
+      </button>
+      <span id="sky-ptt-tip" class="sky-ptt__tip" data-sky-label>Hold to talk</span>
+    </div>
+    <template data-sky-page data-screen="{{ sky.screen }}" data-room="{% if let Some(room) = sky.room_id %}{{ room }}{% endif %}" data-card="{% if let Some(card) = sky.card %}{{ card }}{% endif %}" data-hidden="{{ sky.hidden }}"></template>

@@ -47,7 +47,7 @@ use campfire_workspace::alerts::{Delivery, To};
 use campfire_workspace::drafts::{self, Decision};
 use campfire_workspace::fizzy::{self, HttpResponse};
 use campfire_workspace::hermes::{self, Proposed};
-use campfire_workspace::overlay::{self, TabBar};
+use campfire_workspace::overlay::{self, SkyButton, TabBar};
 use campfire_workspace::pages::{self, BoardFilter, FormSource};
 use campfire_workspace::proposals::{self, Context};
 use campfire_workspace::settings::SaveError;
@@ -111,6 +111,7 @@ pub async fn start(app: &App) {
     }
     let hooks = Hooks { workspace: workspace.clone(), voice: app.gemini_live.is_some() };
     campfire_views::hermes::install_workspace_hooks(Some(Arc::new(hooks)));
+    crate::controllers::sky::start(app, &workspace);
     let config = workspace.config();
     tracing::info!(
         fizzy_url = %config.fizzy_url,
@@ -322,7 +323,7 @@ async fn broadcast_direct_room(app: &App, room: &Room) -> anyhow::Result<()> {
 }
 
 /// The rooms `user` is in, read now, for what they may see (phase 2.7).
-async fn refresh_rooms(c: &Ctx, workspace: &Workspace, user: &User) -> Result<()> {
+pub(crate) async fn refresh_rooms(c: &Ctx, workspace: &Workspace, user: &User) -> Result<()> {
     let user_id = user.id;
     let rooms = c.app().db.read(move |conn| room_ids_of(conn, user_id)).await.map_err(db_error)?;
     workspace.set_rooms_of(user_id, rooms);
@@ -349,7 +350,8 @@ async fn refresh_bots(app: &App, workspace: &Workspace) {
 
 struct Hooks {
     workspace: Arc<Workspace>,
-    /// The live voice report is on (`GEMINI_API_KEY`): the tab bar's Report opens it.
+    /// The live voice report is on (`GEMINI_API_KEY`): the tab bar's Report opens it, and Sky
+    /// push-to-talk can be (`SKY_PTT`).
     voice: bool,
 }
 
@@ -397,12 +399,39 @@ impl WorkspaceHooks for Hooks {
             report_icon: ctx.asset("headset.svg"),
             panel,
             can_create: self.workspace.may(&Act::CreateCard, &viewer),
+            sky: self.sky_button(ctx, user, path),
         };
         bar.render().unwrap_or_default()
     }
 
     fn message_html(&self, message: &campfire_views::messages::MessageView, html: &str) -> Option<String> {
         self.workspace.decorate_message(message.id, message.creator.id, html)
+    }
+}
+
+impl Hooks {
+    /// Sky's push-to-talk button, for a person `SKY_PTT` lets use it (bots never get the overlay),
+    /// while the live voice is on. Hidden on the live voice page, which has its own microphone.
+    fn sky_button(&self, ctx: &ViewContext, user: &campfire_views::CurrentUser, path: &str) -> Option<SkyButton> {
+        let config = &self.workspace.config().sky;
+        if !self.voice || !config.allows(user.id, user.administrator) {
+            return None;
+        }
+        let (screen, room_id, card) = SkyButton::screen_of(path);
+        Some(SkyButton {
+            token_url: crate::controllers::sky::TOKEN_PATH.into(),
+            context_url: crate::controllers::sky::CONTEXT_PATH.into(),
+            usage_url: crate::controllers::sky::USAGE_PATH.into(),
+            worklet_url: ctx.asset(crate::controllers::voice::WORKLET_ASSET),
+            logic_url: ctx.asset("hermes/sky_ptt_logic.js"),
+            script_url: ctx.asset("hermes/sky_ptt.js"),
+            screen,
+            room_id,
+            card,
+            hidden: path.ends_with("/voice"),
+            warm_seconds: config.warm_seconds,
+            debug: user.administrator,
+        })
     }
 }
 
@@ -458,7 +487,7 @@ fn request_on_lan(headers: &campfire_kit::HeaderMap, uri: &campfire_kit::http::U
     !config.is_public_request(hosts)
 }
 
-fn viewer(user: &User) -> Viewer {
+pub(crate) fn viewer(user: &User) -> Viewer {
     Viewer { id: user.id, name: user.name.clone(), email: user.email_address.clone(), administrator: user.is_administrator() }
 }
 

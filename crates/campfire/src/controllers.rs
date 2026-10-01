@@ -41,6 +41,8 @@ pub mod qr_code;
 pub mod rooms;
 pub mod searches;
 pub mod sessions;
+// Hermes fork: Sky push-to-talk (docs/hermes-gemini-live.md, "Sky push-to-talk").
+pub mod sky;
 pub mod unfurl_links;
 pub mod users;
 pub mod voice;
@@ -352,6 +354,10 @@ static HERMES_ROUTES: LazyLock<Vec<Route>> = LazyLock::new(|| {
         // Phase 2.6: the end-of-shift handover.
         get("/workspace/handover(.:format)", "hermes/workspace#handover", workspace::handover),
         post("/workspace/handover(.:format)", "hermes/workspace#post_handover", workspace::post_handover),
+        // Sky push-to-talk, batch 1a; 404 while SKY_PTT is off.
+        post("/sky/token(.:format)", "hermes/sky#token", sky::token),
+        post("/sky/context(.:format)", "hermes/sky#context", sky::context),
+        post("/sky/usage(.:format)", "hermes/sky#usage", sky::usage),
     ]
 });
 

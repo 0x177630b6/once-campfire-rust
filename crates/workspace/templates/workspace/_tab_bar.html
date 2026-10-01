@@ -1,6 +1,10 @@
 
     <script type="module" src="{{ logic_url }}"></script>
     <script type="module" src="{{ script_url }}"></script>
+{%- if let Some(sky) = sky %}
+    <script type="module" src="{{ sky.logic_url }}"></script>
+    <script type="module" src="{{ sky.script_url }}"></script>
+{%- endif %}
     <template data-ws-viewer data-ws-can-create="{{ can_create }}"></template>
 {%- if show_bar %}
     <nav class="ws-tabbar" aria-label="Workspace" data-ws-cards-url="{{ cards_url }}">
@@ -22,5 +26,8 @@
         <img class="colorize--black" aria-hidden="true" src="{{ hermes_icon }}" width="22" height="22" /><span class="ws-tab__label">Sky</span>
       </a>
     </nav>
+{%- endif %}
+{%- if let Some(sky) = sky %}
+{% include "workspace/_sky_ptt.html" %}
 {%- endif %}
 {{- panel|safe }}
