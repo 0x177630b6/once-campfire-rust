@@ -26,7 +26,7 @@
 //!   "hermes_fizzy_user_id": null,
 //!   "visibility": {"mode": "everyone", "untagged": "everyone"},
 //!   "notifications": {"enabled": true, "severities": ["critical", "high"], "department_rooms": true,
-//!                     "new_reminder_min": 15, "draft_reminder_min": 10},
+//!                     "new_reminder_min": 15, "draft_reminder_min": 10, "owner_pings": true},
 //!   "handover": {"room_id": null, "shift_ends": ["07:00", "15:00", "23:00"], "time_zone": "Europe/Paris",
 //!                "reminder": true}
 //! }
@@ -293,12 +293,15 @@ impl Policy {
         match (self, act) {
             (_, Act::Undo { for_user_id }) => duty_manager || *for_user_id == Some(actor.id),
             (_, Act::Handover) => duty_manager,
+            // Owners (decision O7): duty managers assign anyone; taking a ticket (or letting go of
+            // it) follows changing a card, so anyone under `Anyone`.
+            (_, Act::Assign { own: false }) => duty_manager,
             (Policy::Anyone, _) => true,
             (_, _) if duty_manager => true,
             (Policy::DutyManagersOnly, _) => false,
             (Policy::AuthorOrDutyManager, Act::ConfirmDraft { reporter_id }) => *reporter_id == Some(actor.id),
             (Policy::AuthorOrDutyManager, Act::CreateCard | Act::Comment) => true,
-            (Policy::AuthorOrDutyManager, Act::ChangeCard) => false,
+            (Policy::AuthorOrDutyManager, Act::ChangeCard | Act::Assign { .. }) => false,
         }
     }
 }
@@ -321,6 +324,12 @@ pub enum Act {
     },
     /// Prepare and post the end-of-shift handover (phase 2.6): duty managers, whatever the policy.
     Handover,
+    /// Change a card's owner. `own`: it only concerns the actor (take the ticket, or remove
+    /// themselves as its owner): as [`Act::ChangeCard`]. Otherwise (assign someone else, remove
+    /// someone): duty managers only, whatever the policy.
+    Assign {
+        own: bool,
+    },
 }
 
 impl Act {
@@ -332,6 +341,7 @@ impl Act {
             }
             (Act::Undo { .. }, _) => "Only duty managers and the person it was done for can undo this.",
             (Act::Handover, _) => "Only duty managers prepare and post the handover.",
+            (Act::Assign { own: false }, _) => "Only duty managers can give a ticket to someone else or remove its owner.",
             (_, _) => "Only duty managers can do this.",
         }
     }
@@ -945,6 +955,20 @@ mod tests {
         assert!(invalid.0.contains("Fizzy user id"));
         let blank = Settings { hermes_fizzy_user_id: Some("  ".into()), ..Settings::default() }.validated().unwrap();
         assert_eq!(blank.hermes_fizzy_user_id, None);
+    }
+
+    #[test]
+    fn duty_managers_assign_anyone_and_anyone_may_take_a_ticket_under_anyone() {
+        let (member, manager) = (viewer(1, false), viewer(3, false));
+        let (take, assign) = (Act::Assign { own: true }, Act::Assign { own: false });
+        for policy in Policy::ALL {
+            let settings = Settings { duty_managers: Some(vec![3]), confirm_policy: policy, ..Settings::default() };
+            assert!(settings.permits(&take, &manager) && settings.permits(&assign, &manager), "{policy:?}");
+            assert!(!settings.permits(&assign, &member), "{policy:?}: never someone else's, even under `anyone`");
+            assert_eq!(settings.permits(&take, &member), policy == Policy::Anyone, "{policy:?}: as changing a card");
+            assert_eq!(settings.permits(&take, &member), settings.permits(&Act::ChangeCard, &member), "{policy:?}");
+        }
+        assert!(assign.refusal(Policy::Anyone).contains("someone else"));
     }
 
     #[test]

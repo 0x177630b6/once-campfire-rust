@@ -188,6 +188,12 @@ async fn load_directory(app: &App, workspace: &Workspace) {
             let mut directory = campfire_workspace::Directory::default();
             for user in User::active_ordered_without_bots(conn)? {
                 directory.people.insert(user.id, (user.name.clone(), user.is_administrator()));
+                // Owner pings find a ticket's Fizzy owner by email address.
+                if let Some(email) =
+                    user.email_address.as_deref().map(|email| email.trim().to_lowercase()).filter(|email| !email.is_empty())
+                {
+                    directory.emails.insert(user.id, email);
+                }
             }
             for room in Room::all(conn)? {
                 let name = room.name.clone().filter(|name| !name.trim().is_empty()).unwrap_or_else(|| format!("Room {}", room.id));
@@ -208,9 +214,11 @@ async fn load_directory(app: &App, workspace: &Workspace) {
     }
 }
 
-/// Posts the alerts the last poll found (phase 2.5), as Hermes's bot: a person's in their direct
-/// room with the bot (created if needed), a notice in its room. Like a bot's reply to a webhook
-/// (`integrations::jobs`): `Message::create` (which queues Campfire's Web Push), then the broadcast.
+/// Posts the alerts the last poll found (phase 2.5), and owner pings, as Hermes's bot: a person's in
+/// their direct room with the bot (created if needed), a notice in its room. Like a bot's reply to a
+/// webhook (`integrations::jobs`): `Message::create` (which queues Campfire's Web Push), then the
+/// broadcast. Each alert is recorded as sent only once its messages are posted; one that couldn't
+/// be is tried again after the next poll (`Workspace::settle_alerts`).
 async fn deliver_alerts(app: &App, workspace: &Workspace) {
     let fallback = app.config.gemini_live.as_ref().and_then(|live| live.voice_bot.clone());
     let bot_id = workspace.hermes_bot_id(fallback.as_deref());
@@ -222,11 +230,23 @@ async fn deliver_alerts(app: &App, workspace: &Workspace) {
         }
     };
     let Some(bot_id) = bot_id else { return };
-    for delivery in deliveries {
-        match post_alert(app, bot_id, &delivery).await {
-            Ok(message_id) => tracing::info!(to = ?delivery.to, message_id, what = %delivery.summary, "workspace alert sent"),
-            Err(error) => tracing::warn!(%error, to = ?delivery.to, "a workspace alert couldn't be sent"),
+    let mut posted = Vec::with_capacity(deliveries.len());
+    for delivery in &deliveries {
+        match post_alert(app, bot_id, delivery).await {
+            Ok(message_id) => {
+                tracing::info!(to = ?delivery.to, message_id, what = %delivery.summary, "workspace alert sent");
+                posted.push(true);
+            }
+            Err(error) => {
+                tracing::warn!(%error, to = ?delivery.to, "a workspace alert couldn't be sent; trying again after the next poll");
+                posted.push(false);
+            }
         }
+    }
+    let outcomes: Vec<(&Delivery, bool)> = deliveries.iter().zip(posted).collect();
+    let given_up = workspace.settle_alerts(&outcomes);
+    if given_up > 0 {
+        tracing::warn!(given_up, "workspace alerts given up after repeated failures to post them");
     }
 }
 
@@ -657,6 +677,9 @@ pub async fn change_card(c: &mut Ctx) -> Result {
     let user = require_current_user(c)?.clone();
     let number = card_number(c)?;
     let kind = c.params.get("change").and_then(Param::as_str).unwrap_or("").to_string();
+    if kind == "owner" {
+        return change_owner(c, workspace, user, number).await;
+    }
     let change = match Change::parse(&kind, &c.request_params.to_json(), &workspace.settings()) {
         None => return Err(Error::NotFound),
         Some(Err(error)) => return action_error(c, &error),
@@ -665,6 +688,38 @@ pub async fn change_card(c: &mut Ctx) -> Result {
     refresh_rooms(c, &workspace, &user).await?;
     let (http, viewer) = (FizzyHttp::new(), viewer(&user));
     if let Err(error) = workspace.change_card(&http, &viewer, number, change).await {
+        return action_error(c, &error);
+    }
+    let sheet = match workspace.card_sheet_with(&http, &viewer, number, wants_all_comments(c)).await {
+        Err(ActionError::Busy(_)) => workspace.card_sheet(&http, &viewer, number).await,
+        sheet => sheet,
+    };
+    let sheet = match sheet {
+        Ok(mut sheet) => {
+            log_truncated(&sheet);
+            sheet.fizzy_links = workspace.fizzy_links(&viewer, on_lan(c, &workspace));
+            Some(sheet.render().map_err(Error::internal)?)
+        }
+        Err(_) => None,
+    };
+    c.json(StatusCode::OK, &json!({ "number": number, "sheet": sheet, "chip": workspace.chip_for(&viewer, number) }))
+}
+
+/// `POST /workspace/cards/:number/owner[?comments=all]` `{"owner": "me" | "none" | "<user id>"}`:
+/// the sheet's owner control (`campfire_workspace::owners`), answered like the other changes. The
+/// owner pings it calls for are posted at once, in the background.
+async fn change_owner(c: &mut Ctx, workspace: Arc<Workspace>, user: User, number: u64) -> Result {
+    let target = match campfire_workspace::owners::OwnerTarget::parse(&c.request_params.to_json()) {
+        Ok(target) => target,
+        Err(error) => return action_error(c, &error),
+    };
+    refresh_rooms(c, &workspace, &user).await?;
+    let (http, viewer) = (FizzyHttp::new(), viewer(&user));
+    let result = workspace.set_owner(&http, &viewer, number, target).await;
+    // Pings queued even by a half-done change (the card's owners did change).
+    let (app, pinging) = (c.app().clone(), workspace.clone());
+    tokio::spawn(async move { deliver_alerts(&app, &pinging).await });
+    if let Err(error) = result {
         return action_error(c, &error);
     }
     let sheet = match workspace.card_sheet_with(&http, &viewer, number, wants_all_comments(c)).await {
@@ -720,6 +775,7 @@ pub async fn settings(c: &mut Ctx) -> Result {
         workspace.settings_store().load_error(),
     );
     view.hermes_user_learned = workspace.fizzy_users().hermes;
+    view.without_fizzy_user = workspace.people_without_fizzy_user();
     view.load_warning = workspace.settings_store().load_warning();
     let content = view.render().map_err(Error::internal)?;
     page(c, StatusCode::OK, "Workspace settings", content).await

@@ -15,8 +15,14 @@
 //! - the **handover** (phase 2.6): at each shift end, a reminder to the duty managers, when a
 //!   handover room is set.
 //!
+//! - a ticket's **owner** changed ([`crate::owners`]): to the person concerned.
+//!
 //! What was sent is kept in `<CAMPFIRE_STORAGE_PATH>/hermes/notified.json` ([`NotifiedStore`]), so
-//! nothing is sent twice, restarts included; and the **first poll after a start alerts on nothing**:
+//! nothing is sent twice, restarts included. An alert is recorded there once its messages are
+//! posted ([`crate::Workspace::settle_alerts`]); one that couldn't be posted is tried again after
+//! the next poll, to the recipients who missed it, [`MAX_ATTEMPTS`] times in all. The **first poll
+//! after a start alerts on nothing** (owner pings excepted: they compare with the owners known
+//! before the restart):
 //! whatever would alert then is recorded as sent without sending it. Likewise while alerts are off:
 //! what would be sent is recorded, not sent, so turning them back on sends nothing stale; and a
 //! reminder is sent only while it's recently due (3 times its delay after it fell due, 10 minutes
@@ -26,7 +32,7 @@
 //! follow the visibility settings (phase 2.7). Delivery is the app's (the bot's direct room with each
 //! person, so Campfire's own Web Push applies).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -38,6 +44,7 @@ use crate::chips::card_link;
 use crate::config::WorkspaceConfig;
 use crate::fizzy::{Card, CardState, Severity};
 use crate::html::escape;
+use crate::owners::{KnownOwners, OwnerChange, OwnerPing};
 use crate::proposals::{Proposal, Status};
 use crate::settings::{Settings, SettingsError};
 use crate::visibility::Directory;
@@ -74,6 +81,10 @@ pub struct Notifications {
     /// A proposal waiting this many minutes: a reminder to its person, then as long again later to
     /// the duty managers (0: none).
     pub draft_reminder_min: u32,
+    /// Owner pings ([`crate::owners`]): a ticket's new owner, its removed owner and, on a
+    /// reassignment, its previous owner get a direct message from Sky. Only reaches people who
+    /// have both a Fizzy user and a Campfire user with the same email address.
+    pub owner_pings: bool,
 }
 
 impl Default for Notifications {
@@ -84,6 +95,7 @@ impl Default for Notifications {
             department_rooms: true,
             new_reminder_min: 15,
             draft_reminder_min: 10,
+            owner_pings: true,
         }
     }
 }
@@ -129,7 +141,29 @@ pub enum EventKind {
     ProposalWaiting { id: String, managers: bool, minutes: u32 },
     /// A shift ended: the handover is due.
     HandoverDue { end: Timestamp },
+    /// A ticket's owner changed ([`crate::owners`]): to the person it's about.
+    Owner(OwnerPing),
 }
+
+/// An event waiting to be delivered, and to whom (`only`: a retry, to the recipients whose message
+/// couldn't be posted).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Pending {
+    pub event: Event,
+    pub only: Option<BTreeSet<To>>,
+    /// Deliveries tried so far.
+    pub attempts: u32,
+}
+
+impl Pending {
+    pub fn new(event: Event) -> Self {
+        Self { event, only: None, attempts: 0 }
+    }
+}
+
+/// An event whose messages couldn't be posted is tried again at the next polls, this many times in
+/// all, then given up (and recorded as sent: it's stale by then).
+pub const MAX_ATTEMPTS: u32 = 10;
 
 /// What should alert now, comparing `previous` and `next`. `primed_at`: when the first poll since
 /// the start ran (`None` during it: every card counts as new, to be recorded without being sent).
@@ -229,6 +263,8 @@ pub struct Delivery {
     pub html: String,
     /// What it says, for the log (no card title).
     pub summary: String,
+    /// The events it carries: recorded as sent once it's posted ([`crate::Workspace::settle_alerts`]).
+    pub keys: Vec<String>,
 }
 
 /// What the planner needs besides the events.
@@ -248,6 +284,12 @@ type Rank = (u8, std::cmp::Reverse<Option<Severity>>);
 /// The messages for `events`: one per person or room, whatever the number of events. In each, new
 /// serious incidents come first (critical, then high…), then the reminders, before the 10-line cap.
 pub fn plan(events: &[Event], plan: &Plan<'_>) -> Vec<Delivery> {
+    let pending: Vec<Pending> = events.iter().cloned().map(Pending::new).collect();
+    plan_pending(&pending, plan)
+}
+
+/// [`plan`], each event to its recipients, or only to those of [`Pending::only`].
+pub fn plan_pending(events: &[Pending], plan: &Plan<'_>) -> Vec<Delivery> {
     let settings = plan.settings;
     let managers = plan.directory.duty_managers(settings);
     let sees = |person: i64, tags: &[String]| {
@@ -256,13 +298,18 @@ pub fn plan(events: &[Event], plan: &Plan<'_>) -> Vec<Delivery> {
             .is_some_and(|viewer| settings.card_visible(tags, &settings.audience(&viewer, plan.directory.rooms_of(person))))
     };
     // Each line with its rank: new serious incidents first, the most severe first, then reminders.
-    let mut lines: BTreeMap<To, Vec<(Rank, String)>> = BTreeMap::new();
-    for event in events {
+    let mut lines: BTreeMap<To, Vec<(Rank, String, String)>> = BTreeMap::new();
+    for pending in events {
+        let event = &pending.event;
         let rank = match &event.kind {
             EventKind::Raised { severity, .. } => (0, std::cmp::Reverse(Some(*severity))),
             _ => (1, std::cmp::Reverse(None)),
         };
-        let mut add = |to: To, line: String| lines.entry(to).or_default().push((rank, line));
+        let mut add = |to: To, line: String| {
+            if pending.only.as_ref().is_none_or(|only| only.contains(&to)) {
+                lines.entry(to).or_default().push((rank, line, event.key.clone()));
+            }
+        };
         match &event.kind {
             EventKind::Raised { card, severity, from } => {
                 let Some(card) = plan.snapshot.card(*card) else { continue };
@@ -359,14 +406,28 @@ pub fn plan(events: &[Event], plan: &Plan<'_>) -> Vec<Delivery> {
                     add(To::Person(*person), line.clone());
                 }
             }
+            EventKind::Owner(ping) => {
+                let Some(person) = ping.person.email.as_deref().and_then(|email| plan.directory.person_by_email(email)) else { continue };
+                if ping.actor_user == Some(person) {
+                    continue;
+                }
+                let Some(card) = plan.snapshot.card(ping.card) else { continue };
+                add(To::Person(person), owner_line(ping, card, sees(person, &card.tags)));
+            }
         }
     }
     lines
         .into_iter()
         .map(|(to, mut lines)| {
             // Stable: in the order they were found within a rank.
-            lines.sort_by_key(|(rank, _)| *rank);
-            let lines: Vec<String> = lines.into_iter().map(|(_, line)| line).collect();
+            lines.sort_by_key(|(rank, ..)| *rank);
+            let mut keys: Vec<String> = Vec::new();
+            for (_, _, key) in &lines {
+                if !keys.contains(key) {
+                    keys.push(key.clone());
+                }
+            }
+            let lines: Vec<String> = lines.into_iter().map(|(_, line, _)| line).collect();
             let count = lines.len();
             let mut html = String::new();
             if count > 1 {
@@ -378,9 +439,40 @@ pub fn plan(events: &[Event], plan: &Plan<'_>) -> Vec<Delivery> {
             if count > MAX_LINES {
                 html.push_str(&format!(r#"<p>… and {} more: see <a href="/workspace">Home</a>.</p>"#, count - MAX_LINES));
             }
-            Delivery { to, html, summary: format!("{count} alert(s)") }
+            Delivery { to, html, summary: format!("{count} alert(s)"), keys }
         })
         .collect()
+}
+
+/// An owner ping's line ([`crate::owners`]). `visible`: the recipient may see the card (else no
+/// title and no link: the sheet would answer 404).
+fn owner_line(ping: &OwnerPing, card: &Card, visible: bool) -> String {
+    let number = card.number;
+    let ticket = if visible { format!(r#"<a href="{}">#{number}</a>"#, crate::pages::sheet_path(number)) } else { format!("#{number}") };
+    let actor = ping.actor.as_deref().map(escape);
+    match &ping.change {
+        OwnerChange::Added => {
+            let lead = match &actor {
+                Some(actor) => format!("<strong>{actor} made you owner</strong> of #{number}"),
+                None => format!("<strong>You’re now the owner</strong> of #{number}"),
+            };
+            if visible {
+                format!(r#"{lead} — {}<br><a href="{}">Open ticket #{number}</a>"#, escape(title(card)), crate::pages::sheet_path(number))
+            } else {
+                format!("{lead}. You can’t open it in Meshduty: ask a duty manager.")
+            }
+        }
+        OwnerChange::Removed { now, taken } => {
+            let names = escape(&now.join(", "));
+            match (&actor, now.is_empty(), taken) {
+                (Some(actor), false, true) => format!("<strong>{actor} took over</strong> {ticket} from you."),
+                (Some(actor), false, false) => format!("<strong>{actor} gave</strong> {ticket} <strong>to {names}</strong>."),
+                (None, false, _) => format!("{ticket} <strong>now belongs to {names}</strong>."),
+                (Some(actor), true, _) => format!("<strong>{actor} removed you as owner</strong> of {ticket}."),
+                (None, true, _) => format!("<strong>You’re no longer the owner</strong> of {ticket}."),
+            }
+        }
+    }
 }
 
 /// The tags that decide who may see a proposal: its card's, or those it would give a new card.
@@ -426,6 +518,10 @@ struct NotifiedFile {
     handover_posted_at: Option<Timestamp>,
     #[serde(default)]
     handover_posted_by: Option<String>,
+    /// The open cards' owners, as last known (owner pings, [`crate::owners`]); absent until the
+    /// first poll with them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    owners: Option<KnownOwners>,
 }
 
 /// `notified.json`: what was sent (kept 14 days), and when the last handover was posted.
@@ -458,6 +554,46 @@ impl NotifiedStore {
 
     pub fn contains(&self, key: &str) -> bool {
         self.state.lock().unwrap_or_else(|e| e.into_inner()).sent.contains_key(key)
+    }
+
+    /// Records events as sent (one write), without sending them: the first poll, alerts off, and
+    /// messages posted ([`crate::Workspace::settle_alerts`]).
+    pub fn record<'a>(&self, keys: impl IntoIterator<Item = &'a str>, now: Timestamp) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let before = state.sent.len();
+        for key in keys {
+            state.sent.entry(key.to_string()).or_insert(now);
+        }
+        if state.sent.len() == before {
+            return;
+        }
+        state.sent.retain(|_, at| now.duration_since(*at) <= KEEP_SENT);
+        self.save(&state);
+    }
+
+    /// The open cards' owners, as last known.
+    pub fn owners(&self) -> Option<KnownOwners> {
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).owners.clone()
+    }
+
+    /// Compares with the known owners and replaces them, in one go (a change from the sheet,
+    /// [`NotifiedStore::update_owners`], can't slip in between). Written only when they changed.
+    pub fn swap_owners<T>(&self, compare: impl FnOnce(Option<&KnownOwners>) -> (T, KnownOwners)) -> T {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let (found, owners) = compare(state.owners.as_ref());
+        if state.owners.as_ref() != Some(&owners) {
+            state.owners = Some(owners);
+            self.save(&state);
+        }
+        found
+    }
+
+    /// Changes the known owners (nothing while none are known: the next poll records them).
+    pub fn update_owners(&self, change: impl FnOnce(&mut KnownOwners)) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(owners) = state.owners.as_mut() else { return };
+        change(owners);
+        self.save(&state);
     }
 
     /// Keeps only the events not sent yet, and records them as sent (one write).

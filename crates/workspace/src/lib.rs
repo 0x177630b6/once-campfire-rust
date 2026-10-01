@@ -15,7 +15,8 @@
 //!   did, direct or through Campfire), [`proposals`] (Hermes asks, Campfire decides by the dial) and
 //!   [`hermes`] (the Hermes tab, proposals' decisions, undo); [`alerts`] (critical incidents and
 //!   reminders, as Hermes's direct messages), [`handover`] (the end-of-shift summary, in
-//!   [`shifts`]) and [`visibility`] (restricted departments' cards).
+//!   [`shifts`]) and [`visibility`] (restricted departments' cards);
+//! - [`owners`]: owner pings, and the sheet's "Take it" / "Assign to…" / "Remove".
 //!
 //! This crate knows nothing of Campfire's own crates, so upstream merges can't break it and its
 //! tests run anywhere (`cargo test -p campfire_workspace`). The app plugs it in through a thin
@@ -37,6 +38,7 @@ pub mod home;
 mod html;
 pub mod journal;
 pub mod overlay;
+pub mod owners;
 pub mod pages;
 pub mod proposals;
 pub mod settings;
@@ -107,8 +109,11 @@ pub struct Workspace {
     /// [`Workspace::remember`] puts what Campfire writes or reads into that one at once, and a card
     /// created or raised through Campfire must still count as new or raised at the next poll.
     alerts_seen: Mutex<Option<Arc<Snapshot>>>,
-    /// Alerts detected and claimed, waiting for the app to deliver them.
-    outbox: Mutex<Vec<alerts::Event>>,
+    /// Alerts detected, not sent yet, waiting for the app to deliver them (and failed ones, to try
+    /// again).
+    outbox: Mutex<Vec<alerts::Pending>>,
+    /// Alerts the app took and is posting: recorded as sent once posted ([`Workspace::settle_alerts`]).
+    in_flight: Mutex<BTreeMap<String, alerts::Pending>>,
     clock: Box<dyn Fn() -> Timestamp + Send + Sync>,
     /// "Show earlier comments" reads at once ([`actions::ALL_COMMENTS_AT_ONCE`]): each walks up to a
     /// dozen Fizzy pages, and the app is reachable from the internet.
@@ -165,6 +170,7 @@ impl Workspace {
             alerts_primed: Mutex::new(None),
             alerts_seen: Mutex::new(None),
             outbox: Mutex::new(Vec::new()),
+            in_flight: Mutex::new(BTreeMap::new()),
             clock: Box::new(Timestamp::now),
             all_comments: tokio::sync::Semaphore::new(actions::ALL_COMMENTS_AT_ONCE),
         }
@@ -331,10 +337,11 @@ impl Workspace {
         result.map(|_| ())
     }
 
-    /// Phase 2.5: what should alert after this poll, claimed in `notified.json` (so never twice)
-    /// and queued for the app ([`Workspace::take_alerts`]). The first poll since the start, and any
-    /// poll while alerts are off, only records. Compared with the previous poll's picture (never the live one, which
-    /// [`Workspace::remember`] updates between polls).
+    /// Phase 2.5: what should alert after this poll, queued for the app ([`Workspace::take_alerts`]),
+    /// unless sent already. The first poll since the start, and any poll while alerts are off, only
+    /// records. Compared with the previous poll's picture (never the live one, which
+    /// [`Workspace::remember`] updates between polls). Owner pings ([`owners`]) compare with the
+    /// owners known in `notified.json`, restarts included, so the first poll sends them too.
     fn detect_alerts(&self, next: &Arc<Snapshot>, now: Timestamp) {
         let mut primed = self.alerts_primed.lock().unwrap_or_else(|e| e.into_inner());
         let mut seen = self.alerts_seen.lock().unwrap_or_else(|e| e.into_inner());
@@ -343,20 +350,65 @@ impl Workspace {
         // them back on doesn't send what happened meanwhile.
         let mut settings = (*self.settings()).clone();
         let enabled = std::mem::replace(&mut settings.notifications.enabled, true);
-        let events = alerts::detect(&previous, next, &settings, &self.proposals.all(), now, *primed);
-        let fresh = self.notified.claim(events, now);
+        let events = self.unsent(alerts::detect(&previous, next, &settings, &self.proposals.all(), now, *primed));
+        let actors = owners::Actors { hermes: self.hermes_fizzy_user(), workspace: self.fizzy_users().workspace };
+        let pings = self.unsent(self.notified.swap_owners(|known| owners::detect(known, next, &actors, now)));
+        let (mut send, mut record) = (Vec::new(), Vec::new());
         match *primed {
-            None => *primed = Some(now),
-            Some(_) if enabled => self.outbox.lock().unwrap_or_else(|e| e.into_inner()).extend(fresh),
-            Some(_) => {}
+            None => {
+                *primed = Some(now);
+                record.extend(events);
+            }
+            Some(_) if enabled => send.extend(events),
+            Some(_) => record.extend(events),
+        }
+        if enabled && settings.notifications.owner_pings {
+            send.extend(pings);
+        } else {
+            record.extend(pings);
+        }
+        self.notified.record(record.iter().map(|event| event.key.as_str()), now);
+        self.outbox.lock().unwrap_or_else(|e| e.into_inner()).extend(send.into_iter().map(alerts::Pending::new));
+    }
+
+    /// The events not sent yet, nor waiting to be, nor being posted.
+    fn unsent(&self, events: Vec<alerts::Event>) -> Vec<alerts::Event> {
+        let outbox = self.outbox.lock().unwrap_or_else(|e| e.into_inner());
+        let in_flight = self.in_flight.lock().unwrap_or_else(|e| e.into_inner());
+        let mut keys = BTreeSet::new();
+        events
+            .into_iter()
+            .filter(|event| {
+                !self.notified.contains(&event.key)
+                    && !in_flight.contains_key(&event.key)
+                    && !outbox.iter().any(|pending| pending.event.key == event.key)
+                    && keys.insert(event.key.clone())
+            })
+            .collect()
+    }
+
+    /// Owner pings from a change made in the app: queued at once (or recorded while they're off).
+    pub(crate) fn queue_owner_events(&self, events: Vec<alerts::Event>) {
+        let events = self.unsent(events);
+        let notifications = &self.settings().notifications;
+        if notifications.enabled && notifications.owner_pings {
+            self.outbox.lock().unwrap_or_else(|e| e.into_inner()).extend(events.into_iter().map(alerts::Pending::new));
+        } else {
+            self.notified.record(events.iter().map(|event| event.key.as_str()), self.now());
         }
     }
 
-    /// The alerts detected since the last call, as messages: one per person or room, posted by
-    /// `bot_id` (Hermes's bot). `None`: no bot to post them; they're dropped (and counted).
+    /// The alerts waiting, as messages: one per person or room, posted by `bot_id` (Hermes's bot).
+    /// They're in flight until the app says how posting them went ([`Workspace::settle_alerts`]);
+    /// an alert that ends up with nobody to tell is recorded as sent now. `None`: no bot to post
+    /// them; they're dropped, recorded as sent (and counted).
     pub fn take_alerts(&self, bot_id: Option<i64>) -> Result<Vec<alerts::Delivery>, usize> {
-        let events = std::mem::take(&mut *self.outbox.lock().unwrap_or_else(|e| e.into_inner()));
-        let Some(bot_id) = bot_id else { return if events.is_empty() { Ok(Vec::new()) } else { Err(events.len()) } };
+        let pending = std::mem::take(&mut *self.outbox.lock().unwrap_or_else(|e| e.into_inner()));
+        let now = self.now();
+        let Some(bot_id) = bot_id else {
+            self.notified.record(pending.iter().map(|pending| pending.event.key.as_str()), now);
+            return if pending.is_empty() { Ok(Vec::new()) } else { Err(pending.len()) };
+        };
         let (snapshot, settings, directory, proposals) = (self.snapshot(), self.settings(), self.directory(), self.proposals.all());
         let plan = alerts::Plan {
             config: &self.config,
@@ -366,7 +418,54 @@ impl Workspace {
             proposals: &proposals,
             bot_id,
         };
-        Ok(alerts::plan(&events, &plan))
+        let deliveries = alerts::plan_pending(&pending, &plan);
+        let mut in_flight = self.in_flight.lock().unwrap_or_else(|e| e.into_inner());
+        let mut nobody = Vec::new();
+        for pending in pending {
+            if deliveries.iter().any(|delivery| delivery.keys.contains(&pending.event.key)) {
+                in_flight.insert(pending.event.key.clone(), pending);
+            } else {
+                nobody.push(pending.event.key);
+            }
+        }
+        drop(in_flight);
+        self.notified.record(nobody.iter().map(String::as_str), now);
+        Ok(deliveries)
+    }
+
+    /// How posting the messages [`Workspace::take_alerts`] gave went (`true`: posted). An alert all
+    /// of whose messages were posted is recorded as sent; one that failed somewhere waits for the
+    /// next poll, for those recipients only, up to [`alerts::MAX_ATTEMPTS`] tries. Returns how many
+    /// alerts were given up.
+    pub fn settle_alerts(&self, outcomes: &[(&alerts::Delivery, bool)]) -> usize {
+        let now = self.now();
+        let mut in_flight = self.in_flight.lock().unwrap_or_else(|e| e.into_inner());
+        let mut sent = Vec::new();
+        let mut retry = Vec::new();
+        let mut given_up = 0;
+        let keys: BTreeSet<&String> = outcomes.iter().flat_map(|(delivery, _)| delivery.keys.iter()).collect();
+        for key in keys {
+            let Some(mut pending) = in_flight.remove(key) else { continue };
+            let failed: BTreeSet<alerts::To> = outcomes
+                .iter()
+                .filter(|(delivery, posted)| !posted && delivery.keys.contains(key))
+                .map(|(delivery, _)| delivery.to)
+                .collect();
+            pending.attempts += 1;
+            if failed.is_empty() {
+                sent.push(key.clone());
+            } else if pending.attempts >= alerts::MAX_ATTEMPTS {
+                given_up += 1;
+                sent.push(key.clone());
+            } else {
+                pending.only = Some(failed);
+                retry.push(pending);
+            }
+        }
+        drop(in_flight);
+        self.notified.record(sent.iter().map(String::as_str), now);
+        self.outbox.lock().unwrap_or_else(|e| e.into_inner()).extend(retry);
+        given_up
     }
 
     pub fn notified(&self) -> &alerts::NotifiedStore {
