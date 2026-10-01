@@ -96,7 +96,7 @@ fn log_write(record: &WriteRecord) {
 }
 
 /// Installs the fork's page assets (its stylesheets and, unless `CAMPFIRE_THEME=off`, the theme:
-/// docs/hermes-theme.md) and the product's branding (MeshDuty); then loads the bots, installs the render hooks and starts polling Fizzy;
+/// docs/hermes-theme.md) and the product's branding (Meshduty); then loads the bots, installs the render hooks and starts polling Fizzy;
 /// while the workspace is off, makes sure no hooks are installed (so pages render exactly as
 /// upstream's, plus the page assets' links in the head).
 pub async fn start(app: &App) {
@@ -1010,9 +1010,9 @@ pub async fn bot_propose(c: &mut Ctx) -> Result {
             tracing::info!(proposal = %proposal.id, action = %proposal.action, duplicate, "Hermes proposal waiting for a confirmation");
             let mut reply = hermes::proposal_json(&proposal);
             reply["message"] = json!(if proposal.draft_message_id.is_some() {
-                "Waiting for a confirmation in MeshDuty (expires in 24 h): the draft is in the room."
+                "Waiting for a confirmation in Meshduty (expires in 24 h): the draft is in the room."
             } else {
-                "Waiting for a confirmation in MeshDuty's Sky tab (expires in 24 h)."
+                "Waiting for a confirmation in Meshduty's Sky tab (expires in 24 h)."
             });
             reply["duplicate"] = json!(duplicate);
             c.json(StatusCode::ACCEPTED, &reply)
@@ -1049,7 +1049,7 @@ fn refuse_other_bots(c: &mut Ctx, workspace: &Workspace, bot: &User) -> Option<R
     Some(c.json(
         StatusCode::FORBIDDEN,
         &json!({ "status": "refused", "error": "not_hermes_bot",
-                 "message": "MeshDuty takes proposals from Sky's bot only (HERMES_BOT is unset or names another bot)." }),
+                 "message": "Meshduty takes proposals from Sky's bot only (HERMES_BOT is unset or names another bot)." }),
     ))
 }
 

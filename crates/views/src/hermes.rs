@@ -9,7 +9,7 @@
 //! - [`head_tags`]: the fork's stylesheets and the product theme, linked from the layout's head
 //!   (docs/hermes-theme.md); nothing until the app installs [`PageAssets`] at boot.
 //! - [`color_scheme_switch`]: the Light / Dark / System control on the person's profile, with the theme on.
-//! - [`product_name`] and the other branding seams: "MeshDuty" where upstream shows "Campfire", the
+//! - [`product_name`] and the other branding seams: "Meshduty" where upstream shows "Campfire", the
 //!   browser chrome's colours, the desktop corner logo (docs/hermes-theme.md, "Branding").
 //!
 //! Their styles are `hermes/hermes.css` (crates/assets/overrides), linked by [`head_tags`].
@@ -158,7 +158,7 @@ pub const THEME_SCRIPT: &str = include_str!("theme_script.js");
 pub struct PageAssets {
     /// The product theme (`CAMPFIRE_THEME`, on by default).
     pub theme: bool,
-    /// The product's own name, MeshDuty, wherever upstream says "Campfire" ([`product_name`]). The
+    /// The product's own name, Meshduty, wherever upstream says "Campfire" ([`product_name`]). The
     /// app always sets it; the views' tests leave it out to compare upstream's bytes.
     pub brand: bool,
 }
@@ -229,7 +229,7 @@ pub fn color_scheme_switch(_ctx: &ViewContext) -> String {
 // --- Branding: the product's name, the browser chrome, the corner logo ----------------------------
 
 /// The product's name, shown wherever upstream shows "Campfire" (owner decision, 1 Oct 2026).
-pub const PRODUCT_NAME: &str = "MeshDuty";
+pub const PRODUCT_NAME: &str = "Meshduty";
 /// Upstream's name, which the views keep until the app installs the branding (goldens).
 pub const UPSTREAM_PRODUCT_NAME: &str = "Campfire";
 /// The assistant (internally Hermes) as people see it.
@@ -245,6 +245,9 @@ pub const MASKABLE_ICON: &str = "hermes/icon-maskable-512.png";
 /// The default icon for iOS's home screen: full bleed (iOS rounds the corners itself and would
 /// show the plain icon's transparent corners black).
 pub const APPLE_TOUCH_ICON: &str = "hermes/apple-touch-icon.png";
+/// The default favicon: the logo drawn for 32 px (a flat fill and a larger dot, as the logo's
+/// design file has it for small sizes).
+pub const FAVICON: &str = "hermes/favicon-32.png";
 
 pub(crate) fn branded() -> bool {
     page_assets().is_some_and(|assets| assets.brand)
@@ -254,7 +257,7 @@ pub(crate) fn themed() -> bool {
     page_assets().is_some_and(|assets| assets.theme)
 }
 
-/// "MeshDuty" once the app installed the branding, else upstream's "Campfire" (the views' goldens).
+/// "Meshduty" once the app installed the branding, else upstream's "Campfire" (the views' goldens).
 pub fn product_name() -> &'static str {
     if branded() { PRODUCT_NAME } else { UPSTREAM_PRODUCT_NAME }
 }
@@ -284,6 +287,12 @@ pub fn theme_color_tags() -> String {
         light = light,
         dark = dark,
     )
+}
+
+/// The layout's favicon: the account logo as upstream, or, once branded and while no logo is
+/// uploaded, [`FAVICON`].
+pub fn favicon_url(ctx: &ViewContext) -> String {
+    if branded() && !ctx.account.has_logo { ctx.asset(FAVICON) } else { ctx.account.logo_url.clone() }
 }
 
 /// The layout's `apple-touch-icon`: the account logo as upstream, or, once branded and while no

@@ -21,7 +21,7 @@ export const MESSAGES = {
   record: "Record a voice message",
   stop: "Send the voice message",
   cancel: "Discard the recording",
-  insecure: "The microphone only works over HTTPS: open MeshDuty at an https:// address.",
+  insecure: "The microphone only works over HTTPS: open Meshduty at an https:// address.",
   unsupported: "This browser can't record a voice message.",
   micDenied: "Microphone access is blocked. Allow the microphone for this site in the browser's settings, then try again.",
   micMissing: "No microphone found on this device.",

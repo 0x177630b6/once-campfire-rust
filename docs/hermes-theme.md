@@ -1,6 +1,6 @@
 # Hermes fork: the theme layer
 
-The product's own look, "MeshDuty", and its plumbing (the "theme layer", option B of the UI redesign
+The product's own look, "Meshduty", and its plumbing (the "theme layer", option B of the UI redesign
 handbook in the Hermes repo, `docs/ui-redesign/`; the style guide and the owner's decisions on it are
 in its chapter 08). `theme.css` carries the look: fonts, a light and a dark palette, a Light / Dark /
 System switch, and the restyle of upstream's and the fork's screens, in CSS only (see "The look"
@@ -11,7 +11,7 @@ below). The plumbing gives the designer:
 - one small set of semantic tokens (`--ui-*`, `hermes/tokens.css`) that the Workspace and the voice
   features read, so a theme recolours Campfire, the Workspace and voice together;
 - template shadowing for the few screens CSS can't reach (`crates/views/templates-hermes/`);
-- the product's branding: the name MeshDuty where upstream says Campfire, the browser chrome's
+- the product's branding: the name Meshduty where upstream says Campfire, the browser chrome's
   colours, the default app icon (see "Branding" below). The assistant's name, Sky, is in the
   fork's own texts (docs/hermes-workspace.md, docs/hermes-gemini-live.md).
 
@@ -211,7 +211,7 @@ and the `--ws-*` colours onto its palette ("The look", "Mappings").
 
 The owner's style guide (Hermes repo, `docs/ui-redesign/design/`, fit and decisions in chapter 08),
 restyling what exists: nothing the guide shows that the app lacks (guest concierge, SOPs, team
-spaces, My tasks), no markup or text change in this step. The renaming (MeshDuty, Sky) and the
+spaces, My tasks), no markup or text change in this step. The renaming (Meshduty, Sky) and the
 voice page's English came next (see "Branding"). `theme.css` is laid out in five parts: fonts, palette (light,
 dark twice), mappings, upstream components grouped by the upstream file they override, the fork's
 screens.
@@ -423,8 +423,9 @@ upstream's reset stops animations under `prefers-reduced-motion`; the theme's ow
 
 ## Branding: MeshDuty and Sky
 
-Owner decisions (1 Oct 2026, handbook chapter 08): the product is **MeshDuty** wherever people see
-the app's name, and the assistant (internally Hermes) is shown as **Sky**. Only what people see
+Owner decisions (1 Oct 2026, handbook chapter 08): the product is **Meshduty** wherever people see
+the app's name (spelt with a lowercase d, as in the logo's design file; code and doc headings may
+say MeshDuty), and the assistant (internally Hermes) is shown as **Sky**. Only what people see
 changes: crate names, `hermes/` paths, CSS classes, routes, data attributes, the
 `hermes-proposal:` marker, the `note-vocale-` file prefix, environment variables and log lines
 keep their names, and the text the code matches on keeps matching (the live report's opening and
@@ -439,13 +440,14 @@ views' goldens never install it, so every seam below renders upstream's bytes th
 
 | Seam | Upstream | Branded |
 |---|---|---|
-| `product_name()` | "Campfire" | "MeshDuty": the title fallback, the first-run and Apple Messages titles, the shadowed templates' "Campfire" (sign-in footer, install and notification help, bots page, unsupported browser, empty room), the test push ("MeshDuty Test"), a new install's account name |
-| `rebrand(text)` | `text` | "Campfire" → "MeshDuty" in upstream's fixed sentences: the translation popups (7 languages), the invite link's share text, an image's alt text, the manifest's shortcut descriptions |
-| `product_trademark()` | "Campfire&trade;" | "MeshDuty" (the account and sign-in footers' version line) |
+| `product_name()` | "Campfire" | "Meshduty": the title fallback, the first-run and Apple Messages titles, the shadowed templates' "Campfire" (sign-in footer, install and notification help, bots page, unsupported browser, empty room), the test push ("Meshduty Test"), a new install's account name |
+| `rebrand(text)` | `text` | "Campfire" → "Meshduty" in upstream's fixed sentences: the translation popups (7 languages), the invite link's share text, an image's alt text, the manifest's shortcut descriptions |
+| `product_trademark()` | "Campfire&trade;" | "Meshduty" (the account and sign-in footers' version line) |
 | `theme_color_tags()` | `#ffffff` / `#000000` | with the theme: `#f4f0e8` / `#181e1b`, the theme's `--bg-surface` light and dark, so the status bar continues the page |
+| `favicon_url(ctx)` | the account logo URL | `hermes/favicon-32.png` while no logo is uploaded (the logo drawn for 32 px) |
 | `apple_touch_icon_url(ctx)` | the account logo URL | the full-bleed default `hermes/apple-touch-icon.png` while no logo is uploaded (iOS rounds icons itself and shows transparent corners black) |
-| `app_logo(ctx)` | the Campfire flame linking to once.com | the MeshDuty mark (`logos/app-icon-192.png`) linking home |
-| `Manifest` (`src/pwa.rs`) | upstream's manifest | `name` = the account's name, else MeshDuty; `short_name` MeshDuty (the home-screen label, whatever the account is called); `theme_color` and `background_color` `#f4f0e8` with the theme (the light surface: the manifest has no dark variant, and the page's metas take over once it loads; matching them avoids a colour jump); the maskable icon is `hermes/icon-maskable-512.png` unless a logo is uploaded; a MeshDuty description; no screenshots (upstream's show Campfire). `start_url` and `scope` stay `/` and no `id` is added, so installed apps stay the same app |
+| `app_logo(ctx)` | the Campfire flame linking to once.com | the Meshduty logo (`logos/app-icon-192.png`) linking home |
+| `Manifest` (`src/pwa.rs`) | upstream's manifest | `name` = the account's name, else Meshduty; `short_name` Meshduty (the home-screen label, whatever the account is called); `theme_color` and `background_color` `#f4f0e8` with the theme (the light surface: the manifest has no dark variant, and the page's metas take over once it loads; matching them avoids a colour jump); the maskable icon is `hermes/icon-maskable-512.png` unless a logo is uploaded; a Meshduty description; no screenshots (upstream's show Campfire). `start_url` and `scope` stay `/` and no `id` is added, so installed apps stay the same app |
 
 What the app's database holds is data, not code: the account's name (the sign-in legend, the
 manifest's `name`), the bots' and people's names, uploaded logos, and messages already posted
@@ -453,16 +455,27 @@ manifest's `name`), the bots' and people's names, uploaded logos, and messages a
 
 ### Default icon
 
-When no account logo is uploaded, `/account/logo` serves `logos/app-icon.png` (512) or
-`logos/app-icon-192.png`, which `crates/assets/overrides/logos/` now overrides by logical path (not
-referenced from any CSS, so no stylesheet digest changes; `tests/reference.rs` treats them as
-overrides). They are the style guide's mark: a terracotta (`#c9694a`, `--accent-400`) rounded
-square with a white "M" in Libre Caslon Text 700, on a transparent background. Two variants under
-`hermes/`: `icon-maskable-512.png` (full bleed, the M within the central 80 % safe zone) for the
-manifest's maskable entry, and `apple-touch-icon.png` (180, full bleed). An uploaded logo wins
-everywhere (favicon, touch icon, PWA icons, push icon, sign-in page). They were rendered from HTML
-with the self-hosted font in headless Chromium (`chrome-headless-shell --screenshot
---default-background-color=00000000`); to change them, render again at the same sizes.
+The owner's logo (Hermes repo, `docs/ui-redesign/Meshduty Logo.dc.html`): a geometric "M" polygon
+and a small dot in a 512 × 512 rounded square (`rx` 112). Variant **1a, "Forest · primary"**, is
+the app's: forest background (`#1f3b34`, with a `#1f3b34` → `#2d4c44` gradient at large sizes),
+the M in `#e9e4d8` (`--sidebar-ink`), the dot in `#e59a7c` (`--accent-200`). At small sizes the dot
+grows (r 22 from 48 px up, 28 at 32 px, 34 at 20 px).
+
+| File | What | Used for, while no account logo is uploaded |
+|---|---|---|
+| `logos/app-icon.png` (512), `logos/app-icon-192.png` (overrides upstream's by logical path) | 1a with the gradient, rounded corners transparent | `/account/logo`: the manifest's icons, the push icon, the sign-in page's logo, the desktop corner logo (192) |
+| `hermes/favicon-32.png` | 1a flat, dot r 28 | the favicon (`favicon_url`) |
+| `hermes/apple-touch-icon.png` (180) | 1a full bleed (iOS rounds it) | the iOS home screen (`apple_touch_icon_url`) |
+| `hermes/icon-maskable-512.png` | 1a full bleed, the M and dot scaled to 82 % around the centre (inside Android's safe-zone circle) | the manifest's maskable icon |
+
+`logos/*` aren't referenced from any stylesheet, so no CSS digest changes (`tests/reference.rs`
+treats them as overrides). An uploaded logo wins everywhere. The SVG sources are in `docs/brand/`
+(`meshduty-logo-1a-*.svg`); the PNGs were rendered from them with headless Chromium
+(`chrome-headless-shell --screenshot --default-background-color=00000000 --window-size=N,N`), so
+render again at the same sizes to change them. The design's two other variants, **1b
+"Terracotta"** (`#c9694a` square, `#fdfbf6` M, forest dot) and **1c "Paper"** (`#f4f0e8` square with
+a `#e3dccd` outline, forest M, terracotta dot), are kept there as SVG only, unused, in case the
+owner switches.
 
 Installed apps pick up a new name and icon slowly: Android refreshes the WebAPK at most about
 once a day, iOS never (remove the app from the home screen and add it again).
@@ -470,7 +483,7 @@ once a day, iOS never (remove the app from the home screen and add it again).
 ### Text
 
 - Upstream's English templates: the "Campfire"s above. Nothing else of upstream's text changes.
-- The Workspace (fork-owned): the tab bar's **Sky**, the Sky tab's title and texts, "via MeshDuty"
+- The Workspace (fork-owned): the tab bar's **Sky**, the Sky tab's title and texts, "via Meshduty"
   lines, notices, settings, alerts, drafts' hint, "Sky proposes:" in new drafts, undo and refusal
   messages (docs/hermes-workspace.md).
 - The voice features (fork-owned), now in English: the live voice page, the composer's voice-note

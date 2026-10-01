@@ -296,7 +296,7 @@ pub fn parse(body: &Value, settings: &Settings, snapshot: &Snapshot) -> Result<(
         other => {
             return Err(ActionError::invalid(
                 "unknown_action",
-                format!("MeshDuty doesn't do “{other}” for Sky (create, move, close, severity, departments, step, comment)."),
+                format!("Meshduty doesn't do “{other}” for Sky (create, move, close, severity, departments, step, comment)."),
             ));
         }
     };

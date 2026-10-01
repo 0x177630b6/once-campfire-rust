@@ -10,9 +10,9 @@ card sheet, and "Create a card from this message". **Phase 2** supervises Hermes
 after them.
 
 **Names people see** (owner decision, 1 Oct 2026; docs/hermes-theme.md, "Branding"): the product is
-**MeshDuty** and the assistant (Hermes) is **Sky**. This document keeps the internal names: the
-"Hermes tab" is labelled **Sky** in the tab bar, its lines read "via MeshDuty" (`Via::Campfire`),
-new drafts start "Sky proposes:", the undo comment reads "Undone from MeshDuty: Sky created this
+**Meshduty** and the assistant (Hermes) is **Sky**. This document keeps the internal names: the
+"Hermes tab" is labelled **Sky** in the tab bar, its lines read "via Meshduty" (`Via::Campfire`),
+new drafts start "Sky proposes:", the undo comment reads "Undone from Meshduty: Sky created this
 card…", and so on. Routes (`/workspace/hermes`), classes, `data-ws-*`, the `hermes-proposal:`
 marker, environment variables and log lines are unchanged. The bot's display name is data (the
 account's bot user); messages already posted keep the wording they were posted with.
@@ -823,13 +823,13 @@ Every one is marked `Hermes fork:` in the file. Line numbers as of this commit.
 | `crates/views/templates/layouts/application.html:55` | `{{ crate::hermes::workspace_overlay(ctx)\|safe }}` after the lightbox include, same line | The body seam: scripts and tab bar. Renders `""` while off, and being on the same line adds no whitespace |
 | `crates/views/askama.toml:1-5` | `dirs = ["templates-hermes", "templates"]` | Template shadowing (docs/hermes-theme.md): a file in `templates-hermes/` replaces upstream's at the same path. `crates/views/build.rs` (new, fork-owned) makes a new shadow trigger a rebuild |
 | `crates/campfire/src/config.rs:33-34, 72-73, 219-220, 245-252, 376-388` | `CAMPFIRE_THEME`, on unless `off`: module docs, `Config::theme`, its parsing, `theme_switch`, a test | The theme's kill switch (docs/hermes-theme.md) |
-| `crates/views/src/helpers/application.rs:12-15` | `page_title_tag` falls back to `crate::hermes::product_name()` | Branding (docs/hermes-theme.md, "Branding"): "MeshDuty" once the app installed it, upstream's "Campfire" in the goldens |
+| `crates/views/src/helpers/application.rs:12-15` | `page_title_tag` falls back to `crate::hermes::product_name()` | Branding (docs/hermes-theme.md, "Branding"): "Meshduty" once the app installed it, upstream's "Campfire" in the goldens |
 | `crates/views/src/sessions.rs:39-40`, `crates/views/src/first_runs.rs:18-19` | The Apple Messages and first-run titles name `crate::hermes::product_name()` | Branding |
 | `crates/views/src/helpers/translations.rs:15-19` | The translation popups' sentences go through `crate::hermes::rebrand` | Branding |
 | `crates/views/src/pwa.rs:23-24, 36-73` | `Manifest::has_logo` and the methods the shadowed `pwa/manifest.json` calls | Branding: name, short name, colours, default maskable icon |
 | `crates/campfire/src/controllers/pwa.rs:29-48` | The manifest action also reads whether a logo is attached | Branding: an uploaded logo stays the maskable icon |
 | `crates/campfire/src/integrations/web_push.rs:203-215` (and its test, `web_push/tests.rs:286-288`) | The test notification's title is `"{product_name} Test"` | Branding |
-| `crates/db/src/models/first_run.rs:18-30`, `crates/campfire/src/controllers/first_runs.rs:41-43` | `FirstRun::create_named`; the first run names the account after the product | Branding: a new install's account is "MeshDuty" (upstream: "Campfire") |
+| `crates/db/src/models/first_run.rs:18-30`, `crates/campfire/src/controllers/first_runs.rs:41-43` | `FirstRun::create_named`; the first run names the account after the product | Branding: a new install's account is "Meshduty" (upstream: "Campfire") |
 | `crates/views/tests/parity_a.rs:412, 431`, `crates/views/tests/support/facts.rs:86-92` | `has_logo: false` in the manifest goldens' view models; the fork's `hermes/` assets resolve in the goldens' context | Branding tests (`tests/hermes_branding.rs`) render upstream pages through the golden facts |
 
 Phases 1 and 2 added no seam: only rows in the existing `HERMES_ROUTES` block. Phase 2.7's per-viewer

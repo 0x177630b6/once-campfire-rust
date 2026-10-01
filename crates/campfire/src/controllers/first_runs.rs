@@ -38,7 +38,7 @@ pub async fn create(c: &mut Ctx) -> Result {
         .app()
         .db
         .write(move |tx| {
-            // Hermes fork: the account is named after the product (MeshDuty), not "Campfire".
+            // Hermes fork: the account is named after the product (Meshduty), not "Campfire".
             let account_name = campfire_views::hermes::product_name();
             let administrator = FirstRun::create_named(tx, account_name, &name, &email_address, password_digest)?;
             let pending = attachments::assign(tx, Record::user(administrator.id), "avatar", avatar)?;

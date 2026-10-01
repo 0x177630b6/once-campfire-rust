@@ -61,7 +61,7 @@ export function withTimeout(promise, ms, step) {
 const STEP_LABELS = {
   mic: "microphone permission",
   audio: "starting the browser's audio",
-  token: "opening a session on the MeshDuty server",
+  token: "opening a session on the Meshduty server",
   connect: "connecting to Google's voice service (generativelanguage.googleapis.com)"
 }
 

@@ -1,9 +1,9 @@
 {#- reference/app/views/layouts/application.html.erb. Pages extend this, have a `ctx` field, and
     implement `crate::layouts::Page` for @page_title / @body_class. content_for regions are the
     head, nav, footer and sidebar blocks; the page itself is the content block.
-    Hermes fork (shadow, templates-hermes/SHADOWED.md): the theme-color metas, the apple-touch-icon
-    and the corner logo are branding seams (crate::hermes::theme_color_tags, apple_touch_icon_url,
-    app_logo) that render upstream's bytes until the app installs the theme and the branding. -#}
+    Hermes fork (shadow, templates-hermes/SHADOWED.md): the theme-color metas, the favicon, the
+    apple-touch-icon and the corner logo are branding seams (crate::hermes::theme_color_tags,
+    favicon_url, apple_touch_icon_url, app_logo) that render upstream's bytes until the app installs the theme and the branding. -#}
 <!DOCTYPE html>
 <html>
   <head>
@@ -21,7 +21,7 @@
     {{ h::builder_tag("meta", h::attrs().name("turbo-prefetch").attr("content", "true")) }}
 
     {{ h::builder_tag("link", h::attrs().attr("rel", "manifest").attr("href", "/webmanifest.json")) }}
-    {{ h::builder_tag("link", h::attrs().attr("rel", "icon").attr("href", ctx.account.logo_url.as_str()).type_("image/png")) }}
+    {{ h::builder_tag("link", h::attrs().attr("rel", "icon").attr("href", crate::hermes::favicon_url(ctx)).type_("image/png")) }}
     {{ h::builder_tag("link", h::attrs().attr("rel", "apple-touch-icon").attr("href", crate::hermes::apple_touch_icon_url(ctx))) }}
 
     {{ h::raw(ctx.stylesheet_tags) }}

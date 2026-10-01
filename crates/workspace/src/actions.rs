@@ -184,7 +184,7 @@ impl CardSource {
         let (author, room) = (&self.author_name, &self.room_name);
         match &config.campfire_url {
             Some(base) => (format!("Created from {author}’s message in {room}:"), Some(format!("{base}{}", self.message_path))),
-            None => (format!("Created from {author}’s message in {room} (in MeshDuty at {}).", self.message_path), None),
+            None => (format!("Created from {author}’s message in {room} (in Meshduty at {}).", self.message_path), None),
         }
     }
 }

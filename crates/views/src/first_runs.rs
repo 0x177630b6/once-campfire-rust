@@ -15,7 +15,7 @@ pub struct Show<'a> {
 
 impl Page for Show<'_> {
     fn page_title(&self) -> Option<String> {
-        // Hermes fork: the product's name (MeshDuty once branded) instead of "Campfire".
+        // Hermes fork: the product's name (Meshduty once branded) instead of "Campfire".
         Some(format!("Set up {}", crate::hermes::product_name()))
     }
     fn body_class(&self) -> Option<&str> {

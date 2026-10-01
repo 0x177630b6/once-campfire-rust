@@ -269,7 +269,7 @@ impl Workspace {
             },
         };
         if dial == Dial::Never {
-            let message = format!("MeshDuty's settings don't let Sky do this (“{}”: Never).", kind.label());
+            let message = format!("Meshduty's settings don't let Sky do this (“{}”: Never).", kind.label());
             let mut entry = proposal_entry(&proposal, "refused", now, Kind::Refused, format!("Refused: {}", proposal.summary));
             entry.error = Some(message.clone());
             self.hermes_log.add(entry);
@@ -510,7 +510,7 @@ impl Workspace {
             && settings.autonomy.dial(request.kind()) == Dial::Never
         {
             return Err(ActionError::Forbidden(format!(
-                "MeshDuty's settings no longer let Sky do this (“{}”: Never).",
+                "Meshduty's settings no longer let Sky do this (“{}”: Never).",
                 request.kind().label()
             )));
         }
@@ -582,7 +582,7 @@ impl Workspace {
                 None => {
                     return Err(ActionError::invalid(
                         "cannot_undo",
-                        "Only Sky's own token can delete its comment, and MeshDuty doesn't hold it (HERMES_FIZZY_TOKEN).",
+                        "Only Sky's own token can delete its comment, and Meshduty doesn't hold it (HERMES_FIZZY_TOKEN).",
                     ));
                 }
             },
@@ -600,7 +600,7 @@ impl Workspace {
         }
         let result = match &reverse {
             Reverse::CloseCreated => {
-                let text = format!("Undone from MeshDuty: {} created this card by mistake. Closed, not deleted.", entry_actor(&entry));
+                let text = format!("Undone from Meshduty: {} created this card by mistake. Closed, not deleted.", entry_actor(&entry));
                 writer.comment(number, &text, None).await?;
                 writer.close(number).await
             }
@@ -673,7 +673,7 @@ impl Workspace {
         };
         let later = self.journal.card_writes_after(card.number, since);
         if later.iter().any(|write| write.outcome == "ok" && !belongs(write.reference.as_deref())) {
-            return Ok(Some("Someone changed the card from MeshDuty since; change it from the card instead.".into()));
+            return Ok(Some("Someone changed the card from Meshduty since; change it from the card instead.".into()));
         }
         let own: Vec<_> = self.journal.recent().into_iter().filter(|write| belongs(write.reference.as_deref())).collect();
         // The board's feed, newest first, page after page until it reaches the action (or ends).
@@ -841,7 +841,7 @@ impl Workspace {
                 sort_at: entry.at,
                 via: match entry.via {
                     Via::Direct => "direct",
-                    Via::Campfire => "via MeshDuty",
+                    Via::Campfire => "via Meshduty",
                 },
                 tone: match entry.via {
                     Via::Direct => "direct",
@@ -877,7 +877,7 @@ impl Workspace {
                 id: format!("m-{}", message.id),
                 at: message.created_at.to_string(),
                 sort_at: message.created_at,
-                via: "in MeshDuty",
+                via: "in Meshduty",
                 tone: "chat",
                 failed: kind == "failures",
                 text,

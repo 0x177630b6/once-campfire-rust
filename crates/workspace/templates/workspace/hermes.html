@@ -55,7 +55,7 @@
     {%- if direct_unknown %}
     <p class="ws-notice" role="status">Sky's own Fizzy user isn't known, so what it does directly in Fizzy isn't shown: set <code>HERMES_FIZZY_TOKEN</code>, or its Fizzy user id in the <a class="ws-link" href="/workspace/settings">settings</a>.</p>
     {%- endif %}
-    <p class="ws-muted">Sky still has its own Fizzy account: <strong>direct</strong> lines are what it did there itself (Fizzy doesn't report tags, steps or where a moved card was, so those aren't here); <strong>via MeshDuty</strong> lines are what it proposed here, run by MeshDuty.{% if shared_token %} The workspace writes with Sky's Fizzy account too: people's changes from the workspace are left out of this log.{% endif %}</p>
+    <p class="ws-muted">Sky still has its own Fizzy account: <strong>direct</strong> lines are what it did there itself (Fizzy doesn't report tags, steps or where a moved card was, so those aren't here); <strong>via Meshduty</strong> lines are what it proposed here, run by Meshduty.{% if shared_token %} The workspace writes with Sky's Fizzy account too: people's changes from the workspace are left out of this log.{% endif %}</p>
     {%- if items.is_empty() %}
     <p class="ws-empty">{% if filtered %}Nothing of this kind.{% else %}Nothing yet.{% endif %}</p>
     {%- else %}
