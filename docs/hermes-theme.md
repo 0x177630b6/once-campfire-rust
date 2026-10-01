@@ -10,7 +10,10 @@ below). The plumbing gives the designer:
 - the fork's own stylesheets in `<head>`, before the theme, so equal-specificity ties go to the theme;
 - one small set of semantic tokens (`--ui-*`, `hermes/tokens.css`) that the Workspace and the voice
   features read, so a theme recolours Campfire, the Workspace and voice together;
-- template shadowing for the few screens CSS can't reach (`crates/views/templates-hermes/`).
+- template shadowing for the few screens CSS can't reach (`crates/views/templates-hermes/`);
+- the product's branding: the name MeshDuty where upstream says Campfire, the browser chrome's
+  colours, the default app icon (see "Branding" below). The assistant's name, Sky, is in the
+  fork's own texts (docs/hermes-workspace.md, docs/hermes-gemini-live.md).
 
 ## Load order
 
@@ -73,12 +76,13 @@ their pages carry the links (theme on).
 
 `crates/views/askama.toml` searches `templates-hermes/` before `templates/`, so a file at
 `crates/views/templates-hermes/<path>` replaces upstream's `templates/<path>` everywhere askama
-looks it up by path: `#[template(path = …)]`, `{% include %}`, `{% extends %}`. One template is
-shadowed (list and upstream blobs in `templates-hermes/SHADOWED.md`):
+looks it up by path: `#[template(path = …)]`, `{% include %}`, `{% extends %}`. Eleven templates
+are shadowed (list and upstream blobs in `templates-hermes/SHADOWED.md`):
 
 | Shadowed | Why |
 |---|---|
 | `users/profiles/show.html` | The theme's Light / Dark / System control, `{{ crate::hermes::color_scheme_switch(ctx)\|safe }}`, before the memberships. A copy of upstream's with that one call added on the line of the memberships `<div>`: it renders `""` until the app installs the page assets with the theme on, so the goldens (`parity_a.rs`, `users_profiles_show`) still compare upstream's bytes and need no allowlist |
+| `layouts/application.html`, `pwa/manifest.json`, `pwa/_install_instructions.html`, `pwa/_system_settings.html`, `accounts/edit.html`, `accounts/_help_contact.html`, `accounts/_invite.html`, `accounts/bots/index.html`, `sessions/incompatible_browser.html`, `rooms/show/_invitation.html` | Branding (below): each "Campfire" becomes a seam call that renders upstream's text until the app installs the branding, so the goldens still compare upstream's bytes and need no allowlist |
 
 | Piece | What it does |
 |---|---|
@@ -208,7 +212,7 @@ and the `--ws-*` colours onto its palette ("The look", "Mappings").
 The owner's style guide (Hermes repo, `docs/ui-redesign/design/`, fit and decisions in chapter 08),
 restyling what exists: nothing the guide shows that the app lacks (guest concierge, SOPs, team
 spaces, My tasks), no markup or text change in this step. The renaming (MeshDuty, Sky) and the
-voice page's English come separately. `theme.css` is laid out in five parts: fonts, palette (light,
+voice page's English came next (see "Branding"). `theme.css` is laid out in five parts: fonts, palette (light,
 dark twice), mappings, upstream components grouped by the upstream file they override, the fork's
 screens.
 
@@ -337,8 +341,9 @@ it), every access in `try/catch` (private windows: System).
   no room for a three-way control. The cost is one shadowed template (`users/profiles/show.html`,
   one seam call).
 - `CAMPFIRE_THEME=off` drops the script and the control too (`color_scheme_switch` renders `""`).
-- Not followed: the browser chrome's `theme-color` metas and the manifest colours stay upstream's
-  `#ffffff` / `#000000` by `prefers-color-scheme` (template change, with the renaming step).
+- The browser chrome follows too: with the theme, the layout's `theme-color` metas are the
+  surface colours (see "Branding"), and the script sets both to the chosen mode's colour when the
+  person picked Light or Dark, back to one per `media` for System.
 
 ### What changed on screen
 
@@ -415,3 +420,67 @@ upstream's `:focus-visible` outline (accent 600) on buttons and fields, plus a 2
 checkboxes, radios and selects, and on the Workspace's toggle pills and the theme radios. Motion:
 upstream's reset stops animations under `prefers-reduced-motion`; the theme's own transitions
 (cards, chips, the theme radios) are turned off there too.
+
+## Branding: MeshDuty and Sky
+
+Owner decisions (1 Oct 2026, handbook chapter 08): the product is **MeshDuty** wherever people see
+the app's name, and the assistant (internally Hermes) is shown as **Sky**. Only what people see
+changes: crate names, `hermes/` paths, CSS classes, routes, data attributes, the
+`hermes-proposal:` marker, the `note-vocale-` file prefix, environment variables and log lines
+keep their names, and the text the code matches on keeps matching (the live report's opening and
+its legacy French one, the bridge's error sentences in the Sky tab's "Failures" filter).
+
+### The switch
+
+`PageAssets::brand` (`campfire_views::hermes`), installed by the app at boot with the page assets
+(always on in the app; `CAMPFIRE_THEME=off` doesn't turn it off: the name isn't the look). The
+views' goldens never install it, so every seam below renders upstream's bytes there;
+`crates/views/tests/hermes_branding.rs` installs it and checks the pages.
+
+| Seam | Upstream | Branded |
+|---|---|---|
+| `product_name()` | "Campfire" | "MeshDuty": the title fallback, the first-run and Apple Messages titles, the shadowed templates' "Campfire" (sign-in footer, install and notification help, bots page, unsupported browser, empty room), the test push ("MeshDuty Test"), a new install's account name |
+| `rebrand(text)` | `text` | "Campfire" → "MeshDuty" in upstream's fixed sentences: the translation popups (7 languages), the invite link's share text, an image's alt text, the manifest's shortcut descriptions |
+| `product_trademark()` | "Campfire&trade;" | "MeshDuty" (the account and sign-in footers' version line) |
+| `theme_color_tags()` | `#ffffff` / `#000000` | with the theme: `#f4f0e8` / `#181e1b`, the theme's `--bg-surface` light and dark, so the status bar continues the page |
+| `apple_touch_icon_url(ctx)` | the account logo URL | the full-bleed default `hermes/apple-touch-icon.png` while no logo is uploaded (iOS rounds icons itself and shows transparent corners black) |
+| `app_logo(ctx)` | the Campfire flame linking to once.com | the MeshDuty mark (`logos/app-icon-192.png`) linking home |
+| `Manifest` (`src/pwa.rs`) | upstream's manifest | `name` = the account's name, else MeshDuty; `short_name` MeshDuty (the home-screen label, whatever the account is called); `theme_color` and `background_color` `#f4f0e8` with the theme (the light surface: the manifest has no dark variant, and the page's metas take over once it loads; matching them avoids a colour jump); the maskable icon is `hermes/icon-maskable-512.png` unless a logo is uploaded; a MeshDuty description; no screenshots (upstream's show Campfire). `start_url` and `scope` stay `/` and no `id` is added, so installed apps stay the same app |
+
+What the app's database holds is data, not code: the account's name (the sign-in legend, the
+manifest's `name`), the bots' and people's names, uploaded logos, and messages already posted
+(they keep the wording they were posted with, e.g. "Hermes proposes:").
+
+### Default icon
+
+When no account logo is uploaded, `/account/logo` serves `logos/app-icon.png` (512) or
+`logos/app-icon-192.png`, which `crates/assets/overrides/logos/` now overrides by logical path (not
+referenced from any CSS, so no stylesheet digest changes; `tests/reference.rs` treats them as
+overrides). They are the style guide's mark: a terracotta (`#c9694a`, `--accent-400`) rounded
+square with a white "M" in Libre Caslon Text 700, on a transparent background. Two variants under
+`hermes/`: `icon-maskable-512.png` (full bleed, the M within the central 80 % safe zone) for the
+manifest's maskable entry, and `apple-touch-icon.png` (180, full bleed). An uploaded logo wins
+everywhere (favicon, touch icon, PWA icons, push icon, sign-in page). They were rendered from HTML
+with the self-hosted font in headless Chromium (`chrome-headless-shell --screenshot
+--default-background-color=00000000`); to change them, render again at the same sizes.
+
+Installed apps pick up a new name and icon slowly: Android refreshes the WebAPK at most about
+once a day, iOS never (remove the app from the home screen and add it again).
+
+### Text
+
+- Upstream's English templates: the "Campfire"s above. Nothing else of upstream's text changes.
+- The Workspace (fork-owned): the tab bar's **Sky**, the Sky tab's title and texts, "via MeshDuty"
+  lines, notices, settings, alerts, drafts' hint, "Sky proposes:" in new drafts, undo and refusal
+  messages (docs/hermes-workspace.md).
+- The voice features (fork-owned), now in English: the live voice page, the composer's voice-note
+  recorder, the audio player, the voice routes' JSON errors; the live assistant says it is
+  "checking with Sky" and that the ticket was "sent to Sky" (docs/hermes-gemini-live.md).
+  `crates/views/tests/hermes_views.rs` (`the_voice_features_speak_english`) fails if French comes
+  back into their templates, scripts or routes.
+
+Not in this fork: the Campfire bridge's direct messages (`campfire-bridge/server.py` in the Hermes
+repo: "… vous a mentionné sur la carte …", "Hermes vous a répondu …") are still French and say
+"Hermes". Not changed: upstream's static `public/502.html` ("Starting Campfire…"), the HTML error
+page for a 502 (the fork's own 502s are JSON); `reference/public/` has no override mechanism.
+

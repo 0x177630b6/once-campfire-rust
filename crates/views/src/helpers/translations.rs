@@ -12,6 +12,7 @@ pub fn translations_for(key: &str) -> Html {
     let items: String = entries
         .iter()
         .map(|(language, translation)| {
+            // Hermes fork: `rebrand`, "MeshDuty" for "Campfire" once branded.
             format!(
                 "{}{}",
                 content_tag_text("dt", attrs(), language).0,

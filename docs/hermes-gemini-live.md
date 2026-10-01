@@ -11,7 +11,7 @@ from there (Fizzy card etc.).
 
 During the interview the assistant can also **ask Hermes** (`ask_hermes`, with `HERMES_ASK_URL`):
 a procedure, the tickets already open on the Fizzy board, a contact… It says it's checking with
-Hermes (in the employee's language), the page forwards the question through Campfire to the Hermes bridge, and the
+Sky (the name people see for Hermes; in the employee's language), the page forwards the question through Campfire to the Hermes bridge, and the
 assistant speaks the answer and carries on with the interview.
 
 This is a fork-only feature: none of it exists in the reference app or upstream
@@ -79,37 +79,38 @@ HTML page in the application layout (Turbo-Frame requests get the frame layout).
   data-voice-room-url-value="/rooms/:room_id"
   data-voice-room-name-value="<room display name>">
   <div data-voice-target="transcript" aria-live="off"></div>      chat bubbles, newest at the bottom
-  <div data-voice-target="notice" role="alert" hidden>…</div>      errors (+ « Détails techniques »)
-  <div data-voice-target="confirm" hidden>…</div>                  « Recommencer » confirmation
-  <div data-voice-target="result" hidden>…</div>                   success card, « Voir le message »
+  <div data-voice-target="notice" role="alert" hidden>…</div>      errors (+ "Technical details")
+  <div data-voice-target="confirm" hidden>…</div>                  "Start over" confirmation
+  <div data-voice-target="result" hidden>…</div>                   success card, "View the message"
   <div class="voice__bar">                                         bottom control bar
     <div data-voice-target="control">                              mic-level ring (--voice-level)
       <button data-voice-target="toggle" data-action="voice#toggle">…</button>
     </div>
     <p data-voice-target="status">…</p> <span data-voice-target="timer">00:00</span>
     <p data-voice-target="hint"></p>
-    Annuler (cancel) · Reprendre (resume → voice#retry) · Recommencer (restart)
+    Cancel (cancel) · Resume (resume → voice#retry) · Start over (restart)
   </div>
   <p data-voice-target="announcer" role="status" class="for-screen-reader"></p>
 </section>
 ```
 
-The page (title « Rapport vocal », the room name in the intro) is a column: intro, transcript (the
+The page (title "Voice report", the room name in the intro) is a column: intro, transcript (the
 only part that scrolls, `flex: 1`), and a bottom bar with a 72 px round button: a mic (Campfire's
 primary look) to start or resume, a hang-up (`.btn--negative`) while live. `data-voice-state` is
 `idle | starting | live | finishing | stopped | closed | error | unavailable | done`; while live,
-`data-voice-activity` is `speaking` while the assistant's audio plays (« L’assistant parle… ») and
-`listening` otherwise (« À vous », with the mic-level ring from the worklet chunks' RMS and a
+`data-voice-activity` is `speaking` while the assistant's audio plays ("The assistant is speaking…") and
+`listening` otherwise ("Your turn", with the mic-level ring from the worklet chunks' RMS and a
 running `mm:ss` clock). Right after setup the controller sends a short text instruction
 (`KICKOFF_TEXT`) so the assistant speaks first; text input isn't transcribed, so it's neither on
-the page nor in the report. « Raccrocher » keeps the transcript and the session: « Reprendre »
-(`retry()`) reconnects with a fresh token and replays the transcript; « Recommencer » wipes it after
-an in-page confirmation. Publishing is by voice (« Confirmez le récapitulatif à l’assistant pour envoyer
-le ticket. »). The page's own texts are still French (Campfire has no i18n); the conversation is
-in the employee's language. Error sentences stay plain; HTTP/WebSocket codes and hostnames go in a
-« Détails techniques » disclosure and `console.warn`. Screen readers get the step while starting,
+the page nor in the report. "Hang up" keeps the transcript and the session: "Resume"
+(`retry()`) reconnects with a fresh token and replays the transcript; "Start over" wipes it after
+an in-page confirmation. Publishing is by voice ("Confirm the recap to the assistant to send the
+ticket."). The page's own texts are English (owner decision, 1 Oct 2026; they were French until
+v0.1.2-hermes.20, and there is still no i18n); the conversation is in the employee's language, and
+the transcript is shown as spoken (typographic apostrophes only, no language-specific spacing). Error sentences stay plain; HTTP/WebSocket codes and hostnames go in a
+"Technical details" disclosure and `console.warn`. Screen readers get the step while starting,
 each completed assistant turn once (the transcript itself is `aria-live="off"`), and the focus moves
-to « Voir le message » when done. Styles: `hermes/hermes.css` (below).
+to "View the message" when done. Styles: `hermes/hermes.css` (below).
 
 The layout's viewport meta (upstream `layouts/application`) has no `viewport-fit=cover`, so
 `env(safe-area-inset-bottom)` is 0 in Safari's browser tab (content already stops above the home
@@ -141,8 +142,8 @@ best) and tells the model to:
 - **Fixed identifiers**: the ticket's text fields in the employee's language; `type` and
   `severity` are English enum values, never translated; room numbers, building names, people's
   names and codes kept exactly as said ("room 101", "building 7").
-- **Never claim the ticket exists**: after `submit_incident` answers ok, say it was sent to Hermes,
-  who files it and confirms in the room; no card number. On `already_submitted` (the page answers
+- **Never claim the ticket exists**: after `submit_incident` answers ok, say it was sent to Sky (the name people
+  see for Hermes), who files it and confirms in the room; no card number. On `already_submitted` (the page answers
   that to a second call in the same conversation), don't call it again: say it was already sent
   (another ticket = a new conversation). On an error, say so and offer to retry.
 - **Title**: « verb object — place » (`Refill water bottles — room 101`), the same format as the
@@ -166,7 +167,7 @@ language. `200`:
 ```
 
 The browser connects to `ws_url?access_token=<token>` and sends `{"setup":{}}`. Errors are JSON
-`{"error": code, "message": French text}`: `429 rate_limited`; `502 upstream_error` or
+`{"error": code, "message": English text}`: `429 rate_limited`; `502 upstream_error` or
 `502 upstream_timeout` (the whole upstream call is capped at 10 s).
 
 Upstream call: `POST https://generativelanguage.googleapis.com/v1alpha/auth_tokens`, header
@@ -187,32 +188,32 @@ The interviewer's `ask_hermes`. JSON body `{"question": "…"}`: whitespace fold
 spaces, cut at 1,000 characters (`…`). Campfire forwards, server-side, `{"room_id", "user_name",
 "room_name" (the display name), "question"}` to `HERMES_ASK_URL` over the `integrations::net`
 client (10 s to connect, 60 s in all) and answers `200 {"answer": "…"}`. Errors, JSON
-`{"error": code, "message": French text}`: `422 invalid_question` (blank), `429 rate_limited`
+`{"error": code, "message": English text}`: `422 invalid_question` (blank), `429 rate_limited`
 (`HERMES_ASKS_PER_HOUR`), `504 upstream_timeout` (no answer within 60 s, or the bridge's own 504:
 it gives Hermes 55 s), `502 upstream_error` (anything else). One log line per question: room,
 user, lengths and duration, never the text.
 
 `ask_hermes` declaration: one required string parameter, `question` (in the employee's language,
-self-contained, room numbers and names as said); an English description (the organization's
-internal agent: procedures, tickets already open on the Fizzy board, contacts, anything
+self-contained, room numbers and names as said); an English description (Sky, the organization's
+internal assistant: procedures, tickets already open on the Fizzy board, contacts, anything
 organization-specific; files nothing; the answer can take several seconds). No `behavior` field: the default
 blocking call was checked against the live API on 2026-09-29 (the model says it's checking, waits
 for the `toolResponse`, then speaks the answer; 8 s tested). `NON_BLOCKING` + `INTERRUPT` worked
 too, `WHEN_IDLE` never delivered the answer. The system instruction gets a paragraph (before the
 quoted context): when the employee asks something organization-specific or such a fact is missing
 (e.g. whether this fault is already reported), say briefly, in the employee's language, that it's
-checking with Hermes, call `ask_hermes`, give the answer in one or two sentences in the employee's
-language and resume; never invent procedures; if Hermes doesn't answer, say so; such questions
+checking with Sky, call `ask_hermes`, give the answer in one or two sentences in the employee's
+language and resume; never invent procedures; if Sky doesn't answer, say so; such questions
 aren't off-topic; `ask_hermes` files nothing. `submit_incident` is unchanged.
 
 The page (`#askHermes` in `voice_controller.js`) POSTs the question (same-origin, same headers as
 the report) with a 65 s client timeout, and answers the tool call with `{result: answer}` or
-`{error: "Hermes did not answer."}`. While it waits the status reads « Hermes consulté… », and the
-transcript shows a centred, dashed « Question à Hermes » note (the question, then « En attente de
-la réponse… » → « Réponse reçue » or « Pas de réponse »). The answer itself isn't repeated there:
+`{error: "Sky did not answer."}`. While it waits the status reads "Checking with Sky…", and the
+transcript shows a centred, dashed "Question for Sky" note (the question, then "Waiting for the
+answer…" → "Answered" or "No answer"). The answer itself isn't repeated there:
 the assistant speaks it, so it's in the assistant's next bubble. These notes stay **out of the
 report's transcript** (and of the reconnection recap): the assistant's own lines already carry
-the "checking with Hermes" sentence and the answer.
+the "checking with Sky" sentence and the answer.
 
 The bridge side (`campfire-bridge/server.py` in the Hermes repo, `BRIDGE_ASK_SECRET`) prefixes
 the question with `[user in room]` and a voice-style instruction (answer in the question's
@@ -273,10 +274,11 @@ The room composer gets up to two buttons after the attachment (paperclip) button
   recording, the input row becomes a recording bar (hermes/hermes.css hides the text field, the
   attachment, rich-text and live buttons and the composer's Send, via `:has()`): bin, a blinking red
   dot with the timer, a level meter (`AnalyserNode`), and the record button turned into a pulsing
-  send arrow (« Envoyer le message vocal »). At 4:30 « Envoi automatique dans 30 s » replaces the
+  send arrow ("Send the voice message"). At 4:30 "Sending automatically in 30 s" replaces the
   meter; recording stops and sends by itself at 5 minutes. `voice_note_controller.js` records with `MediaRecorder`
   (`audio/webm;codecs=opus`, else `audio/mp4` for Safari, else `audio/ogg;codecs=opus`, else the
-  browser's default) and names the file `note-vocale-YYYYMMDD-HHMMSS.webm|m4a|ogg` with a plain
+  browser's default) and names the file `note-vocale-YYYYMMDD-HHMMSS.webm|m4a|ogg` (the player recognizes voice notes by
+  that prefix: a data contract, so it stays French) with a plain
   `audio/*` type. The file goes through the composer's own attachment path: the controller fires
   `drop-target:drop` on `window` (what a file dropped on the room fires, which `composer#dropFiles`
   handles) and clicks the composer's Send button, so the upload, its pending bubble, the
@@ -284,8 +286,8 @@ The room composer gets up to two buttons after the attachment (paperclip) button
   sends any text typed in the composer. The button stays hidden where the browser can't record; on
   plain HTTP it shows and explains that HTTPS is needed.
 - **Live report** (headset, only when `ShowView::voice_path` is set, i.e. `GEMINI_API_KEY`): a
-  link to `/rooms/:id/voice` named « Ticket vocal (demande, panne, incident) », out of the composer's turbo frame
-  (`data-turbo-frame="_top"`). On touch screens (no hover title) it shows a small « Rapport » label
+  link to `/rooms/:id/voice` named "Voice ticket (request, fault, incident)", out of the composer's turbo frame
+  (`data-turbo-frame="_top"`). On touch screens (no hover title) it shows a small "Report" label
   under the icon, in the round buttons' footprint. It replaces the room nav's mic button of
   v0.1.1-hermes.2.
 
@@ -293,7 +295,7 @@ On touch screens (`pointer: coarse`) every composer button is 2.75rem (44 px).
 
 Audio attachments (`audio/*`, e.g. voice notes, whatever recorded them) render as
 `<audio controls preload="metadata">`, full width of the bubble (`AttachmentPreview::Audio`,
-`hermes::audio_preview`). A voice note (`note-vocale-*`) gets a compact « Message vocal · 0:07 »
+`hermes::audio_preview`). A voice note (`note-vocale-*`) gets a compact "Voice message · 0:07"
 line and a download button instead of the file-name row; the `voice-player` controller fills in the
 duration once the browser knows it (Chrome's MediaRecorder WebM has none until played). Other audio
 files keep the reference's file link (name, download, share) under the player.

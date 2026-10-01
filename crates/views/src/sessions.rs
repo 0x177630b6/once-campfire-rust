@@ -36,6 +36,7 @@ pub struct IncompatibleBrowser<'a> {
 
 impl Page for IncompatibleBrowser<'_> {
     fn page_title(&self) -> Option<String> {
+        // Hermes fork: the product's name (MeshDuty once branded) instead of "Campfire".
         Some(if self.ctx.platform.apple_messages { crate::hermes::product_name() } else { "Unsupported browser" }.into())
     }
 }
