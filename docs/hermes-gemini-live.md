@@ -44,6 +44,18 @@ as quoted data), the `submit_incident` declaration (plus `ask_hermes` and its
 paragraph of instructions when `HERMES_ASK_URL` is set), audio transcription both ways, session
 resumption and sliding-window context compression.
 
+**The lock** (batch S1-1). Every token request is built by one helper,
+`gemini_live::locked_token_request(setup, lifetime, now)`, for the voice page now and Sky later: the
+whole setup goes into `bidiGenerateContentSetup` and **no `fieldMask` is sent, on purpose**. The
+`AuthToken` reference: with an empty field mask and a setup present, the token's setup is the
+effective one and the Live connection's own `setup` is ignored (the Python SDK's "global lock",
+`lock_additional_fields=None`); a non-empty mask makes the listed fields come from the token and
+merges the client's setup for every other field, so adding a mask could only weaken the lock. The
+July 2026 report (a client replacing the system instruction and turning on code execution) was
+about tokens minted **without** any setup; the helper makes that impossible here. Still to check
+live (plan spike E3): a client `setup` carrying its own `systemInstruction` and
+`tools: [{codeExecution:{}}]` is ignored or refused.
+
 ## Configuration
 
 | Variable | Default | Meaning |
@@ -172,7 +184,7 @@ The browser connects to `ws_url?access_token=<token>` and sends `{"setup":{}}`. 
 
 Upstream call: `POST https://generativelanguage.googleapis.com/v1alpha/auth_tokens`, header
 `x-goog-api-key`, body `{"uses":1, "expireTime": now+30min, "newSessionExpireTime": now+1min,
-"bidiGenerateContentSetup": {...}}`; the reply `{"name": "auth_tokens/…"}` is the token.
+"bidiGenerateContentSetup": {...}}` (exactly these keys: no `fieldMask`, see *The lock*); the reply `{"name": "auth_tokens/…"}` is the token.
 Checked against the live API on 2026-09-29 (200 with that shape, including the `enum` in the
 function schema).
 
@@ -185,8 +197,9 @@ and actionable: verb and object — place, "Refill water bottles — room 101") 
 ### `POST /rooms/:room_id/voice/ask`
 
 The interviewer's `ask_hermes`. JSON body `{"question": "…"}`: whitespace folded to single
-spaces, cut at 1,000 characters (`…`). Campfire forwards, server-side, `{"room_id", "user_name",
-"room_name" (the display name), "question"}` to `HERMES_ASK_URL` over the `integrations::net`
+spaces, cut at 1,000 characters (`…`). Campfire forwards, server-side, `{"room_id", "user_id"
+(the speaker's Campfire id, an integer), "user_name", "room_name" (the display name), "channel":
+"voice", "question"}` to `HERMES_ASK_URL` over the `integrations::net`
 client (10 s to connect, 60 s in all) and answers `200 {"answer": "…"}`. Errors, JSON
 `{"error": code, "message": English text}`: `422 invalid_question` (blank), `429 rate_limited`
 (`HERMES_ASKS_PER_HOUR`), `504 upstream_timeout` (no answer within 60 s, or the bridge's own 504:
@@ -217,8 +230,25 @@ the "checking with Sky" sentence and the answer.
 
 The bridge side (`campfire-bridge/server.py` in the Hermes repo, `BRIDGE_ASK_SECRET`) prefixes
 the question with `[user in room]` and a voice-style instruction (answer in the question's
-language, 1–3 short sentences, no markdown, room numbers and names as written, say so if unknown), chains it on the room's own `voice:<room_id>` thread (apart from the
-room's chat thread), and strips leftover markdown from the answer.
+language, 1–3 short sentences, no markdown, room numbers and names as written, say so if unknown), chains it on the speaker's own thread in that room,
+`voice:<room_id>:<user_id>` (apart from the room's chat thread; since batch S1, so one person
+never sees what another asked: SF-3, voice part), and strips leftover markdown from the answer.
+A bridge older than S1 ignores `user_id` and `channel` and keeps one `voice:<room_id>` thread per
+room; deploy the bridge first.
+
+The ask body, as the bridge must honour it (`hermes_ask::Question::to_json`):
+
+| Field | Type | When |
+|---|---|---|
+| `user_id` | integer | always (the bridge answers 400 to a non-integer) |
+| `user_name` | string | always |
+| `channel` | `"voice"` \| `"sky"` | always; absent (older Campfire) means `voice` |
+| `room_id` | integer | always for `voice`; may be absent for `sky` (left out, never `null`) |
+| `room_name` | string | with `room_id` |
+| `question` | string | always, ≤ 1,000 characters |
+
+Threads: `voice:<room_id>:<user_id>` for `voice`, `sky:<user_id>` for `sky` (phase 1b; no call id,
+so nothing Hermes proposes from a Sky question is credited to a call).
 
 ### `POST /rooms/:room_id/voice/report`
 
@@ -308,13 +338,44 @@ own markup, so pages without them look the same. `build.rs` leaves `hermes/` out
 `stylesheet_link_tag :all`, so that list keeps the reference's exact `<link>` tags, and the views'
 goldens (which don't install the seam's assets) keep the reference's bytes.
 
+## Sky push-to-talk (batch S1: plumbing only)
+
+The plan is Hermes-self `docs/ui-redesign/10-push-to-talk-plan.md`. Batch S1 adds what Phase 1 will
+use, with nothing visible: `SKY_PTT` is `off` by default and no `/sky/*` route exists yet.
+
+- **Tokens**: `TokenLifetime::SKY` (`expireTime` 10 minutes, `newSessionExpireTime` 1 minute) and
+  `GeminiLive::mint_locked(setup, lifetime, now)`, through the same lock as the voice page. The
+  voice page keeps its 30-minute tokens and its own limit (`GEMINI_LIVE_TOKENS_PER_HOUR`, 10).
+- **Limits and usage** (`campfire_workspace::sky`, pure, tested on any machine): Sky's own per-person
+  limiters, apart from the voice page's, so Sky can't starve it. `SKY_*` is read by
+  `WorkspaceConfig::from_lookup` (no new seam), so Sky needs the workspace (`FIZZY_URL` and
+  `FIZZY_TOKEN`) as well as `GEMINI_API_KEY`.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `SKY_PTT` | `off` | `off` (no route, nothing rendered) \| `spike` (administrators, test page) \| `admins` \| `users` (`SKY_PTT_USERS` and administrators) \| `on` (everyone signed in, never bots) |
+| `SKY_PTT_USERS` | empty | Pilot user ids, comma-separated (`1,5,9`) |
+| `SKY_TOKENS_PER_HOUR` | `30` | Sky tokens per person per rolling hour; a reconnection of an open session (`goAway`, resumption handle) counts a quarter |
+| `SKY_PRESSES_PER_DAY` | `150` | Presses per person per house day (the handover's time zone) |
+| `SKY_ASKS_PER_HOUR` | `30` | Questions to Hermes per person per rolling hour |
+| `SKY_MONTHLY_BUDGET_USD` | `100` | The organization's estimated month budget; reached, no more Sky tokens until the 1st (house time zone). Each reported cost is clamped to one token's ceiling (10 min of audio in and out, $0.23) |
+| `SKY_WARM_SECONDS` | `120` | Idle seconds before the page closes a warm session (1–600) |
+
+Caps are at least 1; a malformed value fails the boot. The rolling hourly windows are in memory
+(per process, like the voice page's); the day and month counters (presses, tokens, reconnections,
+asks, confirms, refusals, errors, estimated cost; no words, no audio, no tokens) persist in
+`<CAMPFIRE_STORAGE_PATH>/hermes/sky-usage.json` (atomic writes; 90 days per person, 13 months of
+totals), so a restart doesn't reset the budget. A damaged file starts empty and is replaced on the
+next save (the caller logs why).
+
 ## Where the code is
 
 | Path | What |
 |---|---|
 | `crates/campfire/src/config.rs` | `GeminiLiveConfig`, `ApiKey` (redacted `Debug`) |
 | `crates/campfire/src/integrations/gemini_live.rs` | Token request body, system instruction, `submit_incident` and `ask_hermes` declarations, `HttpMinter` (the existing `integrations::net` HTTP/1.1 + rustls client, no new crate), `TokenMinter` trait (tests swap it), rate limiters, the asker |
-| `crates/campfire/src/integrations/hermes_ask.rs` | `HttpAsker` (`POST HERMES_ASK_URL`, same client), `HermesAsker` trait (tests swap it), question cap |
+| `crates/campfire/src/integrations/hermes_ask.rs` | `Question` (`user_id`, optional room, `Channel`), `HttpAsker` (`POST HERMES_ASK_URL`, same client), `HermesAsker` trait (tests swap it), question cap |
+| `crates/workspace/src/sky.rs` | Sky push-to-talk's config, limits and usage counters (batch S1) |
 | `crates/campfire/src/controllers/voice.rs` | The four actions, `IncidentReport` (caps, escaping, markup) |
 | `crates/campfire/src/controllers/mod.rs` | `HERMES_ROUTES`, tried after the Rails table |
 | `crates/campfire/src/app.rs` | `AppState::gemini_live` |
@@ -325,17 +386,25 @@ goldens (which don't install the seam's assets) keep the reference's bytes.
 
 ## Tests
 
-- `integrations::gemini_live::tests`: request body shape, quoting of names, extra instructions, rate
+- `integrations::gemini_live::tests`: request body shape, the lock (exactly `uses`, `expireTime`,
+  `newSessionExpireTime`, `bidiGenerateContentSetup`, no `fieldMask`; the Constrained endpoint),
+  token lifetimes (voice 30 min, Sky 10 min), `mint_locked`, quoting of names, extra instructions, rate
   limit, `ask_hermes` declared (and its instructions added) only when enabled, and the HTTP minter
   against a fake server (path, `x-goog-api-key`, body; 403 and garbage replies are errors).
-- `integrations::hermes_ask::tests`: the asker against a fake bridge (path, JSON body, answer;
+- `integrations::hermes_ask::tests`: the asker against a fake bridge (path, JSON body with
+  `user_id` and `channel`, a Sky question without a room; answer;
   504 → timeout, other statuses and blank answers are errors, the secret never in an error).
 - `controllers::voice::tests`: feature off → 404 and no live button (the voice-note one stays);
   the page's data values and worklet URL (served as JavaScript); token route builds the locked setup through an injected
   minter, forgery protection, membership, 429, 502; report membership / validation / no-bot room;
   the bot-mention webhook proof above; report escaping and caps; route order; `ask`: 404 without
-  `HERMES_ASK_URL` (and no `ask_hermes` in the token), forwarding to a fake bridge and the answer,
+  `HERMES_ASK_URL` (and no `ask_hermes` in the token), forwarding to a fake bridge (with the
+  speaker's `user_id`) and the answer,
   the question cap, membership / forgery / blank question, 504 on timeout, 502, 429.
+- `campfire_workspace::sky::tests`: `SKY_*` parsing and defaults, who is allowed per mode, the
+  rolling window, token limits with the reconnection weight, presses per house day across
+  midnight in Paris, asks, the month budget's pause and new month, persistence round trip,
+  retention, a damaged file.
 - `crates/views/tests/hermes_views.rs`: the page renders; the composer's buttons are absent with both
   flags off (the goldens' input) and present, in place, with each on; voice notes get a player and a
   compact line, other audio files keep their file link.
