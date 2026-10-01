@@ -44,6 +44,8 @@ use crate::writes::ActionError;
 
 /// A change found later than this after it happened (Campfire was down) isn't pinged.
 pub const MAX_AGE: SignedDuration = SignedDuration::from_hours(2);
+/// A known card missing from a poll's picture keeps its owners this long after its last activity.
+const KEEP_MISSING: SignedDuration = SignedDuration::from_hours(24);
 
 /// An owner as last known.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -159,6 +161,17 @@ pub fn detect(known: Option<&KnownOwners>, next: &Snapshot, actors: &Actors, now
             events.extend(changes(card, &before, &current.owners, since, next, actors));
         }
         cards.insert(card.number, current);
+    }
+    // A known card missing from this picture altogether (its lookup failed, an odd list entry)
+    // keeps its owners for a while, rather than coming back as "only recorded" and missing a
+    // change. A closed card is in the picture, so it does drop out.
+    if let Some(known) = known {
+        for (number, card) in &known.cards {
+            let recent = card.active_at.is_none_or(|active| now.duration_since(active) <= KEEP_MISSING);
+            if next.card(*number).is_none() && recent {
+                cards.entry(*number).or_insert_with(|| card.clone());
+            }
+        }
     }
     (events, KnownOwners { at: Some(now), cards })
 }
@@ -566,6 +579,13 @@ mod tests {
         let (events, recorded) = detect(Some(&known(&["karim"], 5)), &snapshot(&[], 1, vec![]), &actors, at(6));
         assert!(events.is_empty());
         assert_eq!(recorded.cards[&7].owners[0].id, "karim");
+
+        // A card missing from a poll's picture keeps its known owners; back, its change is pinged.
+        let empty = Snapshot { open: vec![], ..Snapshot::default() };
+        let (_, kept) = detect(Some(&known(&["karim"], 5)), &empty, &actors, at(6));
+        assert_eq!(kept.cards[&7].owners[0].id, "karim");
+        let next = snapshot(&["maya"], 7, vec![]);
+        assert_eq!(pings(&detect(Some(&kept), &next, &actors, at(8)).0).len(), 2, "Maya added, Karim removed");
 
         // Reassigned by Karim to Maya: Maya added, Lena told it's Maya's now (not "taken").
         let next = snapshot(&["maya"], 3, vec![assignment(true, "maya", "karim", 3), assignment(false, "lena", "karim", 3)]);
