@@ -356,8 +356,9 @@ SKY_PTT=on                # everyone signed in (never bots)
 ```
 
 `SKY_PTT=off` (the default) removes everything: every `/sky/*` route answers 404 and no page
-carries the button or its scripts (byte-identical pages). `spike` behaves as `admins` (the plan's
-bare spike page was not built; the button itself carries the spike's measurements, below).
+carries the button or its scripts (byte-identical pages). `SKY_PTT=spike` behaves exactly as
+`admins` in batch 1a (the plan's bare spike page was not built; the button itself carries the
+spike's measurements, below).
 Rollback: `SKY_PTT=off` and restart Campfire.
 
 ### What the person sees
@@ -378,7 +379,8 @@ composer has focus (the soft keyboard is up) and while a modal dialog is open.
 
 - **Hold** (pointer, or focus + Space/Enter, or **Ctrl+Shift+Space** anywhere outside a text field)
   to talk; **release** to send. **Slide up** 60 px onto "Release here to cancel" (or lose the
-  pointer) to drop it. A hold under **300 ms** is a tap: a tip, nothing sent, no token minted. A
+  pointer) to drop it. A hold under **300 ms** is a tap: a tip, nothing sent, no press counted, no
+  token minted (the context call waits for the 300 ms). A
   hold stops at **60 s** (a warning at 50 s) and sends by itself. Pressing while Sky speaks stops
   it (barge-in); a tap then just stops it.
 - **Replies**: the last three exchanges in cards above the disc (chip, "you" line from the input
@@ -392,9 +394,9 @@ composer has focus (the soft keyboard is up) and while a modal dialog is open.
 ### How a press works
 
 ```
-pointerdown ─┬─ mic opens (getUserMedia, AudioWorklet 16 kHz), audio buffered
-             ├─ POST /sky/context {screen, room_id?, card?, last?}  → {press_id, note, chip, restricted}
-             └─ at 300 ms, if no warm session: POST /sky/token {reconnect_of?} → locked token, then the socket
+pointerdown ── mic opens (getUserMedia, AudioWorklet 16 kHz), audio buffered
+at 300 ms ──┬─ POST /sky/context {screen, room_id?, card?, last?}  → {press_id, note, chip, restricted}
+            └─ if no warm session: POST /sky/token {reconnect_of?} → locked token, then the socket
 when held ≥ 300 ms, the note back and the socket open:
              clientContent(note, turnComplete:false) → activityStart → buffered audio → live audio
 pointerup ── activityEnd → Sky answers: audio (24 kHz) + outputAudioTranscription
@@ -418,11 +420,19 @@ idle SKY_WARM_SECONDS, page hidden or left ── socket closed, POST /sky/usage
 - The press is kept 10 minutes (`press_id`), for batch 1b's tools to refer to a checked context.
 - **Warm session**: the socket stays open `SKY_WARM_SECONDS` (default 120) after the last reply, so a
   follow-up keeps its context and starts at once; the microphone is closed between presses. It
-  closes on `pagehide`, when the tab is hidden, and on a page without the button (signed out).
-  `goAway` reconnects through `LiveSession` with a fresh token naming the previous one
-  (`reconnect_of`), which counts a quarter.
+  closes on `pagehide`, when the tab is hidden, on the live voice page (nothing of Sky's plays over
+  a voice report), on a page without the button (signed out), and `SKY_WARM_SECONDS` after a failed
+  press too; a session still connecting then is closed as soon as it opens. `goAway` reconnects
+  through `LiveSession` with a fresh token naming the previous one (`reconnect_of`), which counts a
+  quarter only for a new session's token at least 5 minutes old, once (a reconnection's own token
+  can't be renewed at a quarter, so they can't be chained).
+- **Turns**: a turn the person interrupted (a new press while Sky answers), cancelled after it
+  began, or whose press failed is dropped: its late audio and words are ignored until the server
+  ends it (`interrupted` or its `turnComplete`), so nothing of it reaches the next reply. Its audio
+  still counts in the usage report.
 - **Turbo**: `#sky-ptt` is `data-turbo-permanent` and `hermes/sky_ptt.js` a module (run once per
-  document), so a reply keeps playing across Turbo visits; each page's own facts come from its
+  document; Turbo inserts body scripts without waiting for each other, so when it runs before
+  `hermes/sky_ptt_logic.js` it imports that from `data-sky-logic-url`), so a reply keeps playing across Turbo visits; each page's own facts come from its
   non-permanent `<template data-sky-page data-screen data-room data-card data-hidden>`, read on
   `turbo:load`. The card sheet's card is read from the DOM at press time.
 - iOS: the `AudioContext` is resumed in the press's own handler; `navigator.audioSession.type` is
@@ -436,7 +446,7 @@ protection). They log `sky:` lines with ids, sizes and timings, never words or t
 
 | Route | Body → answer | Checks |
 |---|---|---|
-| `POST /sky/token` | `{reconnect_of?}` → `{token, ws_url, model, expires_at, warm_seconds, token_id}` | Month budget (402 `budget_paused`), Sky's hourly token limit (429 `rate_limited`; a reconnection of the person's own open token counts ¼, once per token), then a 10-minute single-use token (`TokenLifetime::SKY`); 502 `upstream_error` if Gemini fails (an error counted, nothing charged) |
+| `POST /sky/token` | `{reconnect_of?}` → `{token, ws_url, model, expires_at, warm_seconds, token_id}` | Month budget (402 `budget_paused`), Sky's hourly token limit (429 `rate_limited`; a reconnection of the person's own new-session token, 5 to 10 minutes old, counts ¼, once per token, never chained), then a 10-minute single-use token (`TokenLifetime::SKY`); 502 `upstream_error` if Gemini fails (an error counted, nothing charged) |
 | `POST /sky/context` | `{screen, room_id?, card?, last?}` → `{press_id, note, chip, restricted}` | Counts a press (429 `daily_cap` past `SKY_PRESSES_PER_DAY`); room membership; card visibility; `last` = the previous press's timings, logged (known keys, numbers only) |
 | `POST /sky/usage` | `{token_id, held_ms, reply_ms, turns}` → `{counted: true}` | The token must be one minted for this person in the last 30 minutes (404 `unknown_token`) and not reported yet (409 `already_reported`) |
 
@@ -471,8 +481,10 @@ the workspace off they aren't read at all. The model is the voice page's `GEMINI
 rolling hourly windows and the token receipts are in memory (per process); the day and month
 counters (presses, tokens, reconnections, asks, confirms, refusals, errors, estimated cost; no
 words, no audio, no tokens) persist in `<CAMPFIRE_STORAGE_PATH>/hermes/sky-usage.json` (atomic
-writes; 90 days per person, 13 months of totals). A damaged file starts empty and is replaced on
-the next save (logged at boot).
+writes; 90 days per person, 13 months of totals). A file that can't be decoded is renamed
+`sky-usage.json.corrupt-<seconds>` (logged at boot, for an administrator: the month's spend was in
+it) and counting starts again from zero; the budget is then only the Google Cloud alert's until
+someone restores it.
 
 ### To check on a real phone (plan §3.2)
 
@@ -481,6 +493,10 @@ reply, after release), time to first audio warm and cold (E1, the administrators
 transcription lag (E4), Turbo visits while Sky speaks (E7), iPhone home-screen app: microphone
 prompt per launch, no long-press menu, reply on the loud speaker (E8), Android (E9), and
 `usageMetadata` (E10, the token count in the timing line).
+
+Open question: a warm session reconnects (`goAway`) with its last resumption handle, which may be
+older than the turn just finished (the voice page saw a handle only right after setup, 29 Sep
+2026); whether a resumed Sky session still has the previous exchange is untested.
 
 ## Where the code is
 
@@ -524,8 +540,9 @@ prompt per launch, no long-press menu, reply on the loud speaker (E8), Android (
   midnight in Paris, asks, the month budget's pause and new month, persistence round trip,
   retention, a damaged file; batch 1a: the setup (manual activity detection, no tools, quoted
   name and languages), the note (quoting, one line per fact, the chip), costs tied to a minted
-  receipt and counted once (another person's or a forged id refused, the floor, the ceiling,
-  reconnections once per token and within its life), presses kept 10 minutes per person, saves
+  receipt and counted once (another person's or a forged id refused, the floor, the ceiling),
+  reconnections (a quarter once per new session's token, 5 minutes old at least, within its life,
+  never chained, given back when the mint fails), a damaged file kept aside, presses kept 10 minutes per person, saves
   serialized. `tests::sky_ptt`: a hidden card is dropped, a restricted one carries no content.
 - `campfire_workspace::overlay::tests`: the button once, after the tab bar, permanent, with its
   template; hidden on the voice page; nothing when off; the screen of each path.
