@@ -1,15 +1,1986 @@
-/* Hermes fork: the product theme (docs/hermes-theme.md).
+/* Hermes fork: the product theme, "MeshDuty" (docs/hermes-theme.md; the style guide and its fit
+ * are in the Hermes repo, docs/ui-redesign/08-style-guide-fit.md).
  *
- * This is the one stylesheet that gives the app its look: it redefines tokens (upstream's
- * `--lch-*` / `--color-*` and the fork's `--ui-*`) and then restyles components by their existing
- * class names. It is linked on every page from the layout's head (crate::hermes::head_tags in
- * crates/views) LAST: after upstream's stylesheets, after the account's Custom styles and after the
- * fork's own stylesheets, so it wins every tie. `CAMPFIRE_THEME=off` leaves it out.
+ * The one stylesheet that gives the app its look. It is linked on every page from the layout's head
+ * (crate::hermes::head_tags in crates/views) LAST: after upstream's stylesheets, after the account's
+ * Custom styles and after the fork's own stylesheets, so it wins every tie. `CAMPFIRE_THEME=off`
+ * leaves it out (and the light/dark switch with it).
+ *
+ * Layout of this file:
+ *   1. Fonts (self-hosted under hermes/fonts/, SIL OFL; no request to Google).
+ *   2. Palette: the style guide's light values (with the contrast fixes of chapter 08), then the dark
+ *      values twice: under `:root[data-theme="dark"]` (the person chose Dark) and under
+ *      `prefers-color-scheme: dark` unless they chose Light. The two dark blocks must stay identical
+ *      (crates/assets/tests/theme.rs checks it, and that every --lch-* triplet is its hex's OKLCH).
+ *      Only colours live in these blocks; everything else reads them, so light/dark needs nothing
+ *      else, and an explicit Light beats a dark phone: upstream's own dark values sit in
+ *      `@media (prefers-color-scheme: dark)` blocks at the same specificity as their light ones,
+ *      and this file, loaded last, restates every rule they change (icon inversion, shadows,
+ *      mention tint, code colours) from the tokens below.
+ *   3. Mappings: upstream's --color-*, the fork's --ui-* and the Workspace's --ws-* onto the palette;
+ *      type, spacing, radius and elevation tokens.
+ *   4. Upstream components, grouped by the upstream file they override (reference/app/assets/stylesheets).
+ *   5. The fork's screens: voice (hermes.css), the Workspace (workspace.css), the theme switch.
  *
  * Rules for this file (docs/ui-redesign handbook in the Hermes repo, §4):
- * - give every colour token a light and a dark value;
+ * - give every colour token a light and a dark value; keep --lch-* as `L C H` triplets;
  * - keep `[hidden]` winning (`&[hidden] { display: none }` on anything that sets `display`);
  * - keep a visible `:focus-visible` on every button, link and input;
- * - group selector overrides by the upstream file they override, to keep sync diffs readable.
- *
- * Empty for now: the app looks exactly as it does without it. */
+ * - don't rename or restructure markup that code reads (handbook chapter 03): this file only styles. */
+
+/* ---------------------------------------------------------------------------------------------
+ * 1. Fonts: Libre Caslon Text (titles), Instrument Sans (UI and body), JetBrains Mono (ticket
+ *    numbers, times). Latin and Latin Extended subsets; the two sans are variable fonts. */
+
+@font-face {
+  font-family: "Libre Caslon Text";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("fonts/libre-caslon-text-400-latin-ext.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+  font-family: "Libre Caslon Text";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("fonts/libre-caslon-text-400-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "Libre Caslon Text";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("fonts/libre-caslon-text-700-latin-ext.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+  font-family: "Libre Caslon Text";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("fonts/libre-caslon-text-700-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "Instrument Sans";
+  font-style: normal;
+  font-weight: 400 700;
+  font-stretch: 100%;
+  font-display: swap;
+  src: url("fonts/instrument-sans-latin-ext.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+  font-family: "Instrument Sans";
+  font-style: normal;
+  font-weight: 400 700;
+  font-stretch: 100%;
+  font-display: swap;
+  src: url("fonts/instrument-sans-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: swap;
+  src: url("fonts/jetbrains-mono-latin-ext.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: swap;
+  src: url("fonts/jetbrains-mono-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+/* ---------------------------------------------------------------------------------------------
+ * 2. Palette. Light: the style guide's values, with chapter 08's contrast fixes (--danger,
+ *    --voice-fill and badge fills at terracotta 600, overlines at 700, timestamps in --ink-muted).
+ *    Dark: chapter 08's draft palette. Tables in docs/hermes-theme.md. */
+
+:root {
+  /* Brand */
+  --forest-900: #1f3b34;
+  --forest-700: #2d4c44;
+  --sage-300: #9fb2a9;
+  --sidebar-ink: #e9e4d8;
+  --accent: #c2613f;
+  --accent-400: #c9694a;
+  --accent-600: #b0512f;
+  --accent-700: #8f3f22;
+  --accent-200: #e59a7c;
+  --accent-tint: #f7e3d9;
+  /* Surfaces and lines */
+  --bg-canvas: #e9e4da;
+  --bg-surface: #f4f0e8;
+  --bg-raised: #fdfbf6;
+  --bg-sunken: #ece6db;
+  --bg-chip: #efeae0;
+  --border: #e3dccd;
+  --border-subtle: #e7e1d4;
+  --border-faint: #eee7da;
+  --border-strong: #cdc5b4;
+  /* Ink */
+  --ink: #1f2522;
+  --ink-2: #4b4f49;
+  --ink-muted: #6b6f68;
+  --ink-subtle: #8b8e86;
+  --ink-disabled: #b9b5aa;
+  /* Sky (AI) and status */
+  --ai: #4a7f8a;
+  --ai-ink: #2f5f6b;
+  --ai-tint: #e3ecef;
+  --ai-border: #9cb7bd;
+  --success: #2f6a4b;
+  --success-tint: #e1eee5;
+  --warning: #8a6417;
+  --warning-tint: #f6ecd2;
+  --danger: #9a4628;
+  --danger-tint: #fbeee8;
+  --danger-border: #e7b9a5;
+  /* Theme roles */
+  --primary: #1f3b34;
+  --primary-hover: #2d4c44;
+  --on-primary: #fdfbf6;
+  --danger-fill: #9a4628;
+  --voice-fill: #b0512f;
+  --bubble-me: #1f3b34;
+  --bubble-me-ink: #f4f0e8;
+  --bubble-me-muted: #b9c7c0;
+  --bubble-me-link: #f0b59d;
+  --overline-ink: #8f3f22;
+  /* Upstream's named colours (colors.css), as OKLCH triplets of the colours above */
+  --lch-black: 25.73% 0.0103 164.05; /* #1f2522 --ink */
+  --lch-white: 95.60% 0.0115 84.58; /* #f4f0e8 --bg-surface */
+  --lch-gray: 91.09% 0.0186 86.15; /* #e7e1d4 --border-subtle */
+  --lch-gray-dark: 89.59% 0.0216 85.95; /* #e3dccd --border */
+  --lch-gray-darker: 82.53% 0.0249 85.79; /* #cdc5b4 --border-strong */
+  --lch-blue: 54.88% 0.1332 39.66; /* #b0512f --accent-600 */
+  --lch-blue-light: 92.92% 0.0258 48.43; /* #f7e3d9 --accent-tint */
+  --lch-blue-dark: 75.35% 0.0998 42.59; /* #e59a7c --accent-200 */
+  --lch-orange: 60.21% 0.1335 39.64; /* #c2613f --accent */
+  --lch-red: 49.74% 0.1207 39.63; /* #9a4628 --danger */
+  --lch-green: 47.56% 0.0803 158.24; /* #2f6a4b --success */
+  /* Workspace column tones (Fizzy's column colours, toned down to the palette; text mixes them with --ink) */
+  --ws-col-new: #5a7fa3;
+  --ws-col-doing: #6f8434;
+  --ws-col-later: #8b8e86;
+  --ws-col-done: #4b4f49;
+  --ws-col-tan: #9c7f57;
+  --ws-col-yellow: #a8841f;
+  --ws-col-aqua: #3f8a8a;
+  --ws-col-violet: #6f63b0;
+  --ws-col-purple: #8a55a0;
+  --ws-col-pink: #b0587a;
+  /* Code highlighting (code.css), upstream's own values */
+  --keyword: oklch(58.79% 0.193 20.47);
+  --entity: oklch(50.15% 0.188 294.99);
+  --constant: oklch(49.49% 0.18 257.6);
+  --string: oklch(31.08% 0.101 255.87);
+  --variable: oklch(64.82% 0.18 45.87);
+  --comment: oklch(55.14% 0.019 250.98);
+  --entity-tag: oklch(54.64% 0.144 147.32);
+  --markup-heading: oklch(49.49% 0.18 257.6);
+  --markup-list: oklch(48.46% 0.093 90.48);
+  --markup-inserted: oklch(54.64% 0.144 147.32);
+  --markup-deleted: oklch(49.59% 0.183 24.19);
+  /* Icons are black SVG <img>: 0 keeps them black, 1 turns them white (--page-icon-invert keeps the
+   * page's value where a scope such as the sidebar changes --icon-invert) */
+  --icon-invert: 0;
+  --page-icon-invert: 0;
+  /* Elevation and scrollbars */
+  --shadow-sm: 0 2px 10px rgb(0 0 0 / 6%);
+  --shadow-lg: 0 12px 32px rgb(31 37 34 / 14%);
+  --scrollbar: #c9c1b0;
+
+  color-scheme: light;
+}
+
+/* Dark, chosen with the switch. Keep identical to the block below (tests/theme.rs). */
+:root[data-theme="dark"] {
+  /* Brand */
+  --forest-900: #16302a;
+  --forest-700: #23423a;
+  --sage-300: #9fb2a9;
+  --sidebar-ink: #e9e4d8;
+  --accent: #b0512f;
+  --accent-400: #c9694a;
+  --accent-600: #e59a7c;
+  --accent-700: #f0b59d;
+  --accent-200: #e59a7c;
+  --accent-tint: #3a2219;
+  /* Surfaces and lines */
+  --bg-canvas: #121715;
+  --bg-surface: #181e1b;
+  --bg-raised: #202723;
+  --bg-sunken: #151a18;
+  --bg-chip: #29312c;
+  --border: #36403a;
+  --border-subtle: #2e3732;
+  --border-faint: #262e2a;
+  --border-strong: #4f5a53;
+  /* Ink */
+  --ink: #ece7dc;
+  --ink-2: #c9c4b8;
+  --ink-muted: #a6a99f;
+  --ink-subtle: #8f9289;
+  --ink-disabled: #4d534e;
+  /* Sky (AI) and status */
+  --ai: #6fa3ae;
+  --ai-ink: #9cc6cf;
+  --ai-tint: #1e3135;
+  --ai-border: #4d7a83;
+  --success: #86c6a2;
+  --success-tint: #1b3125;
+  --warning: #e2b95f;
+  --warning-tint: #372d14;
+  --danger: #f0a083;
+  --danger-tint: #3a2018;
+  --danger-border: #7a3f2a;
+  /* Theme roles */
+  --primary: #335c50;
+  --primary-hover: #3a6457;
+  --on-primary: #ece7dc;
+  --danger-fill: #a3472a;
+  --voice-fill: #b0512f;
+  --bubble-me: #23423a;
+  --bubble-me-ink: #ece7dc;
+  --bubble-me-muted: #a9bab2;
+  --bubble-me-link: #f0b59d;
+  --overline-ink: #e59a7c;
+  /* Upstream's named colours (colors.css), as OKLCH triplets of the colours above */
+  --lch-black: 92.89% 0.0157 86.43; /* #ece7dc --ink */
+  --lch-white: 22.77% 0.0106 163.86; /* #181e1b --bg-surface */
+  --lch-gray: 32.66% 0.0150 161.17; /* #2e3732 --border-subtle */
+  --lch-gray-dark: 36.03% 0.0167 159.12; /* #36403a --border */
+  --lch-gray-darker: 45.57% 0.0178 157.72; /* #4f5a53 --border-strong */
+  --lch-blue: 75.35% 0.0998 42.59; /* #e59a7c --accent-600 */
+  --lch-blue-light: 28.04% 0.0405 41.29; /* #3a2219 --accent-tint */
+  --lch-blue-dark: 82.12% 0.0766 43.14; /* #f0b59d --accent-700 */
+  --lch-orange: 54.88% 0.1332 39.66; /* #b0512f --accent */
+  --lch-red: 77.80% 0.1041 40.70; /* #f0a083 --danger */
+  --lch-green: 77.32% 0.0836 159.02; /* #86c6a2 --success */
+  /* Workspace column tones (Fizzy's column colours, toned down to the palette; text mixes them with --ink) */
+  --ws-col-new: #7fa3c6;
+  --ws-col-doing: #a3b866;
+  --ws-col-later: #8f9289;
+  --ws-col-done: #c9c4b8;
+  --ws-col-tan: #c4a57c;
+  --ws-col-yellow: #d6b04e;
+  --ws-col-aqua: #6fb5b5;
+  --ws-col-violet: #9d92d6;
+  --ws-col-purple: #b585c8;
+  --ws-col-pink: #d886a5;
+  /* Code highlighting (code.css), upstream's own dark values */
+  --keyword: oklch(73.45% 0.1626 25.78);
+  --entity: oklch(80.05% 0.127 305.86);
+  --constant: oklch(78.57% 0.115 246.66);
+  --string: oklch(78.57% 0.115 246.66);
+  --variable: oklch(79.91% 0.141 60.1);
+  --comment: oklch(66.25% 0.018 250.92);
+  --entity-tag: oklch(84.16% 0.164 145.75);
+  --markup-heading: oklch(56.86% 0.202 259.67);
+  --markup-list: oklch(85.74% 0.133 89.95);
+  --markup-inserted: oklch(90.72% 0.112 146.34);
+  --markup-deleted: oklch(92.23% 0.0397 27.49);
+  /* Icons are black SVG <img>: 0 keeps them black, 1 turns them white (--page-icon-invert keeps the
+   * page's value where a scope such as the sidebar changes --icon-invert) */
+  --icon-invert: 1;
+  --page-icon-invert: 1;
+  /* Elevation and scrollbars */
+  --shadow-sm: 0 2px 10px rgb(0 0 0 / 35%);
+  --shadow-lg: 0 12px 32px rgb(0 0 0 / 50%);
+  --scrollbar: #4f5a53;
+
+  color-scheme: dark;
+}
+
+/* Dark, from the phone or computer, unless Light was chosen. Keep identical to the block above. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    /* Brand */
+    --forest-900: #16302a;
+    --forest-700: #23423a;
+    --sage-300: #9fb2a9;
+    --sidebar-ink: #e9e4d8;
+    --accent: #b0512f;
+    --accent-400: #c9694a;
+    --accent-600: #e59a7c;
+    --accent-700: #f0b59d;
+    --accent-200: #e59a7c;
+    --accent-tint: #3a2219;
+    /* Surfaces and lines */
+    --bg-canvas: #121715;
+    --bg-surface: #181e1b;
+    --bg-raised: #202723;
+    --bg-sunken: #151a18;
+    --bg-chip: #29312c;
+    --border: #36403a;
+    --border-subtle: #2e3732;
+    --border-faint: #262e2a;
+    --border-strong: #4f5a53;
+    /* Ink */
+    --ink: #ece7dc;
+    --ink-2: #c9c4b8;
+    --ink-muted: #a6a99f;
+    --ink-subtle: #8f9289;
+    --ink-disabled: #4d534e;
+    /* Sky (AI) and status */
+    --ai: #6fa3ae;
+    --ai-ink: #9cc6cf;
+    --ai-tint: #1e3135;
+    --ai-border: #4d7a83;
+    --success: #86c6a2;
+    --success-tint: #1b3125;
+    --warning: #e2b95f;
+    --warning-tint: #372d14;
+    --danger: #f0a083;
+    --danger-tint: #3a2018;
+    --danger-border: #7a3f2a;
+    /* Theme roles */
+    --primary: #335c50;
+    --primary-hover: #3a6457;
+    --on-primary: #ece7dc;
+    --danger-fill: #a3472a;
+    --voice-fill: #b0512f;
+    --bubble-me: #23423a;
+    --bubble-me-ink: #ece7dc;
+    --bubble-me-muted: #a9bab2;
+    --bubble-me-link: #f0b59d;
+    --overline-ink: #e59a7c;
+    /* Upstream's named colours (colors.css), as OKLCH triplets of the colours above */
+    --lch-black: 92.89% 0.0157 86.43; /* #ece7dc --ink */
+    --lch-white: 22.77% 0.0106 163.86; /* #181e1b --bg-surface */
+    --lch-gray: 32.66% 0.0150 161.17; /* #2e3732 --border-subtle */
+    --lch-gray-dark: 36.03% 0.0167 159.12; /* #36403a --border */
+    --lch-gray-darker: 45.57% 0.0178 157.72; /* #4f5a53 --border-strong */
+    --lch-blue: 75.35% 0.0998 42.59; /* #e59a7c --accent-600 */
+    --lch-blue-light: 28.04% 0.0405 41.29; /* #3a2219 --accent-tint */
+    --lch-blue-dark: 82.12% 0.0766 43.14; /* #f0b59d --accent-700 */
+    --lch-orange: 54.88% 0.1332 39.66; /* #b0512f --accent */
+    --lch-red: 77.80% 0.1041 40.70; /* #f0a083 --danger */
+    --lch-green: 77.32% 0.0836 159.02; /* #86c6a2 --success */
+    /* Workspace column tones (Fizzy's column colours, toned down to the palette; text mixes them with --ink) */
+    --ws-col-new: #7fa3c6;
+    --ws-col-doing: #a3b866;
+    --ws-col-later: #8f9289;
+    --ws-col-done: #c9c4b8;
+    --ws-col-tan: #c4a57c;
+    --ws-col-yellow: #d6b04e;
+    --ws-col-aqua: #6fb5b5;
+    --ws-col-violet: #9d92d6;
+    --ws-col-purple: #b585c8;
+    --ws-col-pink: #d886a5;
+    /* Code highlighting (code.css), upstream's own dark values */
+    --keyword: oklch(73.45% 0.1626 25.78);
+    --entity: oklch(80.05% 0.127 305.86);
+    --constant: oklch(78.57% 0.115 246.66);
+    --string: oklch(78.57% 0.115 246.66);
+    --variable: oklch(79.91% 0.141 60.1);
+    --comment: oklch(66.25% 0.018 250.92);
+    --entity-tag: oklch(84.16% 0.164 145.75);
+    --markup-heading: oklch(56.86% 0.202 259.67);
+    --markup-list: oklch(85.74% 0.133 89.95);
+    --markup-inserted: oklch(90.72% 0.112 146.34);
+    --markup-deleted: oklch(92.23% 0.0397 27.49);
+    /* Icons are black SVG <img>: 0 keeps them black, 1 turns them white (--page-icon-invert keeps the
+     * page's value where a scope such as the sidebar changes --icon-invert) */
+    --icon-invert: 1;
+    --page-icon-invert: 1;
+    /* Elevation and scrollbars */
+    --shadow-sm: 0 2px 10px rgb(0 0 0 / 35%);
+    --shadow-lg: 0 12px 32px rgb(0 0 0 / 50%);
+    --scrollbar: #4f5a53;
+
+    color-scheme: dark;
+  }
+}
+
+/* ---------------------------------------------------------------------------------------------
+ * 3. Mappings, the same in light and dark (they read the palette above) */
+
+:root {
+  /* Type: Caslon for titles, room and card names; Instrument Sans for everything else; JetBrains
+   * Mono for ticket numbers, times and durations. Sizes stay relative (rem/em) so they follow the
+   * person's text size; form fields keep upstream's 16px floor (iOS zooms in below it). */
+  --font-serif: "Libre Caslon Text", Georgia, "Times New Roman", serif;
+  --font-sans: "Instrument Sans", -apple-system, BlinkMacSystemFont, Aptos, Roboto, "Segoe UI", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --font-family: var(--font-sans);
+  --tracking-overline: 0.16em;
+
+  /* Spacing (4px base), radius, elevation */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-12: 48px;
+  --radius-xs: 4px;
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius-lg: 12px;
+  --radius-xl: 14px;
+  --radius-pill: 999px;
+
+  /* Upstream's semantic colours (colors.css) */
+  --color-negative: var(--danger);
+  --color-positive: var(--success);
+  --color-bg: var(--bg-surface);
+  --color-message-bg: var(--bg-raised);
+  --color-text: var(--ink);
+  --color-text-reversed: var(--bg-raised);
+  --color-link: var(--accent-600);
+  --color-border: var(--border-subtle);
+  --color-border-dark: var(--border);
+  --color-border-darker: var(--border-strong);
+  --color-selected: var(--accent-tint);
+  --color-selected-dark: var(--accent-600);
+  --color-alert: var(--accent);
+
+  /* Upstream's component knobs */
+  --btn-border-radius: var(--radius-md);
+  --input-border-radius: var(--radius-md);
+  --input-background: var(--bg-raised);
+
+  /* The fork's semantic tokens (hermes/tokens.css) */
+  --ui-surface: var(--bg-raised);
+  --ui-surface-raised: var(--bg-surface);
+  --ui-text: var(--ink);
+  --ui-text-reversed: var(--bg-raised);
+  --ui-text-muted: var(--ink-muted);
+  --ui-border: var(--border-subtle);
+  --ui-border-strong: var(--border);
+  --ui-border-stronger: var(--border-strong);
+  --ui-accent: var(--accent-600);
+  --ui-accent-tint: var(--accent-tint);
+  --ui-success: var(--success);
+  --ui-warning: var(--warning);
+  --ui-danger: var(--danger);
+  --ui-on-danger: #fff;
+  --ui-success-tint: var(--success-tint);
+  --ui-warning-tint: var(--warning-tint);
+  --ui-danger-tint: var(--danger-tint);
+  --ui-ai: var(--ai-ink);
+  --ui-ai-line: var(--ai-border);
+  --ui-ai-tint: var(--ai-tint);
+  --ui-on-ai-line: var(--ink);
+  --ui-radius-sm: var(--radius-sm);
+  --ui-radius-md: var(--radius-md);
+  --ui-radius-bubble: var(--radius-xl);
+  --ui-radius-lg: var(--radius-lg);
+  --ui-radius-pill: var(--radius-pill);
+  --ui-shadow: var(--shadow-sm);
+  --ui-shadow-lifted: var(--shadow-lg);
+  --ui-shadow-sheet: var(--shadow-lg);
+
+  /* Severity pills: text on tint; critical is a filled pill */
+  --sev-low: var(--ink-2);
+  --sev-low-bg: var(--bg-chip);
+  --sev-medium: var(--warning);
+  --sev-medium-bg: var(--warning-tint);
+  --sev-high: var(--accent-700);
+  --sev-high-bg: var(--accent-tint);
+  --sev-critical: #fff;
+  --sev-critical-bg: var(--danger-fill);
+
+  /* The Workspace's tokens (workspace.css); the column tones are in the palette blocks */
+  --ws-sev-low: var(--sev-low);
+  --ws-sev-medium: var(--sev-medium);
+  --ws-sev-high: var(--sev-high);
+  --ws-sev-critical: var(--sev-critical-bg);
+  --ws-on-critical: var(--sev-critical);
+  --ws-ai: var(--ai-ink);
+  --ws-ai-line: var(--ai-border);
+  --ws-ai-soft: var(--ai-tint);
+  --ws-on-cc: #fff;
+  --ws-shadow: var(--shadow-sm);
+}
+
+/* ---------------------------------------------------------------------------------------------
+ * 4. Upstream components, by upstream file */
+
+/* --- base.css ------------------------------------------------------------------------------- */
+
+html,
+body {
+  background-color: var(--bg-canvas);
+  font-family: var(--font-sans);
+  line-height: 1.45;
+}
+
+h1,
+h2,
+h3 {
+  text-wrap: balance;
+}
+
+:where(a:not([class]):not(:has(img))) {
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.15em;
+
+  @media (any-hover: hover) {
+    &:where(:not(:active):hover) {
+      --hover-filter: none;
+
+      color: var(--accent-700);
+    }
+  }
+}
+
+:where(button, input, textarea, summary, .input, .btn) {
+  &:where(:not(:active)):focus-visible {
+    outline-style: solid;
+  }
+}
+
+/* A visible ring on anything focusable that has none of its own (links, checkboxes, radios). */
+:where(a, input[type="checkbox"], input[type="radio"], select):focus-visible {
+  outline: 2px solid var(--accent-600);
+  outline-offset: 2px;
+}
+
+::selection {
+  background-color: var(--accent-tint);
+  color: var(--ink);
+}
+
+.dialog {
+  background-color: var(--bg-raised);
+  border-radius: var(--radius-xl);
+
+  &::backdrop {
+    background-image: none;
+    background-color: rgb(31 37 34 / 45%);
+    opacity: 1;
+  }
+}
+
+code {
+  background: var(--bg-chip);
+  border-color: var(--border);
+  border-radius: var(--radius-xs);
+  font-family: var(--font-mono);
+  font-size: 0.875em;
+  font-weight: 400;
+}
+
+pre {
+  font-family: var(--font-mono);
+}
+
+.version-badge {
+  border-radius: var(--radius-xs);
+  color: var(--ink-muted);
+  font-family: var(--font-mono);
+}
+
+.notifications-help {
+  background-color: var(--bg-sunken);
+  border-color: var(--border-subtle);
+  border-radius: var(--radius-lg);
+
+  img {
+    filter: invert(var(--icon-invert));
+  }
+
+  em {
+    background: var(--bg-raised);
+    border-color: var(--border-strong);
+    border-radius: var(--radius-xs);
+  }
+}
+
+.language-list-menu {
+  background-color: var(--bg-raised);
+  border-color: var(--border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+}
+
+@media screen and (-webkit-min-device-pixel-ratio:0) and (min-resolution:.001dpcm) {
+  * {
+    scrollbar-color: var(--scrollbar) transparent;
+  }
+}
+
+/* --- colorize.css: icon inversion, from the palette's --icon-invert ----------------------- */
+
+.colorize--black {
+  filter: invert(var(--icon-invert));
+}
+
+.colorize--white {
+  filter: invert(calc(1 - var(--icon-invert)));
+}
+
+/* --- avatars.css ------------------------------------------------------------------------------ */
+
+.avatar {
+  .banned &:after {
+    filter: invert(var(--icon-invert));
+  }
+}
+
+.avatar--icon {
+  background-color: var(--bg-raised);
+  border-color: var(--border);
+}
+
+/* --- buttons.css: primary (forest), secondary (raised + border), destructive, plain --------- */
+
+.btn {
+  font-weight: 500;
+
+  &:where(:has(img):not(.avatar)) img:not([class]) {
+    filter: invert(var(--icon-invert));
+  }
+
+  &:has(input:checked) {
+    --btn-background: var(--primary);
+    --btn-color: var(--on-primary);
+    --btn-border-color: transparent;
+
+    img {
+      filter: invert(1);
+    }
+  }
+
+}
+
+/* Touch screens: the guide's larger mobile radius (circle buttons set their own on the element). */
+@media (pointer: coarse) {
+  :root {
+    --btn-border-radius: var(--radius-xl);
+  }
+}
+
+.btn--reversed {
+  --btn-background: var(--primary);
+  --btn-color: var(--on-primary);
+  --hover-filter: none;
+
+  font-weight: 600;
+
+  @media (any-hover: hover) {
+    &:where(:not(.btn--faux):not(:active):hover) {
+      --btn-background: var(--primary-hover);
+    }
+  }
+}
+
+.btn--negative {
+  --btn-background: var(--danger-fill);
+  --btn-color: #fff;
+  --hover-filter: brightness(0.9);
+}
+
+.btn--reversed,
+.btn--negative {
+  img:not(.avatar) {
+    filter: invert(1);
+  }
+}
+
+.btn--pulsing {
+  outline-color: var(--accent);
+}
+
+/* --- inputs.css -------------------------------------------------------------------------------- */
+
+.input {
+  &::placeholder {
+    color: var(--ink-muted);
+    opacity: 1;
+  }
+}
+
+/* The avatar's file input covers the picture: keep it see-through. */
+.input--file input[type="file"] {
+  --input-background: transparent;
+}
+
+.input--code {
+  font-family: var(--font-mono);
+}
+
+.switch__input:checked + .switch__btn {
+  background-color: var(--primary);
+}
+
+.switch__btn::before {
+  background-color: #fff;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 20%);
+}
+
+/* --- layout.css, nav.css ----------------------------------------------------------------------- */
+
+#main-content {
+  background-color: var(--bg-surface);
+
+  .sidebar & {
+    @media (min-width: 100ch) {
+      border-inline-color: var(--border-subtle);
+    }
+  }
+}
+
+/* The room's (and page's) title pill at the top: a primary pill in Caslon. */
+.room--current {
+  .room__contents {
+    font-family: var(--font-serif);
+    font-weight: 700;
+    letter-spacing: 0.005em;
+  }
+}
+
+#app-logo {
+  @media (min-width: 100ch) {
+    opacity: 0.35;
+  }
+}
+
+/* --- sidebar.css: the dark forest sidebar ------------------------------------------------------ */
+
+/* Every colour inside the sidebar comes from these scoped tokens: upstream's rules (rooms,
+ * directs, tools, the menu button) then draw it in forest, with white icons. */
+#sidebar {
+  --icon-invert: 1;
+  --color-bg: var(--forest-900);
+  --color-text: var(--sidebar-ink);
+  --color-text-reversed: var(--forest-900);
+  --color-message-bg: var(--forest-700);
+  --color-border: rgb(233 228 216 / 12%);
+  --color-border-dark: rgb(233 228 216 / 18%);
+  --color-border-darker: rgb(233 228 216 / 30%);
+  --color-link: var(--accent-200);
+  --color-selected: var(--forest-700);
+  --color-selected-dark: var(--accent-200);
+  --hover-color: rgb(233 228 216 / 30%);
+  --outline-color: var(--accent-200);
+  --btn-border-color: transparent;
+  --input-background: var(--forest-700);
+  --input-border-color: rgb(233 228 216 / 30%);
+
+  color: var(--sidebar-ink);
+
+  :where(a, input[type="checkbox"], input[type="radio"], select):focus-visible {
+    outline-color: var(--accent-200);
+  }
+}
+
+.sidebar #sidebar {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  background-color: var(--forest-900);
+}
+
+.sidebar__toggle {
+  --btn-background: var(--forest-900);
+  --btn-border-color: transparent;
+
+  .open & img {
+    filter: invert(1);
+  }
+
+  #sidebar:where(:not(.open):has(.unread)) &::after {
+    background-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--bg-surface);
+  }
+}
+
+.sidebar__tools,
+.directs {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+.sidebar__tools {
+  background: linear-gradient(to top, var(--forest-900) 70%, transparent);
+}
+
+.directs {
+  background: linear-gradient(to bottom, var(--forest-900) 75%, transparent);
+}
+
+.direct__author {
+  color: var(--sidebar-ink);
+
+  .unread & {
+    font-weight: 600;
+
+    &::after {
+      background-color: var(--accent-200);
+    }
+  }
+}
+
+#sidebar .avatar--icon {
+  background-color: var(--forest-700);
+  border-color: transparent;
+}
+
+#sidebar .btn:not(.avatar):not(.room) {
+  --btn-background: var(--forest-700);
+}
+
+/* Rooms: nav items (6×8, r8), forest 700 on hover, 600 and a terracotta dot when unread. */
+#sidebar .room {
+  --btn-background: transparent;
+  --btn-border-color: transparent;
+  --btn-border-radius: var(--radius-sm);
+  --btn-padding: 0.5em 0.75em;
+  --hover-size: 0;
+
+  background-color: transparent;
+  box-shadow: none;
+  color: var(--sidebar-ink);
+  font-weight: 400;
+  inline-size: 100%;
+  justify-content: start;
+  position: relative;
+
+  @media (any-hover: hover) {
+    &:where(:not(:active):hover) {
+      background-color: var(--forest-700);
+    }
+  }
+
+  &.unread {
+    color: #fff;
+    font-weight: 600;
+    padding-inline-end: 1.75em;
+
+    &::after {
+      background-color: var(--accent-200);
+      block-size: 0.5em;
+      border-radius: 50%;
+      content: "";
+      inline-size: 0.5em;
+      inset-block-start: calc(50% - 0.25em);
+      inset-inline-end: 0.75em;
+      position: absolute;
+    }
+  }
+}
+
+#sidebar .rooms__new-btn {
+  --btn-border-radius: var(--radius-pill);
+
+  background-color: var(--forest-700);
+  inline-size: auto;
+  justify-content: center;
+  min-inline-size: 3em;
+}
+
+.searches__query,
+.room--current {
+  --btn-border-radius: var(--radius-md);
+}
+
+/* --- messages.css: bubbles, meta, day separator, my messages ------------------------------- */
+
+.message__day-separator {
+  color: var(--overline-ink);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: var(--tracking-overline);
+
+  time,
+  span {
+    background-color: var(--bg-surface);
+    padding-inline: 1.5ch;
+  }
+
+  &::after,
+  &::before {
+    border-top: 1px solid var(--border);
+  }
+}
+
+.message__body-content {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xl);
+  line-height: 1.45;
+}
+
+.message__author {
+  font-size: 0.82rem;
+
+  strong {
+    font-weight: 600;
+  }
+}
+
+.message__permalink {
+  color: var(--ink-muted);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  opacity: 1;
+}
+
+.message__attachment {
+  border-color: var(--border-subtle);
+  border-radius: var(--radius-xl);
+}
+
+.message__actions-menu {
+  --border-color: var(--border);
+
+  background-color: var(--bg-raised);
+  box-shadow: var(--shadow-lg);
+
+  &::after {
+    background: var(--bg-raised);
+  }
+}
+
+.message__action-btn {
+  @media (hover: hover) and (pointer: fine) {
+    &:where(:not(:active):hover) {
+      --btn-background: var(--bg-chip);
+    }
+  }
+}
+
+.message--mentioned .message__body-content {
+  --message-background: var(--accent-tint);
+
+  border-color: var(--danger-border);
+}
+
+.message--emoji:not(:has(.composer--edit)) .message__body-content {
+  border-color: transparent;
+}
+
+.message--failed .message__body-content {
+  outline-color: var(--danger);
+}
+
+.message.search-highlight .message__body-content {
+  border-color: var(--accent);
+}
+
+.message__pending-upload::before {
+  background-color: var(--border);
+}
+
+/* My own messages (upstream's .message--me, set in the browser by the message formatter, so the
+ * shared message cache is untouched): a forest bubble. Its tokens are scoped to the bubble: the
+ * options menu inside it, the edit form and emoji-only messages go back to the page's colours. */
+.message--me .message__body-content {
+  --message-background: var(--bubble-me);
+  --message-color: var(--bubble-me-ink);
+  --color-text: var(--bubble-me-ink);
+  --color-link: var(--bubble-me-link);
+  --icon-invert: 1;
+  --hover-color: rgb(244 240 232 / 30%);
+  --outline-color: var(--bubble-me-link);
+  --boost-border-color: rgb(244 240 232 / 30%);
+
+  border-color: transparent;
+
+  .message__permalink {
+    color: var(--bubble-me-muted);
+  }
+
+  .btn:not(.avatar) {
+    --btn-background: transparent;
+    --btn-color: currentColor;
+  }
+
+  .og-embed,
+  code {
+    --color-text: var(--ink);
+    --color-link: var(--accent-600);
+
+    color: var(--ink);
+  }
+}
+
+.message--me .message__body-content .message__actions-menu,
+.message--me .message__body-content--editing,
+.message--me.message--emoji:not(:has(.composer--edit)) .message__body-content {
+  --message-color: var(--ink);
+  --color-text: var(--ink);
+  --color-link: var(--accent-600);
+  --icon-invert: var(--page-icon-invert);
+  --hover-color: var(--border-strong);
+  --outline-color: var(--accent-600);
+  --boost-border-color: var(--border);
+
+  color: var(--ink);
+
+  .message__permalink {
+    color: var(--ink-muted);
+  }
+
+  .btn:not(.avatar) {
+    --btn-background: transparent;
+    --btn-color: var(--ink);
+  }
+}
+
+.message--me .message__body-content--editing {
+  --message-background: var(--bg-raised);
+
+  border-color: var(--border-subtle);
+}
+
+.message--me.message--mentioned .message__body-content {
+  --message-background: var(--bubble-me);
+
+  border-color: var(--accent);
+}
+
+/* On wide screens the "⋯" button sits outside the bubble, on the page. */
+@media (min-width: 100ch) {
+  .message--me .message__meta .message__actions {
+    --icon-invert: var(--page-icon-invert);
+  }
+}
+
+/* --- boosts.css, autocomplete.css, embeds.css, lightbox.css, panels.css, flash.css, utilities --- */
+
+.boost {
+  border-radius: var(--radius-pill);
+}
+
+.autocomplete__list {
+  background-color: var(--bg-raised);
+  border-color: var(--border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+}
+
+.btn:is(.autocomplete__btn) {
+  &:hover,
+  &:focus-visible {
+    background-color: var(--primary);
+    color: var(--on-primary);
+  }
+}
+
+suggestion-option[selected]:not(.flashing-off) {
+  background: var(--primary);
+
+  .autocomplete__btn {
+    background: var(--primary);
+    color: var(--on-primary);
+  }
+}
+
+.autocomplete__pill {
+  background-color: var(--bg-chip);
+}
+
+.lexxy-content .og-embed {
+  background: var(--bg-raised);
+  border-color: var(--border-subtle);
+  border-radius: var(--radius-lg);
+}
+
+.lexxy-content .og-embed__title {
+  font-family: var(--font-serif);
+  font-weight: 700;
+}
+
+.panel {
+  @media (min-width: 100ch) {
+    background-color: var(--bg-raised);
+    border-color: var(--border-subtle);
+    border-radius: var(--radius-xl);
+    box-shadow: var(--shadow-sm);
+  }
+
+  :is(h1, h2, legend) {
+    font-family: var(--font-serif);
+    font-weight: 700;
+  }
+}
+
+.nametag {
+  background-color: var(--bg-sunken);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-lg);
+}
+
+.nametag__inner {
+  background-color: var(--bg-raised);
+  border-radius: var(--radius-lg);
+}
+
+.flash__inner {
+  box-shadow: var(--shadow-lg);
+}
+
+.shadow {
+  box-shadow: var(--shadow-lg);
+}
+
+.border-radius {
+  border-radius: var(--border-radius, var(--radius-xl));
+}
+
+.txt-subtle {
+  color: var(--ink-muted);
+}
+
+.fill-shade {
+  background-color: var(--bg-sunken);
+}
+
+.separator {
+  border-block-start-color: var(--border-strong);
+}
+
+fieldset {
+  border-color: var(--fieldset-border-color, var(--border-subtle));
+}
+
+/* --- composer.css -------------------------------------------------------------------------------- */
+
+.composer__file-caption::after {
+  filter: invert(var(--icon-invert));
+}
+
+:is(img, span):is(.composer__file-thumbnail) {
+  border-color: var(--border);
+}
+
+.typing-indicator {
+  color: var(--ink-muted);
+}
+
+/* ---------------------------------------------------------------------------------------------
+ * 5. The fork's screens */
+
+/* --- hermes.css: composer voice buttons, audio player, live voice page ----------------------- */
+
+/* The voice buttons (record a note, live report): the terracotta pill, white glyph. */
+.composer .hermes-voice-note__toggle,
+.composer .hermes-live-link {
+  --btn-background: var(--voice-fill);
+  --btn-border-color: transparent;
+  --btn-color: #fff;
+  --hover-filter: brightness(0.92);
+  --hover-color: var(--accent-tint);
+
+  img.colorize--black {
+    filter: invert(1);
+  }
+}
+
+@media (pointer: coarse) {
+  .composer .hermes-live-link {
+    --btn-border-radius: var(--radius-pill);
+
+    padding-inline: 0.55em;
+  }
+}
+
+/* Recording: the toggle sends, like the composer's Send (primary), pulsing. */
+.hermes-voice-note[data-recording] .hermes-voice-note__toggle {
+  --btn-background: var(--primary);
+  --btn-color: var(--on-primary);
+
+  outline-color: var(--danger);
+
+  img {
+    filter: invert(1);
+  }
+}
+
+.hermes-voice-note__timer,
+.hermes-audio__label,
+.voice__timer {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.hermes-voice-note__dot,
+.hermes-voice-note__level::after {
+  background: var(--accent);
+}
+
+.hermes-voice-note__error {
+  background: var(--ink);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  color: var(--bg-raised);
+}
+
+.hermes-audio__label {
+  color: inherit;
+  font-size: 0.8rem;
+  opacity: 1;
+}
+
+.voice__intro {
+  color: var(--ink-2);
+}
+
+.voice__role {
+  color: var(--overline-ink);
+  font-size: 0.68rem;
+  letter-spacing: var(--tracking-overline);
+  opacity: 1;
+}
+
+.voice__line--model .voice__role {
+  color: var(--ai-ink);
+}
+
+.voice__bubble {
+  background-color: var(--bg-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xl);
+}
+
+.voice__line--user .voice__bubble {
+  background-color: var(--bubble-me);
+  border-color: transparent;
+  color: var(--bubble-me-ink);
+}
+
+.voice__line--hermes .voice__bubble {
+  background-color: transparent;
+  border: 1.5px dashed var(--ai-border);
+  color: var(--ai-ink);
+}
+
+.voice__notice {
+  border-color: var(--danger-border);
+  border-radius: var(--radius-xl);
+}
+
+.voice__notice-icon {
+  background: var(--danger-fill);
+
+  img {
+    filter: invert(1);
+  }
+}
+
+.voice__confirm {
+  background: var(--bg-raised);
+  border-color: var(--border-subtle);
+  border-radius: var(--radius-xl);
+}
+
+.voice__result-icon img {
+  filter: invert(calc(1 - var(--icon-invert)));
+}
+
+.voice__bar {
+  border-block-start-color: var(--border-subtle);
+}
+
+.voice__control::before {
+  border-color: var(--accent);
+}
+
+/* The big button: terracotta to start or resume (it's the report CTA), danger to hang up. */
+.voice__toggle {
+  &.btn--reversed {
+    --btn-background: var(--voice-fill);
+    --btn-color: #fff;
+    --hover-filter: brightness(0.92);
+
+    box-shadow: 0 0 0 0.4rem var(--accent-tint);
+  }
+
+  &.btn--reversed img,
+  &.btn--negative img {
+    filter: invert(1);
+  }
+}
+
+.voice__status {
+  font-family: var(--font-serif);
+  font-weight: 700;
+}
+
+.voice__hint {
+  color: var(--ink-muted);
+  opacity: 1;
+}
+
+.voice__timer {
+  color: var(--ink-muted);
+  opacity: 1;
+}
+
+/* --- workspace.css: severity, chips, drafts, tab bar ------------------------------------------ */
+
+/* Severity: a status pill (12/600, r999), text on its tint; critical is filled. */
+.ws-sev {
+  background: var(--sev-low-bg);
+  border: 0;
+  color: var(--sev-low);
+  font-size: 0.75em;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  line-height: 1.5;
+  padding: 0 0.65em;
+
+  &::before {
+    display: none;
+  }
+}
+
+.ws-sev--medium {
+  background: var(--sev-medium-bg);
+  color: var(--sev-medium);
+}
+
+.ws-sev--high {
+  background: var(--sev-high-bg);
+  color: var(--sev-high);
+}
+
+.ws-sev--critical {
+  background: var(--sev-critical-bg);
+  color: var(--sev-critical);
+}
+
+/* Card chip: a small record card; the ticket number is a mono record ID, the column colour a dot
+ * on the state pill. Same markup for every viewer (it's in the shared message cache). */
+a.ws-chip {
+  align-items: center;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: none;
+  color: var(--ink);
+  gap: 0.5em;
+  padding: 0.35em 0.6em 0.35em 0.45em;
+
+  @media (any-hover: hover) {
+    &:hover {
+      border-color: var(--border-strong);
+      box-shadow: var(--shadow-sm);
+    }
+  }
+}
+
+.ws-chip__no {
+  align-self: center;
+  background: var(--bg-chip);
+  border-radius: 6px;
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  font-weight: 500;
+  padding: 0.1em 0.45em;
+  white-space: nowrap;
+}
+
+.ws-chip__body {
+  gap: 0.25em 0.45em;
+  padding: 0;
+}
+
+.ws-chip__title {
+  font-family: var(--font-serif);
+  font-weight: 700;
+}
+
+/* A column's state: a pill with the column's colour as a dot. */
+:is(.ws-chip__state, .ws-column) {
+  align-items: center;
+  display: inline-flex;
+  gap: 0.35em;
+  letter-spacing: 0;
+  text-transform: none;
+
+  &::before {
+    background: var(--ws-cc);
+    block-size: 0.5em;
+    border-radius: 50%;
+    content: "";
+    flex: none;
+    inline-size: 0.5em;
+  }
+}
+
+.ws-chip__state {
+  background: var(--bg-chip);
+  border-radius: var(--radius-pill);
+  color: var(--ink-2);
+  font-size: 0.75em;
+  font-weight: 600;
+  line-height: 1.5;
+  padding: 0 0.6em;
+}
+
+/* Sky's drafts and proposals: dashed teal while suggested; solid with a ✓ once done. */
+.ws-draft {
+  background: var(--bg-raised);
+  border: 1.5px dashed var(--ai-border);
+  border-radius: var(--radius-xl);
+  padding: 0.6em 0.8em;
+}
+
+.ws-draft__hint {
+  color: var(--ai-ink);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: var(--tracking-overline);
+  text-transform: uppercase;
+}
+
+.ws-ai {
+  color: var(--ai-ink);
+  font-weight: 600;
+}
+
+:is(.ws-draft__hint, .ws-ai)::before {
+  color: var(--ai);
+}
+
+.ws-draft__status {
+  color: var(--ai-ink);
+}
+
+.ws-draft:is([data-ws-draft-state="sent"], [data-ws-draft-state="superseded"]) {
+  background: var(--bg-raised);
+  border-color: var(--border);
+}
+
+.ws-draft[data-ws-draft-state="sent"] {
+  border-color: var(--ai-border);
+
+  .ws-draft__hint::before {
+    color: var(--success);
+    content: "✓ ";
+  }
+}
+
+.ws-draft[data-ws-draft-state="sent"][data-ws-proposal] .ws-draft__status {
+  color: var(--ink-2);
+}
+
+/* Inside my forest bubble a draft keeps the page's colours. */
+.message--me .ws-draft {
+  color: var(--ink);
+}
+
+/* Tab bar: raised bar on phones, the canvas rail on wide screens; the active tab is ink with a
+ * terracotta underline; Report is the terracotta voice button. */
+.ws-tab {
+  color: var(--ink-2);
+  font-weight: 500;
+
+  img {
+    opacity: 0.75;
+  }
+
+  &[aria-current="page"] {
+    color: var(--ink);
+    font-weight: 600;
+    position: relative;
+
+    &::after {
+      background: var(--accent);
+      block-size: 2px;
+      border-radius: 2px;
+      content: "";
+      inline-size: 1.5rem;
+      inset-block-end: 0.1rem;
+      position: absolute;
+    }
+  }
+}
+
+.ws-tab__disc {
+  background: var(--voice-fill);
+  box-shadow: 0 0 0 0.25rem var(--bg-raised), var(--shadow-lg);
+
+  img {
+    filter: invert(1);
+  }
+}
+
+.ws-tab--report {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+@media (max-width: 100ch) {
+  .ws-tabbar {
+    background: var(--bg-raised);
+    border-block-start-color: var(--border-subtle);
+    box-shadow: 0 -2px 10px rgb(0 0 0 / 4%);
+  }
+}
+
+@media (min-width: 100ch) {
+  .ws-tab__disc {
+    box-shadow: 0 0 0 0.25rem var(--bg-canvas), var(--shadow-sm);
+  }
+
+  .ws-tab[aria-current="page"]::after {
+    inset-block-end: auto;
+    inset-inline-start: 0;
+    block-size: 1.5rem;
+    inline-size: 2px;
+  }
+}
+
+/* --- workspace.css: Home, lists, cards ------------------------------------------------------------ */
+
+/* The page title pill is fixed over the top of the page: start below it (Home on phones only: on
+ * wide screens its centred column clears the pill). */
+.ws-board {
+  padding-block-start: calc(var(--navbar-height) + var(--block-space-half));
+}
+
+@media (max-width: 100ch) {
+  .ws-home {
+    padding-block-start: calc(var(--navbar-height) + var(--block-space-half));
+  }
+}
+
+/* The page title pill follows the back button (upstream pulls a room's title over the account logo). */
+#nav .room--current.ws-home__title {
+  margin-inline-start: 0;
+}
+
+.ws-home__title .room__contents,
+.ws-board__title,
+.ws-section__title,
+.ws-panel__title,
+.ws-sheet__title,
+.ws-sheet__subtitle {
+  font-family: var(--font-serif);
+  font-weight: 700;
+}
+
+.ws-section__title {
+  font-size: 1.25rem;
+  line-height: 1.2;
+}
+
+.ws-section__hint {
+  color: var(--ink-muted);
+  font-family: var(--font-sans);
+}
+
+.ws-section__link,
+.ws-link {
+  color: var(--accent-600);
+  font-family: var(--font-sans);
+  font-weight: 600;
+  text-decoration: none;
+
+  @media (any-hover: hover) {
+    &:hover {
+      color: var(--accent-700);
+      text-decoration: underline;
+    }
+  }
+}
+
+/* Counts: a neutral chip; the "to confirm" one is Sky's teal. */
+.ws-count {
+  background: var(--bg-chip);
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  font-size: 0.7em;
+  font-weight: 500;
+  line-height: 1.6;
+  padding: 0 0.55em;
+  vertical-align: middle;
+}
+
+.ws-count--ai {
+  background: var(--ai-ink);
+  color: var(--bg-raised);
+}
+
+.ws-notice {
+  background: var(--warning-tint);
+  border: 1px solid color-mix(in srgb, var(--warning) 25%, transparent);
+  border-inline-start: 3px solid var(--warning);
+  border-radius: var(--radius-lg);
+}
+
+.ws-empty,
+.ws-muted,
+.ws-section__hint,
+.ws-panel__linked,
+.ws-overlay__loading {
+  color: var(--ink-muted);
+}
+
+.ws-item,
+.ws-comment {
+  background: var(--bg-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xl);
+}
+
+.ws-item {
+  padding: 0.75em 0.9em;
+}
+
+.ws-item--draft {
+  background: var(--bg-raised);
+  border: 1.5px dashed var(--ai-border);
+}
+
+.ws-item__meta,
+.ws-comment__meta {
+  color: var(--ink-muted);
+}
+
+.ws-item__title {
+  font-family: var(--font-serif);
+  font-weight: 700;
+}
+
+.ws-column {
+  color: var(--ink-2);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: var(--tracking-overline);
+  text-transform: uppercase;
+}
+
+.ws-column__count {
+  font-family: var(--font-mono);
+  letter-spacing: 0;
+}
+
+/* A ticket: a raised record card; its number is a mono record ID with the column's dot. */
+.ws-card {
+  background: var(--bg-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xl);
+  box-shadow: none;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+
+  @media (any-hover: hover) {
+    &:hover {
+      border-color: var(--border-strong);
+      box-shadow: var(--shadow-sm);
+    }
+  }
+}
+
+a.ws-card__link {
+  border-radius: inherit;
+  padding: 0.75em 0.9em;
+}
+
+.ws-card__head {
+  align-items: center;
+  margin-inline-start: 0;
+
+  .ws-sev {
+    margin-block-start: 0;
+  }
+}
+
+.ws-card__no {
+  align-items: center;
+  background: var(--bg-chip);
+  border-radius: 6px;
+  color: var(--ink-2);
+  display: inline-flex;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 500;
+  gap: 0.4em;
+  letter-spacing: 0;
+  padding: 0.15em 0.5em;
+  text-transform: none;
+
+  &::before {
+    background: var(--ws-cc);
+    block-size: 0.5em;
+    border-radius: 50%;
+    content: "";
+    flex: none;
+    inline-size: 0.5em;
+  }
+}
+
+.ws-card__title {
+  color: var(--ink);
+  font-family: var(--font-serif);
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.ws-card__meta {
+  color: var(--ink-muted);
+}
+
+.ws-card--closed {
+  opacity: 0.8;
+}
+
+/* --- workspace.css: fields, tags, filters, statuses ----------------------------------------------- */
+
+.ws-field__label {
+  color: var(--ink-muted);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: var(--tracking-overline);
+}
+
+.ws-tag,
+.ws-tag-toggle span,
+.ws-filter {
+  background: var(--bg-raised);
+  border-color: var(--border);
+  color: var(--ink-2);
+}
+
+.ws-tag-toggle input:checked + span,
+.ws-filter[aria-current="true"] {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--on-primary);
+  font-weight: 600;
+}
+
+.ws-tag-toggle input:focus-visible + span,
+.ws-sev-toggle input:focus-visible + .ws-sev {
+  outline: 2px solid var(--accent-600);
+  outline-offset: 2px;
+}
+
+[data-ws-status][data-tone="ok"] {
+  color: var(--success);
+}
+
+[data-ws-status][data-tone="error"],
+.ws-log__error,
+.ws-log__item--failed .ws-item__title {
+  color: var(--danger);
+}
+
+.ws-via--direct {
+  background: var(--ai-tint);
+  border-color: var(--ai-border);
+  color: var(--ai-ink);
+}
+
+.ws-via--campfire {
+  background: var(--bg-chip);
+}
+
+.ws-via--chat {
+  color: var(--ink-muted);
+}
+
+.ws-autonomy th,
+.ws-autonomy td {
+  border-block-end-color: var(--border-subtle);
+}
+
+/* Upstream resets every input's appearance: give the Workspace's checkboxes and radios their
+ * native look back (they were invisible), in the primary colour. */
+.ws-step input,
+.ws-autonomy input,
+.ws-radio input {
+  accent-color: var(--primary);
+  appearance: auto;
+}
+
+/* Upstream lays fieldsets out as a column: the Workspace's tag and filter groups are rows that wrap. */
+.ws-filters__sev,
+.ws-sheet__departments,
+.ws-dept__rooms {
+  flex-direction: row;
+
+  legend {
+    float: left;
+    inline-size: 100%;
+    justify-content: start;
+    margin-inline: 0;
+    text-align: start;
+  }
+}
+
+.ws-step--done span {
+  color: var(--ink-muted);
+}
+
+/* --- workspace.css: board, column tabs, card sheet, room panel ------------------------------------ */
+
+.ws-board__title {
+  font-size: 1.5rem;
+}
+
+.ws-col {
+  background: var(--bg-sunken);
+  border: 1px solid var(--border-faint);
+  border-radius: var(--radius-xl);
+  padding: 0.65em;
+}
+
+.ws-coltab {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  color: var(--ink-2);
+  font-weight: 600;
+
+  &[aria-pressed="true"] {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: var(--on-primary);
+  }
+}
+
+.ws-coltab__count {
+  font-family: var(--font-mono);
+  font-weight: 400;
+}
+
+dialog.ws-overlay {
+  background: var(--bg-raised);
+  border-inline-start: 1px solid var(--border-subtle);
+
+  &::backdrop {
+    background: rgb(31 37 34 / 25%);
+  }
+}
+
+.ws-sheet__title {
+  color: var(--ink);
+  font-size: 1.5rem;
+  line-height: 1.25;
+}
+
+.ws-sheet__subtitle {
+  font-size: 1.05rem;
+}
+
+.ws-sheet__report {
+  background: var(--bg-sunken);
+  border: 1px solid var(--border-faint);
+  border-radius: var(--radius-lg);
+}
+
+.ws-comment {
+  background: var(--bg-surface);
+}
+
+.ws-more__menu {
+  background: var(--bg-raised);
+  border-color: var(--border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+}
+
+.ws-panel {
+  background: var(--bg-surface);
+
+  @media (min-width: 100ch) {
+    border-inline-start-color: var(--border-subtle);
+  }
+}
+
+.ws-panel-toggle {
+  font-weight: 600;
+
+  &[aria-expanded="true"] {
+    background: var(--primary);
+    color: var(--on-primary);
+  }
+}
+
+/* --- The theme switch (profile page) ------------------------------------------------------------- */
+
+.hermes-theme-switch {
+  align-items: center;
+  border: 0;
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
+  justify-content: center;
+  margin: 0;
+  max-inline-size: none;
+  padding: var(--space-2) 0;
+}
+
+.hermes-theme-switch__legend {
+  color: var(--overline-ink);
+  flex-basis: 100%;
+  float: left;
+  justify-content: center;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: var(--tracking-overline);
+  margin: 0;
+  padding: 0;
+  text-transform: uppercase;
+}
+
+.hermes-theme-switch__option {
+  cursor: pointer;
+  display: inline-flex;
+  position: relative;
+
+  input {
+    block-size: 1px;
+    inline-size: 1px;
+    opacity: 0;
+    position: absolute;
+  }
+
+  span {
+    background: var(--bg-raised);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-pill);
+    color: var(--ink-2);
+    font-size: 0.9rem;
+    font-weight: 500;
+    min-inline-size: 5.5em;
+    padding: 0.45em 1em;
+    text-align: center;
+  }
+
+  input:checked + span {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: var(--on-primary);
+    font-weight: 600;
+  }
+
+  input:focus-visible + span {
+    outline: 2px solid var(--accent-600);
+    outline-offset: 2px;
+  }
+}
+
+/* --- Motion: respect reduced motion (upstream's reset kills animations; this covers ours) ------- */
+
+@media (prefers-reduced-motion: reduce) {
+  .ws-card,
+  a.ws-chip,
+  .hermes-theme-switch__option span {
+    transition: none;
+  }
+}
