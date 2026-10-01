@@ -1,3 +1,9 @@
+# Hermes fork: template shadowing (docs/hermes-theme.md). A file at templates-hermes/<path> wins
+# over templates/<path>, also through {% include %} and {% extends %} with rooted paths. Every
+# shadowed file is listed in templates-hermes/SHADOWED.md (tests/shadowed_templates.rs checks it).
+[general]
+dirs = ["templates-hermes", "templates"]
+
 # ERB::Util.html_escape-compatible escaping (&amp; &lt; &gt; &quot; &#39;) for every template
 # format that ERB would escape, so output bytes match the Rails views.
 [[escaper]]

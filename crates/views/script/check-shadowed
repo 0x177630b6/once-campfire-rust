@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# Hermes fork: check the shadowed templates after an upstream merge (docs/hermes-theme.md).
+#
+#   crates/views/script/check-shadowed
+#
+# For crates/views/templates-hermes/ and its SHADOWED.md:
+#   (a) fails if a shadowed file isn't listed, or a row's upstream template doesn't exist (upstream
+#       moved or deleted it: the shadow now shadows nothing);
+#   (b) reports each shadowed template whose upstream file changed since it was copied (its
+#       `git hash-object` differs from the recorded blob), with the upstream diff when git still has
+#       the old blob: port the change into the shadow, then record the new blob;
+#   (c) fails if a template refers to another by a path askama resolves relative to the including
+#       file (a bare name), which skips templates-hermes/, or if src/ embeds a shadowed template
+#       with include_str! (the fragment-cache digests, the service worker).
+# Exit status: 0 all good; 1 a failure from (a) or (c); 2 only changes to review from (b).
+# `cargo test -p campfire_views --test shadowed_templates` runs (a) and (c) too.
+set -euo pipefail
+
+VIEWS="$(cd "$(dirname "$0")/.." && pwd)"
+UPSTREAM="$VIEWS/templates"
+SHADOW="$VIEWS/templates-hermes"
+failed=0
+review=0
+
+fail() { echo "FAIL: $*" >&2; failed=1; }
+
+# (a) the list against the directory
+listed="$(grep -E '^\| `' "$SHADOW/SHADOWED.md" | awk -F'|' '{ for (i = 2; i <= 4; i++) { gsub(/^[ `]+|[ `]+$/, "", $i) } print $2 "\t" $3 "\t" $4 }' || true)"
+while IFS= read -r file; do
+  [ -n "$file" ] || continue
+  if ! printf '%s\n' "$listed" | cut -f1 | grep -qxF "$file"; then
+    fail "templates-hermes/$file is not listed in SHADOWED.md"
+  fi
+done < <(cd "$SHADOW" && find . -type f ! -name README.md ! -name SHADOWED.md | sed 's|^\./||' | sort)
+
+while IFS=$'\t' read -r shadowed upstream blob; do
+  [ -n "$shadowed" ] || continue
+  if [ ! -f "$SHADOW/$shadowed" ]; then fail "SHADOWED.md lists $shadowed, which isn't in templates-hermes/"; fi
+  if [ "$upstream" != "$shadowed" ]; then fail "$shadowed: the upstream source must be the same path (got $upstream)"; fi
+  if [ ! -f "$UPSTREAM/$upstream" ]; then
+    fail "$shadowed shadows templates/$upstream, which no longer exists upstream"
+    continue
+  fi
+  # (b) upstream changed since the copy
+  current="$(git -C "$VIEWS" hash-object "$UPSTREAM/$upstream")"
+  if [ "$current" != "$blob" ]; then
+    review=1
+    echo "REVIEW: templates/$upstream changed upstream since templates-hermes/$shadowed was copied ($blob -> $current)"
+    if git -C "$VIEWS" cat-file -e "$blob" 2>/dev/null; then
+      git -C "$VIEWS" --no-pager diff --no-color "$blob" "$current" | sed 's/^/    /'
+    else
+      echo "    (git doesn't have blob $blob; compare by hand with git log -p -- crates/views/templates/$upstream)"
+    fi
+  fi
+done <<< "$listed"
+
+# (c) includes that bypass the shadow
+for root in "$UPSTREAM" "$SHADOW"; do
+  while IFS= read -r file; do
+    rel="${file#"$root"/}"
+    dir="$(dirname "$rel")"
+    while IFS= read -r ref; do
+      [ -n "$ref" ] || continue
+      case "$ref" in
+        */*) ;;
+        *) fail "$rel: \"$ref\" is a bare name (askama resolves it next to $rel, skipping templates-hermes/)"; continue ;;
+      esac
+      if [ -e "$UPSTREAM/$dir/$ref" ] || [ -e "$SHADOW/$dir/$ref" ]; then
+        fail "$rel: \"$ref\" resolves next to the including file ($dir/$ref), skipping templates-hermes/"
+      fi
+    done < <(grep -oE '\{%[-+~]?[[:space:]]*(include|extends|import)[[:space:]]+"[^"]+"' "$file" | sed -E 's/.*"([^"]+)"$/\1/' || true)
+  done < <(find "$root" -type f ! -name '*.md' | sort)
+done
+
+# (c) include_str! of a shadowed template
+while IFS= read -r line; do
+  src="${line%%:*}"
+  path="${line#*:}"
+  target="$(realpath -m "$(dirname "$src")/$path")"
+  case "$target" in
+    "$UPSTREAM"/*)
+      rel="${target#"$UPSTREAM"/}"
+      if [ -e "$SHADOW/$rel" ]; then
+        fail "templates-hermes/$rel is shadowed, but ${src#"$VIEWS"/} embeds templates/$rel with include_str!"
+      fi
+      ;;
+  esac
+done < <(grep -roE 'include_str!\("[^"]+"' "$VIEWS/src" | sed -E 's/include_str!\("//; s/"$//' || true)
+
+if [ "$failed" = 1 ]; then exit 1; fi
+if [ "$review" = 1 ]; then exit 2; fi
+echo "ok: $(printf '%s\n' "$listed" | grep -c . || true) shadowed template(s), all current"

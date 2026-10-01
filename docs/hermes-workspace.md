@@ -813,6 +813,7 @@ Every one is marked `Hermes fork:` in the file. Line numbers as of this commit.
 | `crates/views/src/messages/presentation.rs:19-20` | `MessageContent::Text { html } => crate::hermes::workspace_message_html(message, html)` | The one hook in message rendering: chips and draft buttons, at render time |
 | `crates/views/templates/layouts/application.html:26` | `{{ crate::hermes::head_tags(ctx)\|safe }}` after `custom_styles_tag`, same line | The head seam (docs/hermes-theme.md): `hermes.css`, `workspace.css` while the workspace is on, then `theme.css`, each with `data-turbo-track="reload"`, after Custom styles so the theme wins. Renders `""` until the app installs its page assets (so the goldens keep upstream's bytes), and being on the same line adds no whitespace |
 | `crates/views/templates/layouts/application.html:55` | `{{ crate::hermes::workspace_overlay(ctx)\|safe }}` after the lightbox include, same line | The body seam: scripts and tab bar. Renders `""` while off, and being on the same line adds no whitespace |
+| `crates/views/askama.toml` (`[general] dirs`) | `dirs = ["templates-hermes", "templates"]` | Template shadowing (docs/hermes-theme.md): a file in `templates-hermes/` replaces upstream's at the same path. `crates/views/build.rs` (new, fork-owned) makes a new shadow trigger a rebuild |
 | `crates/campfire/src/config.rs` (module docs, `Config::theme`, `theme_switch`, a test) | `CAMPFIRE_THEME`, on unless `off` | The theme's kill switch (docs/hermes-theme.md) |
 
 Phases 1 and 2 added no seam: only rows in the existing `HERMES_ROUTES` block. Phase 2.7's per-viewer
@@ -824,6 +825,8 @@ read by the workspace crate's own `WorkspaceConfig::from_lookup`; the adapter re
 
 Not seams (fork-owned or new files): `crates/workspace/**`, `controllers/workspace.rs`,
 `crates/views/src/hermes.rs`, `crates/views/tests/workspace_hooks.rs`, `crates/views/tests/hermes_head.rs`,
+`crates/views/build.rs`, `crates/views/templates-hermes/**`, `crates/views/script/check-shadowed`,
+`crates/views/tests/shadowed_templates.rs`,
 `crates/assets/overrides/hermes/*`, a test in `crates/assets/tests/reference.rs`, a row in
 `crates/assets/OVERRIDES.md`, this document.
 
@@ -840,7 +843,12 @@ Not seams (fork-owned or new files): `crates/workspace/**`, `controllers/workspa
    or `custom_styles_tag`, move the seam and fix those tests.
 4. `cargo test -p campfire_assets --offline`: the import map and `stylesheet_link_tag :all` still
    equal the reference's; the workspace assets are served, not linked, not pinned.
-5. If upstream changed any of what `controllers/workspace.rs` borrows, fix that file (the compiler
+5. `crates/views/script/check-shadowed` (docs/hermes-theme.md, "Template shadowing"): every
+   shadowed template still has its upstream file (exit 1 otherwise), no bare-name include and no
+   `include_str!` of a shadowed template (exit 1); exit 2 lists the shadowed templates upstream
+   changed since they were copied, with the diff: port each change into the shadow, then record
+   the new `git hash-object` in `templates-hermes/SHADOWED.md`.
+6. If upstream changed any of what `controllers/workspace.rs` borrows, fix that file (the compiler
    points at it):
    - views: `message_presentation`, `MessageView` (`id`, `creator.id`), `ViewContext`
      (`current_user`, `request_url`, `base_url`, `last_room_visited_id`, `asset_path`/`asset`), the
@@ -868,7 +876,7 @@ Not seams (fork-owned or new files): `crates/workspace/**`, `controllers/workspa
      `integrations::net::Network::system`, `integrations::net::http::{Request::net_http(…).transport(…),
      Request::body, request_uri, exchange, Endpoint, Timeouts, Body}` and the response's
      `status`/`header`/`read_body`.
-6. If upstream changed the room page's DOM (`.message[data-user-id][data-message-id]` siblings,
+7. If upstream changed the room page's DOM (`.message[data-user-id][data-message-id]` siblings,
    `.message__actions-grid` in the message menu, `form#composer`, `[data-composer-target=text]`,
    the composer controller's `replaceMessageContent`, `#nav .room--current`,
    `meta[name=current-room-id]`) or the layout grid (`body`'s `grid-template-areas`/`-columns`
@@ -877,9 +885,11 @@ Not seams (fork-owned or new files): `crates/workspace/**`, `controllers/workspa
    moves to end where the panel starts): check
    `hermes/workspace.js` and `workspace.css` in a browser (phone and desktop, light and dark): the
    room panel, the message menu's card entry, the overlay, the board's column switcher.
-7. `cargo clippy --workspace --all-targets` and the parity gate as usual; with the workspace **off**
-   the parity screenshots must not move.
-8. If Fizzy changed (a new image): re-check the write endpoints against
+8. `cargo clippy --workspace --all-targets` and the parity gate as usual; with the workspace **off**
+   and `CAMPFIRE_THEME=off` the parity screenshots must not move (the head still links
+   `hermes.css`, whose rules only match the voice features; the owner retired the gate for the
+   theme itself, docs/hermes-theme.md).
+9. If Fizzy changed (a new image): re-check the write endpoints against
    `docs/api/fizzy-rest-api.md` in the Hermes repo (taggings still toggles, `triage`/`not_now`/
    `closure`, `PUT /steps/:id`, `POST /boards/:id/cards` still ignoring tags), then create a test
    card from Campfire and change its severity twice: exactly one `sev-*` tag must remain.
@@ -904,6 +914,9 @@ Not seams (fork-owned or new files): `crates/workspace/**`, `controllers/workspa
   head, overlay once in place and message hook applied, nothing else changed; removed = upstream
   bytes again. `crates/views/tests/hermes_head.rs`: the head seam's order (upstream, Custom styles,
   `hermes.css`, `workspace.css`, `theme.css`), `CAMPFIRE_THEME=off`, nothing while not installed.
+  `crates/views/tests/shadowed_templates.rs`: every file in `templates-hermes/` listed in
+  `SHADOWED.md` with an existing upstream template, no bare-name include, no `include_str!` of a
+  shadowed template (and the checks' own parsers).
 - `crates/assets/tests/reference.rs`: workspace assets served, not in `stylesheet_link_tag :all`,
   not in the import map.
 - Phase 1, in `crates/workspace` against a **stateful** fake Fizzy (writes change its cards the

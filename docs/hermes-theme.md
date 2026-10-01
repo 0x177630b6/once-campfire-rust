@@ -5,7 +5,8 @@ the Hermes repo, `docs/ui-redesign/`). It changes nothing visible by itself: `th
 and the fork's stylesheets render as they did. What it gives the designer:
 
 - one stylesheet that always wins, `crates/assets/overrides/hermes/theme.css`;
-- the fork's own stylesheets in `<head>`, before the theme, so equal-specificity ties go to the theme.
+- the fork's own stylesheets in `<head>`, before the theme, so equal-specificity ties go to the theme;
+- template shadowing for the few screens CSS can't reach (`crates/views/templates-hermes/`).
 
 ## Load order
 
@@ -56,3 +57,34 @@ their pages carry the links (theme on).
 - `workspace.css` was linked by the tab bar partial inside `<body>`; it is now in the head, for the
   same people (signed in, not bots) while the workspace is on. The workspace's scripts stay with the
   tab bar.
+
+## Template shadowing
+
+`crates/views/askama.toml` searches `templates-hermes/` before `templates/`, so a file at
+`crates/views/templates-hermes/<path>` replaces upstream's `templates/<path>` everywhere askama
+looks it up by path: `#[template(path = …)]`, `{% include %}`, `{% extends %}`. The directory holds
+only its README and `SHADOWED.md` for now: no template is shadowed.
+
+| Piece | What it does |
+|---|---|
+| `crates/views/build.rs` | `cargo:rerun-if-changed` on `templates`, `templates-hermes` and `askama.toml`: askama only tracks the files it resolved, so without it a new shadow wouldn't trigger a rebuild |
+| `templates-hermes/SHADOWED.md` | One row per shadowed file: path, upstream source (the same path), `git hash-object` of the upstream file when copied, reason |
+| `tests/shadowed_templates.rs` (`cargo test -p campfire_views`) | Every file in `templates-hermes/` is listed and its upstream template exists; no template refers to another by a path askama resolves relative to the including file (a bare name: it would skip `templates-hermes/`); no `include_str!` in `src/` embeds a shadowed template |
+| `crates/views/script/check-shadowed` | The same checks, plus each shadowed template whose upstream file changed since the copy (with the diff). Exit 1 = broken, 2 = changes to review. In the "After each upstream merge" checklist (docs/hermes-workspace.md) |
+
+Embedded templates: the fragment-cache digests (`src/messages.rs`, `message_digest` and
+`boost_digest`: `messages/_message`, `_actions`, `_presentation`, `_unrenderable`,
+`boosts/_boosts`, `boosts/_boost`; `src/users.rs`, `direct_room_digest`:
+`users/sidebars/rooms/_direct`) and the service worker (`src/pwa.rs`: `pwa/service_worker.js`)
+read upstream's files with `include_str!`, which ignores `askama.toml`. Shadowing one of them
+without pointing its `include_str!` at the shadow would keep the old digest (cached fragments with
+the old markup survive) or serve upstream's service worker. Rather than resolve those paths at
+build time, the test fails as soon as such a file is shadowed and its `include_str!` still reads
+`templates/`: change the path to `../templates-hermes/…` in the same commit (a marked
+`Hermes fork:` seam, listed in docs/hermes-workspace.md).
+
+Goldens: the views' goldens render whatever askama resolves, so a shadowed template changes every
+golden that renders it (all pages, for `layouts/application.html`). There is no golden allowlist
+yet; add one with the first shadow (a list of golden names skipped by `parity_a.rs`'s
+`assert_parity` and `messages_support`'s comparison, kept next to `SHADOWED.md`), and keep the
+markup that code reads (handbook chapter 03) checked by hand or by fork-owned tests.
