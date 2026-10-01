@@ -7,6 +7,15 @@
 //! `submit_incident`, transcription, resumption, compression). The browser then connects to the
 //! `BidiGenerateContentConstrained` endpoint and only sends `{"setup":{}}`.
 //!
+//! The lock (batch S1 of the Sky push-to-talk plan): every token request is built by
+//! [`locked_token_request`], which puts the whole setup in `bidiGenerateContentSetup` and never
+//! sends a `fieldMask`. Per the `AuthToken` reference, an empty field mask with a setup present
+//! means the setup in the token is the effective one and the client's `setup` message is
+//! ignored (the Python SDK calls it the "global lock"); a non-empty mask would instead merge the
+//! client's setup for every field it doesn't list, so a mask can only weaken the lock. Tokens
+//! minted without any setup (the July 2026 report) accept the client's setup unchecked: that is
+//! what the helper rules out.
+//!
 //! With `HERMES_ASK_URL` set, the setup also declares `ask_hermes` (and the instructions say when
 //! to use it); the questions go through `integrations::hermes_ask`.
 //!
@@ -35,6 +44,39 @@ pub const AUTH_TOKENS_PATH: &str = "/v1alpha/auth_tokens";
 pub const TOKEN_LIFETIME: SignedDuration = SignedDuration::from_mins(30);
 /// How long the browser has to open its first session with it (`newSessionExpireTime`).
 pub const NEW_SESSION_WINDOW: SignedDuration = SignedDuration::from_mins(1);
+
+/// A token's two deadlines.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TokenLifetime {
+    /// `expireTime`: the longest a conversation can last, reconnections included.
+    pub expire: SignedDuration,
+    /// `newSessionExpireTime`: how long the browser has to open its first session.
+    pub new_session: SignedDuration,
+}
+
+impl TokenLifetime {
+    /// The live voice page: [`TOKEN_LIFETIME`] (30 minutes) and [`NEW_SESSION_WINDOW`].
+    pub const VOICE: Self = Self { expire: TOKEN_LIFETIME, new_session: NEW_SESSION_WINDOW };
+    /// Sky push-to-talk: 10 minutes (bounds a misused token; a warm session is far shorter) and
+    /// the same 1-minute window (`campfire_workspace::sky`). Minted from batch 1a (`/sky/token`).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub const SKY: Self =
+        Self { expire: campfire_workspace::sky::TOKEN_LIFETIME, new_session: campfire_workspace::sky::NEW_SESSION_WINDOW };
+}
+
+/// The `auth_tokens` request body for a single-use token whose `setup` (a
+/// `BidiGenerateContentSetup`: model, instructions, tools, …) is locked: the setup goes whole into
+/// `bidiGenerateContentSetup` and no `fieldMask` is sent, so the Constrained endpoint ignores the
+/// client's own `setup` entirely (see the module's documentation). The voice page and Sky both
+/// mint through this; never build a token request by hand.
+pub fn locked_token_request(setup: Value, lifetime: TokenLifetime, now: Timestamp) -> Value {
+    json!({
+        "uses": 1,
+        "expireTime": rfc3339(now + lifetime.expire),
+        "newSessionExpireTime": rfc3339(now + lifetime.new_session),
+        "bidiGenerateContentSetup": setup,
+    })
+}
 /// The whole mint (connect, TLS, request, reply) must finish within this, or the request is a 502.
 pub const UPSTREAM_TIMEOUT: Duration = Duration::from_secs(10);
 /// The largest `auth_tokens` reply read; a token reply is a few hundred bytes.
@@ -73,26 +115,27 @@ const MAX_LANGUAGE_TAG_CHARS: usize = 35;
 const MAX_LANGUAGE_SUBTAGS: usize = 4;
 
 impl Interview<'_> {
-    /// The `auth_tokens` request body.
+    /// The `auth_tokens` request body: [`Self::setup`], locked ([`locked_token_request`]) for
+    /// [`TokenLifetime::VOICE`].
     pub fn token_request(&self) -> Value {
+        locked_token_request(self.setup(), TokenLifetime::VOICE, self.now)
+    }
+
+    /// The interviewer's `BidiGenerateContentSetup`.
+    pub fn setup(&self) -> Value {
         let mut declarations = vec![submit_incident_declaration()];
         if self.ask_hermes {
             declarations.push(ask_hermes_declaration());
         }
         json!({
-            "uses": 1,
-            "expireTime": rfc3339(self.now + TOKEN_LIFETIME),
-            "newSessionExpireTime": rfc3339(self.now + NEW_SESSION_WINDOW),
-            "bidiGenerateContentSetup": {
-                "model": self.model,
-                "generationConfig": { "responseModalities": ["AUDIO"] },
-                "inputAudioTranscription": {},
-                "outputAudioTranscription": {},
-                "sessionResumption": {},
-                "contextWindowCompression": { "slidingWindow": {} },
-                "systemInstruction": { "parts": [{ "text": self.system_instruction() }] },
-                "tools": [{ "functionDeclarations": declarations }],
-            }
+            "model": self.model,
+            "generationConfig": { "responseModalities": ["AUDIO"] },
+            "inputAudioTranscription": {},
+            "outputAudioTranscription": {},
+            "sessionResumption": {},
+            "contextWindowCompression": { "slidingWindow": {} },
+            "systemInstruction": { "parts": [{ "text": self.system_instruction() }] },
+            "tools": [{ "functionDeclarations": declarations }],
         })
     }
 
@@ -411,6 +454,14 @@ impl GeminiLive {
         self.minter.read().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
+    /// Mints a single-use token with `setup` locked in it ([`locked_token_request`]), valid for
+    /// `lifetime`: [`TokenLifetime::VOICE`] for the voice page, [`TokenLifetime::SKY`] for Sky
+    /// (`/sky/token`, batch 1a).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub async fn mint_locked(&self, setup: Value, lifetime: TokenLifetime, now: Timestamp) -> Result<String, MintError> {
+        self.minter().mint(locked_token_request(setup, lifetime, now)).await
+    }
+
     /// Swaps the minter (tests).
     #[cfg(test)]
     pub fn set_minter(&self, minter: Arc<dyn TokenMinter>) {
@@ -503,6 +554,71 @@ mod tests {
         assert!(instruction.contains("submit_incident"));
         assert_eq!(setup["tools"][0]["functionDeclarations"].as_array().unwrap().len(), 1, "no ask_hermes unless enabled");
         assert!(!instruction.contains("ask_hermes") && !instruction.contains("Sky, the organization"), "{instruction}");
+    }
+
+    #[test]
+    fn the_whole_setup_is_locked_without_a_field_mask() {
+        let now: Timestamp = "2026-09-29T12:00:00Z".parse().unwrap();
+        let body = interview(now).token_request();
+        // Exactly these keys: no `fieldMask` (a mask would merge the client's setup for every field
+        // it doesn't list) and no unconstrained form.
+        let keys: Vec<&str> = body.as_object().unwrap().keys().map(String::as_str).collect();
+        assert_eq!(keys, ["bidiGenerateContentSetup", "expireTime", "newSessionExpireTime", "uses"]);
+        assert!(body.get("fieldMask").is_none() && body.get("liveConnectConstraints").is_none());
+        // What a client would try to replace is in the locked setup.
+        let setup = &body["bidiGenerateContentSetup"];
+        for field in ["model", "systemInstruction", "tools", "generationConfig"] {
+            assert!(setup.get(field).is_some(), "{field} is locked");
+        }
+        assert_eq!(*setup, interview(now).setup(), "the voice page's setup, unchanged");
+        // The browser connects to the endpoint that applies the token's setup.
+        assert!(WS_URL.ends_with(".BidiGenerateContentConstrained"));
+        assert!(WS_URL.starts_with("wss://generativelanguage.googleapis.com/ws/"));
+    }
+
+    #[test]
+    fn locked_requests_carry_their_lifetime() {
+        let now: Timestamp = "2026-09-29T12:00:00.900Z".parse().unwrap();
+        let setup = json!({ "model": "models/x", "systemInstruction": { "parts": [{ "text": "Sky" }] }, "tools": [] });
+        let sky = locked_token_request(setup.clone(), TokenLifetime::SKY, now);
+        assert_eq!(sky["expireTime"], "2026-09-29T12:10:00Z", "Sky tokens live 10 minutes");
+        assert_eq!(sky["newSessionExpireTime"], "2026-09-29T12:01:00Z");
+        assert_eq!(sky["uses"], 1);
+        assert_eq!(sky["bidiGenerateContentSetup"], setup);
+        assert!(sky.get("fieldMask").is_none());
+        let voice = locked_token_request(setup, TokenLifetime::VOICE, now);
+        assert_eq!(voice["expireTime"], "2026-09-29T12:30:00Z", "the voice page keeps 30 minutes");
+        assert_eq!(TokenLifetime::VOICE.expire, TOKEN_LIFETIME);
+    }
+
+    #[derive(Default)]
+    struct Recording(Mutex<Vec<Value>>);
+
+    impl TokenMinter for Recording {
+        fn mint(&self, request: Value) -> BoxFuture<'_, Result<String, MintError>> {
+            self.0.lock().unwrap().push(request);
+            Box::pin(async { Ok("auth_tokens/t".to_string()) })
+        }
+    }
+
+    #[tokio::test]
+    async fn mint_locked_sends_a_locked_request() {
+        let config = GeminiLiveConfig {
+            api_key: ApiKey::new("k"),
+            model: "models/gemini-3.8-live".into(),
+            voice_bot: None,
+            tokens_per_hour: 10,
+            extra_instructions: None,
+            hermes_ask_url: None,
+            hermes_asks_per_hour: 30,
+        };
+        let live = GeminiLive::new(config, Network::system());
+        let recording = Arc::new(Recording::default());
+        live.set_minter(recording.clone());
+        let now: Timestamp = "2026-09-29T12:00:00Z".parse().unwrap();
+        let setup = json!({ "model": "models/gemini-3.8-live" });
+        assert_eq!(live.mint_locked(setup.clone(), TokenLifetime::SKY, now).await.unwrap(), "auth_tokens/t");
+        assert_eq!(recording.0.lock().unwrap()[0], locked_token_request(setup, TokenLifetime::SKY, now));
     }
 
     #[test]
