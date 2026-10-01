@@ -41,6 +41,7 @@ pub mod pages;
 pub mod proposals;
 pub mod settings;
 pub mod shifts;
+pub mod sky;
 mod store;
 pub mod visibility;
 pub mod writes;

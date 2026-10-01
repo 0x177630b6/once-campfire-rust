@@ -11,6 +11,7 @@
 //! | `WORKSPACE_INCIDENT_BOARD` | `Incident Log` | The incident board, by name or id |
 //! | `CAMPFIRE_PUBLIC_URL` | unset | Campfire as browsers reach it, for the link to the message a card was created from (unset: the message's path, as text). When its host isn't Fizzy's (`FIZZY_PUBLIC_URL`), requests on that host are "public": no Fizzy links on the pages ([`WorkspaceConfig::is_public_request`]) |
 //! | `HERMES_BOT` | unset | Hermes's Campfire bot, by user id or exact name: the only bot whose proposals Campfire takes (`POST /hermes/:bot_key/workspace/proposals`). Unset: `GEMINI_LIVE_VOICE_BOT` when set, else the instance's only active bot; with several bots and neither set, proposals are refused (403) |
+//! | `SKY_*` | `SKY_PTT=off` | Sky push-to-talk: who gets it and its own limits ([`crate::sky::SkyConfig`]) |
 //! | `HERMES_FIZZY_TOKEN` | unset | Hermes's own Fizzy token (`write`): what Campfire runs for Hermes (its proposals, the undo of its comments) is written under Hermes's name, and the Hermes log learns Hermes's Fizzy user from it. Unset: those writes use `FIZZY_TOKEN` |
 //!
 //! The settings administrators edit in the app ([`crate::settings`]) are in
@@ -65,6 +66,8 @@ pub struct WorkspaceConfig {
     /// `HERMES_BOT`: Hermes's Campfire bot (a user id or an exact name), the only one that may
     /// propose (phase 2).
     pub hermes_bot: Option<String>,
+    /// `SKY_*`: Sky push-to-talk (off by default) and its limits.
+    pub sky: crate::sky::SkyConfig,
 }
 
 /// A configuration error. It never quotes `FIZZY_TOKEN`.
@@ -112,6 +115,7 @@ impl WorkspaceConfig {
             campfire_url,
             hermes_token: present("HERMES_FIZZY_TOKEN").map(Secret::new),
             hermes_bot: present("HERMES_BOT"),
+            sky: crate::sky::SkyConfig::from_lookup(&get)?,
         }))
     }
 
@@ -198,6 +202,7 @@ mod tests {
         assert_eq!(config.settings_path, PathBuf::from("storage/hermes/workspace.json"));
         assert_eq!(config.campfire_url, None);
         assert_eq!(config.hermes_token, None);
+        assert_eq!(config.sky, crate::sky::SkyConfig::default(), "Sky push-to-talk is off by default");
         assert_eq!(config.storage_file("actions.jsonl"), PathBuf::from("storage/hermes/actions.jsonl"));
         assert!(!format!("{config:?}").contains("s3cret"));
     }
@@ -257,6 +262,7 @@ mod tests {
             vec![("FIZZY_URL", "http://fizzy"), ("FIZZY_TOKEN", "s3cret"), ("FIZZY_ACCOUNT", "acme")],
             vec![("FIZZY_URL", "http://fizzy"), ("FIZZY_TOKEN", "s3cret"), ("FIZZY_POLL_S", "often")],
             vec![("FIZZY_URL", "http://fizzy"), ("FIZZY_TOKEN", "s3cret"), ("CAMPFIRE_PUBLIC_URL", "chat.example")],
+            vec![("FIZZY_URL", "http://fizzy"), ("FIZZY_TOKEN", "s3cret"), ("SKY_PTT", "maybe")],
         ] {
             let error = config(&vars).unwrap_err().to_string();
             assert!(!error.contains("s3cret"), "{error}");
