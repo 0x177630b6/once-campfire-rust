@@ -172,7 +172,8 @@ are never changed.
 - **Card sheet** (`/workspace/cards/:n`, and the overlay a chip, a panel card, a board card, a
   Home tile, a mention or a Hermes-log line opens; a modified click opens the sheet's page):
   read fresh from Fizzy. Title, severity
-  (a single-choice select), column (select), owners (read-only), department tags (toggles),
+  (a single-choice select), column (select), the owner (with "Take it", "Assign to…" and "Remove",
+  [Owners](#owners-pings-and-the-sheets-owner-control)), department tags (toggles),
   other tags, the description as text ("Report", collapsed), steps (tickable), the comment thread
   (the **newest 100** Fizzy comments, oldest first, newest last, under **"Show earlier comments"**
   when there are more), a comment box, and for duty managers on the LAN only a "⋯" menu with
@@ -280,6 +281,8 @@ false`) when it's set, else the shared token with Hermes as the actor ("Hermes: 
 | Create a card | everyone | everyone | duty managers |
 | Comment | everyone | everyone | duty managers |
 | Change a card (move, close, not now, severity, departments, steps) | everyone | duty managers | duty managers |
+| Take a ticket ("Take it"), or remove yourself as its owner (`Act::Assign { own: true }`) | everyone | duty managers | duty managers |
+| Give a ticket to someone else ("Assign to…"), remove someone else (`Act::Assign { own: false }`) | duty managers | duty managers | duty managers |
 
 Duty managers: those listed in the settings, else Campfire's administrators. A draft's reporter
 (`reporter_of` in the adapter) is a heuristic: the last person (not a bot) who wrote in the room
@@ -322,7 +325,7 @@ settings_not_saved` (nothing changed), not `422`.
   "hermes_fizzy_user_id": null,
   "visibility": {"mode": "everyone", "untagged": "everyone"},
   "notifications": {"enabled": true, "severities": ["critical", "high"], "department_rooms": true,
-                    "new_reminder_min": 15, "draft_reminder_min": 10},
+                    "new_reminder_min": 15, "draft_reminder_min": 10, "owner_pings": true},
   "handover": {"room_id": null, "shift_ends": ["07:00", "15:00", "23:00"], "time_zone": "Europe/Paris",
                "reminder": true}
 }
@@ -345,7 +348,9 @@ settings_not_saved` (nothing changed), not `422`.
   `by_department_room`; `untagged` = `everyone` (default, decision D3) or `duty_managers`.
 - `notifications` (version 3, [2.5](#25-alerts)): `enabled`, the `severities` that alert (default
   critical and high, D9), `department_rooms` (a notice in the card's department rooms),
-  `new_reminder_min` and `draft_reminder_min` (0 = no reminder; at most 1 440).
+  `new_reminder_min` and `draft_reminder_min` (0 = no reminder; at most 1 440), `owner_pings`
+  ([Owners](#owners-pings-and-the-sheets-owner-control); default `true`, absent = `true`; off while
+  `enabled` is off too).
 - `handover` (version 3, [2.6](#26-end-of-shift-handover)): `room_id` (none by default: the handover
   can be prepared, not posted), `shift_ends` (`HH:MM`, 1 to 6, sorted on save), `time_zone` (an IANA
   name, or a POSIX TZ rule; see below), `reminder` (a direct message to the duty managers at each
@@ -483,7 +488,9 @@ the instance gets `403 not_hermes_bot`, logged.
   most 5 simple tags, and `steps`, at most 20), `move` (`to`, or a column by name), `close`,
   `severity`, `departments`, `step`, `comment`, each with `"card": n`. `delete`, `assign` or
   anything else is `422 unknown_action`: Hermes can't ask for what a person couldn't, and never for
-  a settings change. A card that isn't on the incident board is `404`.
+  a settings change. Owners aren't a proposal kind (so not on the dial): people set them from the
+  sheet ([Owners](#owners-pings-and-the-sheets-owner-control)); an owner Sky sets directly with its
+  own token (`fizzy-cli`, D7) isn't gated, but its pings name Sky. A card that isn't on the incident board is `404`.
 - **The dial** (`settings.autonomy`, set by administrators on the settings page, D6), per kind:
   create, comment, tag (severity and departments), move, close, step. Defaults (D5): comment and
   tag **Alone**; create, move and close **Ask first**; step **Ask first** (D5 didn't list steps;
@@ -577,11 +584,17 @@ still alerts at the next poll) and the proposals:
 | **Proposal waiting** (`proposal:<id>:person`, `…:managers`) | A pending Hermes proposal `draft_reminder_min` minutes old (10): its person; twice that: the duty managers (at once for a proposal without a person); while recently due | The person (if still a member of its room and they may see it), then the duty managers |
 | **Handover due** (`handover:<end>`) | Within 30 minutes after a shift end, when `handover.reminder` is on and a handover room is set | The duty managers, with a link to prepare it |
 
-- **Once**: each event's key is claimed in `notified.json` before anything is sent, so nothing is
-  sent twice, restarts included (at most once: a message that fails to post is logged, not retried).
+- **Once**: each event's key is recorded in `notified.json` **once its messages are posted**, so
+  nothing is sent twice, restarts included. Until then it's waiting (`Workspace::take_alerts` hands
+  the messages to the adapter, which reports how each post went, `Workspace::settle_alerts`): a
+  message that fails to post is tried again after the next poll, to the recipients who didn't get
+  it only, up to 10 tries (`alerts::MAX_ATTEMPTS`), then given up (recorded, and the log says so).
+  A restart while one waits loses it (the first poll after a start records what's there). An event
+  that ends up with nobody to tell is recorded at once.
   The **first poll after a start alerts on nothing**: whatever would alert then is recorded without
   being sent (a card unknown until now alerts only if Fizzy says it was created after that first
-  poll, so an old card a chip asks for later doesn't).
+  poll, so an old card a chip asks for later doesn't). Owner pings are the exception (below): they
+  compare with the owners known before the restart.
 - **Rate**: each person (and room) gets at most one message per poll, whatever the number of events
   ("3 alerts from the incident board", 10 lines at most, then "… and N more"). New serious incidents
   come first (critical, then high…), then the reminders, so the cap never cuts a new critical one.
@@ -688,6 +701,89 @@ Handover section, which opens `GET /workspace/handover`:
   A restricted department can't be linked to an open room (saving refuses it), but a room made
   open afterwards isn't re-checked until the next save.
 
+## Owners: pings and the sheet's owner control
+
+A ticket's **owner** is Fizzy's assignee (research and the owner's decisions O1 to O10, 1 Oct 2026:
+`docs/owner-notifications-research.md` in the Hermes repo). `campfire_workspace::owners`.
+
+**Who can be an owner.** Only a Fizzy user (with access to the incident board). A Campfire person is
+matched to a Fizzy user by **email address** (any case; the users come from Fizzy's `GET
+/users.json`, read with the poll every 5 minutes, `cache::FIZZY_PEOPLE_REFRESH`). People with no
+Fizzy user don't appear in the picker and get no pings; the settings page lists them for the
+administrators ("N people have no Fizzy user", with their names, `Workspace::people_without_fizzy_user`),
+since the owner creates those users (step 0 of the research: a Fizzy user per person, no token
+needed). Campfire addresses aren't verified (D12): whoever takes a colleague's address gets their
+owner pings, for incident-board cards they may see anyway. Two people sharing one address match
+nobody.
+
+**The sheet's control** (one owner per ticket in the app, decision O6). The Owner field shows every
+owner Fizzy lists (it lists 5 at most), and offers, to whom it applies:
+
+| Control | Who (`Act::Assign`) | What it does |
+|---|---|---|
+| **Take it** | anyone who may see the card, under `anyone` (as changing a card: duty managers under the other policies), with a Fizzy user | The viewer becomes the only owner (whoever had it is removed and told) |
+| **Assign to…** | duty managers (and administrators while none are listed), whatever the policy | A picker of the people **with a Fizzy user who may see the card** (decision O4: someone who couldn't open it isn't offered); the one picked becomes the only owner |
+| **Remove** | duty managers; the owner themselves (as Take it) | Nobody owns it |
+
+A viewer with no Fizzy user sees a hint instead of "Take it". Nothing on a closed card. The script
+posts `POST /workspace/cards/:n/owner` with `{"owner": "me" | "none" | "<Campfire user id>"}` (the
+buttons carry `data-ws-owner-set`, the picker is a `data-ws-change="owner"` select) and swaps in the
+fresh sheet like any change (`{"number", "sheet", "chip"}`). The write (`Writer::set_owner`) goes
+through the workspace's token (the "Campfire" Fizzy user, so Fizzy shows "Campfire assigned Maya"
+until per-person identity, D11), against a fresh read: Fizzy's assignments are **toggles**
+(`POST /cards/:n/assignments {"assignee_id"}`), so the other owners are toggled off, then the new one
+on (with their Fizzy user id, never `self_assignment`, which would assign "Campfire"), then the card
+is read again and checked. Each toggle is in the write log (`owner +<fizzy id>`, `owner -<fizzy
+id>`) with the **real actor**'s Campfire id. Fizzy's 404 (the person has no access to the board) is
+said plainly. No undo: people's own changes have none (undo is for what Hermes did), and setting the
+owner back is one click. Refusals: `403` (policy), `404` (a card the actor may not see),
+`422 no_fizzy_user` (taking it without a Fizzy user), `422 not_a_candidate` (someone without a Fizzy
+user, or who may not see the card), `422 closed_card`, `422 invalid_owner`, `502`.
+
+**Pings** (decisions O2, O3, O5, O8, O9, O10). A direct message from Sky, through the alerts' path
+(one message per person per poll, recorded once posted, Web Push), to the Campfire person whose
+address matches the Fizzy owner's:
+
+| Case | Who is told | Message |
+|---|---|---|
+| Made owner | the new owner | "**Karim made you owner** of #57 — Guest slip in lobby" and "Open ticket #57", a link to the sheet in the app (`/workspace/cards/57`), never to Fizzy |
+| Removed, nobody now | the removed owner | "**Karim removed you as owner** of #57." |
+| Reassigned | the previous owner | "**Karim gave** #57 **to Maya**." / "**Maya took over** #57 from you." (she took it) |
+| Your own action (take, let go of it) | nobody | — |
+| Assigned by Sky (Hermes's Fizzy user, e.g. `fizzy-cli`) | as above | "**Sky made you owner** of #57 — …" |
+| The recipient may not see the card (a restricted department) | as above | No title, no link: "**Sky made you owner** of #12. You can’t open it in Meshduty: ask a duty manager." |
+| Closed card | nobody | — |
+| Who did it unknown (no matching activity) | as above | "**You’re now the owner** of #57 — …", "**You’re no longer the owner** of #57.", "#57 **now belongs to Maya**." |
+
+No quiet hours (the phone's Do Not Disturb applies), no copy to the duty managers.
+
+No seam in upstream-owned files: the feature lives in the workspace crate, the adapter
+(`controllers/workspace.rs`: `load_directory` reads people's addresses, `change_owner`, the alerts'
+delivery reporting each post) and the fork's assets (`workspace.js`, `workspace_logic.js`,
+`workspace.css`).
+
+How changes are found:
+
+- **From Fizzy (or Sky)**: at each poll, every open card's owners are compared with the ones last
+  known, kept in `notified.json` (`owners`: per card, the owners' Fizzy ids, names and addresses, and
+  the card's `last_active_at` then). Who did it comes from the card's `card_assigned` /
+  `card_unassigned` activities since (page 1 of `/activities`, kept 24 hours in the snapshot,
+  `Snapshot::assignments`); the diff itself doesn't depend on that page, so a burst can't lose a
+  change, only its author's name. Someone assigned and unassigned between two polls is told nothing.
+  The first poll ever only records the owners. After a restart the first poll compares with what was
+  known before it, and pings a change made meanwhile if it's less than 2 hours old (`owners::MAX_AGE`).
+  A card new since the last poll starts with no owner; one that comes back (reopened) is only
+  recorded. Key: `owner:<card>:<+|->:<fizzy user id>:<card's last_active_at, ms>`.
+- **From the sheet**: pinged at once (the adapter posts them in the background right after the
+  write), naming the person who did it, never pinging them about their own action; the card's new
+  owners are recorded at the same time, and a poll's older read of the card (its `last_active_at`
+  before the recorded one) doesn't undo that. The poll skips changes whose activity is by the
+  workspace's own Fizzy user (they're the sheet's), unless that user is also Hermes's (an older
+  setup).
+- `notifications.owner_pings` (default **on**; a checkbox on the settings page, under Alerts) and
+  `notifications.enabled` must both be on; while off, changes are recorded, not sent, so turning
+  them back on sends nothing stale.
+
 ## Tickets, not only incidents
 
 The board holds **tickets**: any operational request, task, fault, complaint, incident or safety
@@ -761,7 +857,7 @@ redirects to the sign-in page (fetch follows it): the script says to sign in aga
 | `GET /workspace/cards/:number[?fragment=1][&comments=all]` | The card's sheet (page, or fragment for the overlay; `comments=all`: up to 1,000 comments instead of 100); `404` not on the incident board or not visible to the viewer; `429` + a notice when 3 `comments=all` reads already run; `502` + a notice when Fizzy doesn't answer |
 | `GET /workspace/cards/new?message_id=…\|room_id=…[&fragment=1]` | The new-card form; `404` for a message or room that isn't the user's, then `403` (a notice) when the policy doesn't let them create cards |
 | `POST /workspace/cards` `{"title", "description", "severity", "department" \| "departments", "message_id" \| "room_id"}` | `201 {"number", "url", "chip", "message_id", "warning"}` (`message_id` = the room message with the link); `403`, `404`, `422`, `502` |
-| `POST /workspace/cards/:number/:change[?comments=all]` — `move {"to": "new"\|"column:<id>"\|"not_now"\|"closed"}`, `severity {"severity": "high"\|""}`, `departments {"tags": […]}`, `step {"step_id", "completed"}`, `comment {"body"}` | `200 {"number", "sheet", "chip"}` (the fresh sheet, with every comment for `comments=all`, and chip); unknown change `404`; `403`, `404`, `422`, `502` |
+| `POST /workspace/cards/:number/:change[?comments=all]` — `move {"to": "new"\|"column:<id>"\|"not_now"\|"closed"}`, `severity {"severity": "high"\|""}`, `departments {"tags": […]}`, `step {"step_id", "completed"}`, `comment {"body"}`, `owner {"owner": "me"\|"none"\|"<user id>"}` | `200 {"number", "sheet", "chip"}` (the fresh sheet, with every comment for `comments=all`, and chip); unknown change `404`; `403`, `404`, `422`, `502`. `owner` also posts the owner pings it calls for, at once |
 | `GET /workspace/rooms/:room_id/panel` | The panel (fragment); `204` room not linked; `404` not the user's room |
 | `GET /workspace/settings` | The settings page; `403` unless administrator |
 | `POST /workspace/settings` (JSON above) | `200 {"ok": true}`; `422 invalid_settings` with the reason; `500 settings_not_saved` when the file can't be written (nothing changed); `403` unless administrator |
@@ -794,7 +890,8 @@ redirects to the sign-in page (fetch follows it): the script says to sign in aga
 | `…/src/proposals.rs` | `Proposal`, `ProposalStore` (`proposals.json`), parsing, the draft and its marker, confirmed live reports |
 | `…/src/hermes.rs` | `Workspace::{propose, decide, undo, poll_hermes, hermes_page, proposal_visible, proposal_visible_to_room}`, the Hermes tab's view |
 | `…/src/visibility.rs` | Phase 2.7: `Visibility` (`Mode`, `Untagged`), `Audience`, `Settings::{audience, card_visible, notice_rooms}`, `Directory` (people, rooms, memberships, as the app reads them) |
-| `…/src/alerts.rs` | Phase 2.5: `Notifications` (the settings), `detect`, `plan` (`Delivery`, `To`), `NotifiedStore` (`notified.json`) |
+| `…/src/alerts.rs` | Phase 2.5: `Notifications` (the settings), `detect`, `plan` / `plan_pending` (`Delivery` with its event keys, `To`, `Pending` retries), `NotifiedStore` (`notified.json`: what was sent, the last handover, the known owners) |
+| `…/src/owners.rs` | Owners: `detect` (owner pings by diff, `KnownOwners`), `OwnerTarget`, `Workspace::{set_owner, owner_candidates, people_without_fizzy_user}`, the sheet's `OwnerControl` |
 | `…/src/handover.rs`, `…/src/shifts.rs`, `templates/workspace/handover.html` | Phase 2.6: `HandoverSettings`, the summary, the posted HTML, `Workspace::{handover_page, handover_message, handover_posted}`; shift ends and time zones |
 | `…/src/sky.rs` | Sky push-to-talk, pure part (batch S1): `SkyConfig` (`SKY_*`), `Mode`, `RollingLimiter`, `Sky` (tokens, presses, asks, month budget; `sky-usage.json`), the 10-minute token lifetime |
 | `…/src/writes.rs` | `TokenSource`/`SharedToken`/`ActingIdentity`, `Writer` (every Fizzy write, audited, with its `Purpose`), `ActionError`, `WriteRecord`, toggle diffing |
@@ -998,6 +1095,18 @@ Not seams (fork-owned or new files): `crates/workspace/**`, `controllers/workspa
   proposal's details and unfiled lines only for its room's members and duty managers, a roomless
   one for duty managers only), Home's pending proposals, the proposals' states JSON; chips re-read after 15 minutes, a deleted card
   dropped.
+- Owners, in `crates/workspace` (`src/tests/owner_pings.rs` against the fake Fizzy, whose
+  assignments toggle like Fizzy's, and `owners.rs`'s own tests): pings for a new owner, a removed
+  one, a reassignment ("gave" / "took over"), none for one's own action, Sky named, a restricted
+  card without title or link, a closed card, a new card, nobody to tell (recorded), the first poll
+  ever only recording, a restart comparing with the known owners, the setting off then on (nothing
+  stale), a change found over 2 hours late, assign + unassign between two polls, a sheet change not
+  pinged again by the poll, a stale read not undoing the sheet's; alerts recorded only once posted,
+  retried to the failed recipient only, given up after 10 tries; the sheet's control (Take it,
+  Assign to…, Remove; one owner; the policy for each, `duty_managers_only` too; no Fizzy user;
+  someone who may not see the card; Fizzy's 404; a closed card; the write log's actor; the template's
+  `data-ws-*` and the picker's choices); `Act::Assign` under every policy (`settings.rs`); the
+  script's `changeBody("owner")` and `owner_pings` in the settings body (node).
 - Phase 2.5–2.7, in `crates/workspace` (`src/tests/phase2b.rs` against the fake Fizzy, and each
   module's own tests): the visibility matrix (restricted, unrestricted, several departments, no
   department either way, duty managers, administrators, the `everyone` mode, a damaged file) and
@@ -1089,9 +1198,10 @@ Phase 1:
 
 - **One board**: no Boards list, no "linked to: Engineering board" (the owner chose one incident
   board with department tags).
-- **Owners are shown, not changed**: no "+ owner" / "Assign to me". With one shared token,
-  "assign to me" would assign Hermes (Fizzy's `self_assignment`), and assigning someone needs
-  their Fizzy user (no Campfire ↔ Fizzy user link yet). Comes with per-person tokens.
+- **Owners** were shown, not changed, until the owner control ([Owners](#owners-pings-and-the-sheets-owner-control),
+  Oct 2026): it assigns with the person's Fizzy user id (never Fizzy's `self_assignment`, which
+  would assign the token's user), matched by email address; Fizzy still shows "Campfire" as who
+  did it until per-person identity (D11).
 - **No drag and drop** on the board: Move is a menu, on desktop too.
 - **No auto-postpone countdown** (the owner hasn't decided the board settings; they aren't read).
 - **The panel lists open department cards only**, not also "cards mentioned here recently" nor

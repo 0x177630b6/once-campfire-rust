@@ -298,7 +298,7 @@ impl Workspace {
         }
     }
 
-    fn writer<'a>(&'a self, http: &'a dyn HttpClient, actor: &'a Viewer) -> Result<Writer<'a>, ActionError> {
+    pub(crate) fn writer<'a>(&'a self, http: &'a dyn HttpClient, actor: &'a Viewer) -> Result<Writer<'a>, ActionError> {
         let identity = self.tokens.identity(actor).map_err(ActionError::Forbidden)?;
         self.writer_as(http, actor, identity, Purpose::person())
     }
@@ -366,7 +366,9 @@ impl Workspace {
             can_change: self.may(&Act::ChangeCard, viewer),
             can_comment: self.may(&Act::Comment, viewer),
         };
-        Ok(pages::card_sheet(&self.config, &snapshot, &self.settings(), input))
+        let mut sheet = pages::card_sheet(&self.config, &snapshot, &self.settings(), input);
+        sheet.owner = self.owner_control(viewer, &card);
+        Ok(sheet)
     }
 
     /// Applies one change to an incident-board card, as `actor`. Returns the card as Fizzy has it

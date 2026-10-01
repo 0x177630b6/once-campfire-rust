@@ -33,6 +33,27 @@ pub const STALE_AFTER: SignedDuration = SignedDuration::from_mins(15);
 /// New users looked up per poll (for their email address).
 const USERS_PER_POLL: usize = 20;
 const MAX_ORIGINS: usize = 8;
+/// Owner changes kept for naming who made them (newest first), and for how long.
+const MAX_ASSIGNMENTS: usize = 200;
+const ASSIGNMENT_RETENTION: SignedDuration = SignedDuration::from_hours(24);
+/// The account's users (who can be made an owner) are read again after this.
+pub const FIZZY_PEOPLE_REFRESH: SignedDuration = SignedDuration::from_mins(5);
+
+/// A `card_assigned` or `card_unassigned` activity on the incident board: who changed a card's
+/// owners. Fizzy writes one per person (owner pings name the actor from it, [`crate::owners`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Assignment {
+    /// The activity's id.
+    pub id: String,
+    pub card_number: u64,
+    /// Added (`card_assigned`), else removed.
+    pub assigned: bool,
+    /// Fizzy user ids (`particulars.assignee_ids`).
+    pub assignees: Vec<String>,
+    pub actor_id: String,
+    pub actor_name: String,
+    pub created_at: Timestamp,
+}
 
 /// A comment that @mentions people.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,9 +100,27 @@ pub struct Snapshot {
     pub successful_polls: u64,
     /// When each card in `cards` was last read from Fizzy.
     pub refreshed: HashMap<u64, Timestamp>,
+    /// Owner changes on the incident board, newest first (page 1 of `/activities` each poll).
+    pub assignments: Vec<Assignment>,
+    /// The Fizzy account's active users, with their email addresses: who can be made an owner
+    /// (read every [`FIZZY_PEOPLE_REFRESH`]). `None` until read once.
+    pub fizzy_people: Option<Vec<fizzy::UserRef>>,
+    pub fizzy_people_at: Option<Timestamp>,
 }
 
 impl Snapshot {
+    /// The Fizzy user with this email address (any case), if the users were read.
+    pub fn fizzy_person_by_email(&self, email: &str) -> Option<&fizzy::UserRef> {
+        let email = email.trim().to_lowercase();
+        if email.is_empty() {
+            return None;
+        }
+        self.fizzy_people
+            .as_ref()?
+            .iter()
+            .find(|user| user.email_address.as_deref().is_some_and(|address| address.trim().to_lowercase() == email))
+    }
+
     /// A card of the incident board (the only board the workspace shows).
     pub fn card(&self, number: u64) -> Option<&Card> {
         self.cards.get(&number).filter(|card| self.board.as_ref().is_none_or(|board| on_board(card, board)))
@@ -142,7 +181,11 @@ pub(crate) async fn poll(
     next.columns = columns;
 
     let mut mentions = Vec::new();
+    let mut assignments = Vec::new();
     for activity in &activities {
+        if let Some(assignment) = assignment_in(activity).filter(|_| activity.board.as_ref().is_none_or(|on| on.id == board.id)) {
+            assignments.push(assignment);
+        }
         if activity.eventable_type.as_deref() == Some("Card")
             && let Ok(card) = serde_json::from_value::<Card>(activity.eventable.clone())
         {
@@ -154,6 +197,7 @@ pub(crate) async fn poll(
     }
     next.mentions.retain(|mention| mention.board_id == board.id);
     merge_mentions(&mut next, mentions, now);
+    merge_assignments(&mut next, assignments, now);
 
     // A single card or user that can't be looked up doesn't fail the poll: it's noted and asked
     // again next time, and the lists above still refresh.
@@ -221,6 +265,17 @@ pub(crate) async fn poll(
             }
             // Not marked unknown: asked again next poll.
             Err(error) => lookup_errors.push(format!("user {id}: {error}")),
+        }
+    }
+
+    // The account's users, now and then: who can be made an owner (the sheet's picker).
+    if next.fizzy_people_at.is_none_or(|at| now.duration_since(at) >= FIZZY_PEOPLE_REFRESH) {
+        next.fizzy_people_at = Some(now);
+        match client.users(&account).await {
+            Ok(users) => next.fizzy_people = Some(users),
+            // A Fizzy without the list: nobody can be picked, and nothing else changes.
+            Err(FizzyError::Status(404)) => {}
+            Err(error) => lookup_errors.push(format!("users: {error}")),
         }
     }
 
@@ -314,6 +369,44 @@ fn mention_in(activity: &fizzy::Activity) -> Option<Mention> {
         created_at: activity.created_at?,
         mentioned,
     })
+}
+
+/// A card's owner change: `card_assigned` / `card_unassigned`, with `particulars.assignee_ids`.
+fn assignment_in(activity: &fizzy::Activity) -> Option<Assignment> {
+    let assigned = match activity.action.as_str() {
+        "card_assigned" => true,
+        "card_unassigned" => false,
+        _ => return None,
+    };
+    let card_number = activity.eventable["number"]
+        .as_u64()
+        .or_else(|| activity.url.as_deref().and_then(fizzy::card_number_in))
+        .or_else(|| activity.eventable["url"].as_str().and_then(fizzy::card_number_in))?;
+    let assignees: Vec<String> = activity.particulars["assignee_ids"]
+        .as_array()
+        .map(|ids| ids.iter().filter_map(|id| id.as_str().map(str::to_string).or_else(|| id.as_u64().map(|n| n.to_string()))).collect())
+        .unwrap_or_default();
+    let creator = activity.creator.clone().unwrap_or_default();
+    Some(Assignment {
+        id: activity.id.clone(),
+        card_number,
+        assigned,
+        assignees,
+        actor_id: creator.id,
+        actor_name: creator.name,
+        created_at: activity.created_at?,
+    })
+}
+
+fn merge_assignments(snapshot: &mut Snapshot, new: Vec<Assignment>, now: Timestamp) {
+    for assignment in new {
+        if !snapshot.assignments.iter().any(|known| known.id == assignment.id) {
+            snapshot.assignments.push(assignment);
+        }
+    }
+    snapshot.assignments.retain(|assignment| now.duration_since(assignment.created_at) <= ASSIGNMENT_RETENTION);
+    snapshot.assignments.sort_by(|a, b| b.created_at.cmp(&a.created_at).then_with(|| b.id.cmp(&a.id)));
+    snapshot.assignments.truncate(MAX_ASSIGNMENTS);
 }
 
 fn plain(comment: &Value) -> String {

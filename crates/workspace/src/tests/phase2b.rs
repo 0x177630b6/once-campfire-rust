@@ -53,6 +53,7 @@ fn directory() -> Directory {
         people: people.iter().map(|(id, name, admin)| (*id, (name.to_string(), *admin))).collect(),
         memberships: memberships.into_iter().map(|(id, rooms)| (id, rooms.into_iter().collect::<BTreeSet<i64>>())).collect(),
         rooms: HashMap::from([(3, "front-desk".to_string()), (4, "security".to_string())]),
+        emails: HashMap::new(),
         loaded: true,
     }
 }

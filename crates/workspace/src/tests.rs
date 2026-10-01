@@ -63,6 +63,12 @@ impl FakeFizzy {
             .collect()
     }
 
+    /// A later `last_active_at` at each owner change (Fizzy moves it at every event).
+    fn tick(&self) -> String {
+        let writes = self.requests.lock().unwrap().iter().filter(|(method, ..)| method != "GET").count() as i64;
+        (now() + SignedDuration::from_secs(writes)).to_string()
+    }
+
     fn live(&self, card: Value) {
         self.cards.lock().unwrap().insert(card["number"].as_u64().unwrap(), card);
     }
@@ -74,8 +80,10 @@ impl FakeFizzy {
     /// A write to a live card, Fizzy's way. `None`: not a route the fake knows.
     fn write(&self, method: &str, path: &str, body: &Value, token: &str) -> Option<(u16, Value)> {
         static CARD: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-            regex::Regex::new(r"^/897/cards/(\d+)/(taggings|triage|not_now|closure|comments|steps|steps/(\w+)|comments/(\w+))\.json$")
-                .unwrap()
+            regex::Regex::new(
+                r"^/897/cards/(\d+)/(taggings|triage|not_now|closure|comments|steps|assignments|steps/(\w+)|comments/(\w+))\.json$",
+            )
+            .unwrap()
         });
         static TITLE: std::sync::LazyLock<regex::Regex> =
             std::sync::LazyLock::new(|| regex::Regex::new(r"^/897/cards/(\d+)\.json$").unwrap());
@@ -131,6 +139,20 @@ impl FakeFizzy {
                 card["postponed"] = json!(false);
             }
             ("DELETE", "closure") => card["closed"] = json!(false),
+            ("POST", "assignments") => {
+                // A toggle; the user must be one of `/897/users.json` (else 404, as without access).
+                let id = body["assignee_id"].as_str().unwrap_or("");
+                let users = self.replies.lock().unwrap().get("/897/users.json").map(|(_, users, _)| users.clone()).unwrap_or_default();
+                let user = users.as_array().and_then(|users| users.iter().find(|user| user["id"] == json!(id)).cloned())?;
+                let assignees = card["assignees"].as_array_mut().unwrap();
+                match assignees.iter().position(|assignee| assignee["id"] == json!(id)) {
+                    Some(at) => {
+                        assignees.remove(at);
+                    }
+                    None => assignees.push(user),
+                }
+                card["last_active_at"] = json!(self.tick());
+            }
             ("POST", "comments") => {
                 let id = format!("cm{}", self.comment_tokens.lock().unwrap().len() + 1);
                 let comment = json!({"id": id, "created_at": "2026-09-30T09:00:00Z", "creator": {"id": "fz-hermes", "name": "Hermes"},
@@ -1889,4 +1911,5 @@ async fn undo_reads_the_feed_back_to_the_action_or_refuses() {
     assert!(!fizzy.paths().iter().any(|path| path.ends_with("&page=3")), "no further than needed");
 }
 
+mod owner_pings;
 mod phase2b;

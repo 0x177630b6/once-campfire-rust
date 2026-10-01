@@ -193,6 +193,23 @@ impl<'a> Writer<'a> {
         body: Option<Value>,
         ok: &[u16],
     ) -> Result<HttpResponse, ActionError> {
+        match self.write_recorded(card, action, method, path, body, ok).await {
+            Ok(response) if ok.contains(&response.status) => Ok(response),
+            Ok(response) => Err(ActionError::from_fizzy(&FizzyError::Status(response.status))),
+            Err(error) => Err(ActionError::from_fizzy(&error)),
+        }
+    }
+
+    /// [`Writer::write`], recorded, with Fizzy's reply whatever its status.
+    async fn write_recorded(
+        &self,
+        card: Option<u64>,
+        action: String,
+        method: &str,
+        path: &str,
+        body: Option<Value>,
+        ok: &[u16],
+    ) -> Result<HttpResponse, FizzyError> {
         let result = self.client.send_json(method, &format!("/{}{path}", self.account), body.as_ref(), &self.identity.token).await;
         let outcome = match &result {
             Ok(response) if ok.contains(&response.status) => "ok".to_string(),
@@ -216,11 +233,7 @@ impl<'a> Writer<'a> {
             via: self.purpose.via,
             reference: self.purpose.reference.clone(),
         });
-        match result {
-            Ok(response) if ok.contains(&response.status) => Ok(response),
-            Ok(response) => Err(ActionError::from_fizzy(&FizzyError::Status(response.status))),
-            Err(error) => Err(ActionError::from_fizzy(&error)),
-        }
+        result
     }
 
     /// `POST /boards/:id/cards` (201 + the card). Tags can't be set here (Fizzy ignores them).
@@ -337,11 +350,56 @@ impl<'a> Writer<'a> {
             .map(|_| ())
     }
 
+    /// `POST /cards/:n/assignments` `{"assignee_id"}`: a **toggle**. Use [`Writer::set_owner`].
+    async fn toggle_assignment(&self, number: u64, fizzy_user_id: &str, adding: bool) -> Result<(), ActionError> {
+        let action = format!("owner {}{fizzy_user_id}", if adding { '+' } else { '-' });
+        let body = json!({ "assignee_id": fizzy_user_id });
+        let path = format!("/cards/{number}/assignments.json");
+        let ok = [200, 201, 204];
+        match self.write_recorded(Some(number), action, "POST", &path, Some(body), &ok).await {
+            Ok(response) if ok.contains(&response.status) => Ok(()),
+            // Fizzy's 404 here: that user can't access the board (or isn't active any more).
+            Ok(response) if response.status == 404 && adding => Err(ActionError::Fizzy(
+                "Fizzy refused: that person has no access to the incident board in Fizzy. An administrator can add them to the board."
+                    .into(),
+            )),
+            Ok(response) => Err(ActionError::from_fizzy(&FizzyError::Status(response.status))),
+            Err(error) => Err(ActionError::from_fizzy(&error)),
+        }
+    }
+
+    /// Makes the card's owner exactly `wanted` (a Fizzy user id), or nobody: against a fresh read,
+    /// the other owners are removed, then `wanted` added if missing (Fizzy's assignments are
+    /// toggles), then the card is read again and checked. Returns the card as it is afterwards.
+    pub async fn set_owner(&self, number: u64, wanted: Option<&str>) -> Result<Card, ActionError> {
+        let card = self.card(number).await?;
+        let (remove, add) = owner_changes(&card, wanted);
+        for id in &remove {
+            self.toggle_assignment(number, id, false).await?;
+        }
+        if let Some(id) = &add {
+            self.toggle_assignment(number, id, true).await?;
+        }
+        let after = if remove.is_empty() && add.is_none() { card } else { self.card(number).await? };
+        let (still_remove, still_add) = owner_changes(&after, wanted);
+        if !still_remove.is_empty() || still_add.is_some() {
+            return Err(ActionError::Fizzy("Fizzy didn't apply the owner change; the ticket shows its owner as it is now.".into()));
+        }
+        Ok(after)
+    }
+
     /// `PUT /cards/:n` `{"card": {"title"}}`.
     pub async fn set_title(&self, number: u64, title: &str) -> Result<(), ActionError> {
         let body = json!({ "card": { "title": title } });
         self.write(Some(number), "title".into(), "PUT", &format!("/cards/{number}.json"), Some(body), &[200, 204]).await.map(|_| ())
     }
+}
+
+/// The owners to remove, then the one to add, so that the card's only owner is `wanted` (or nobody).
+pub fn owner_changes(card: &Card, wanted: Option<&str>) -> (Vec<String>, Option<String>) {
+    let remove = card.assignees.iter().map(|user| user.id.clone()).filter(|id| Some(id.as_str()) != wanted).collect();
+    let add = wanted.filter(|wanted| !card.assignees.iter().any(|user| user.id == *wanted)).map(str::to_string);
+    (remove, add)
 }
 
 /// The tags to remove, then to add, so that the card's tags among `managed` are `wanted`.

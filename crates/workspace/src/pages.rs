@@ -55,7 +55,7 @@ pub struct Choice {
 }
 
 impl Choice {
-    fn new(value: impl Into<String>, label: impl Into<String>, selected: bool) -> Self {
+    pub(crate) fn new(value: impl Into<String>, label: impl Into<String>, selected: bool) -> Self {
         Self { value: value.into(), label: label.into(), selected }
     }
 }
@@ -379,6 +379,8 @@ pub struct CardSheet {
     /// Tags that are neither severities nor departments.
     pub other_tags: Vec<String>,
     pub assignees: String,
+    /// The owner control ([`crate::owners`]); the workspace fills it in for the viewer.
+    pub owner: OwnerControl,
     pub description: String,
     pub steps: Vec<StepItem>,
     pub steps_done: usize,
@@ -396,6 +398,24 @@ pub struct CardSheet {
     pub action_url: String,
     pub can_change: bool,
     pub can_comment: bool,
+}
+
+/// What the sheet's owner field offers its viewer. One owner per ticket (decision O6): "Take it",
+/// "Assign to…" (duty managers; people with a Fizzy user who may see the card) and "Remove".
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OwnerControl {
+    pub can_take: bool,
+    pub can_remove: bool,
+    /// "Assign to…": Campfire people, `selected` = the current owner.
+    pub candidates: Vec<Choice>,
+    /// Said under the field (e.g. the viewer has no Fizzy user, so can't own tickets).
+    pub hint: Option<String>,
+}
+
+impl OwnerControl {
+    pub fn is_empty(&self) -> bool {
+        !self.can_take && !self.can_remove && self.candidates.is_empty() && self.hint.is_none()
+    }
 }
 
 pub struct SheetInput<'a> {
@@ -441,6 +461,7 @@ pub fn card_sheet(config: &WorkspaceConfig, snapshot: &Snapshot, settings: &Sett
             .cloned()
             .collect(),
         assignees: card.assignees.iter().map(|user| user.name.as_str()).collect::<Vec<_>>().join(", "),
+        owner: OwnerControl::default(),
         description: card.description.trim().to_string(),
         steps_done: card.steps.iter().filter(|step| step.completed).count(),
         steps: card
@@ -571,6 +592,11 @@ pub struct SettingsPage {
     pub alert_department_rooms: bool,
     pub new_reminder_min: u32,
     pub draft_reminder_min: u32,
+    /// Owner pings ([`crate::owners`]).
+    pub owner_pings: bool,
+    /// The people with no Fizzy user of the same email address, by name (the app sets it, once
+    /// Fizzy's users were read): they can't own tickets.
+    pub without_fizzy_user: Option<Vec<String>>,
     /// Phase 2.6: the handover room (the first choice is "none"), shift ends, time zone.
     pub handover_rooms: Vec<Choice>,
     pub shift_ends: String,
@@ -652,6 +678,8 @@ pub fn settings_page(
         alert_department_rooms: settings.notifications.department_rooms,
         new_reminder_min: settings.notifications.new_reminder_min,
         draft_reminder_min: settings.notifications.draft_reminder_min,
+        owner_pings: settings.notifications.owner_pings,
+        without_fizzy_user: None,
         handover_rooms: std::iter::once(Choice::new("", "None yet (the handover can’t be posted)", settings.handover.room_id.is_none()))
             .chain(rooms.iter().map(|(id, name)| Choice::new(id.to_string(), name.clone(), settings.handover.room_id == Some(*id))))
             .collect(),

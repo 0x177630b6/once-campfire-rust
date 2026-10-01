@@ -117,6 +117,13 @@
         <label class="ws-field"><span class="ws-field__label">Remind about a proposal from Sky still waiting after (minutes, 0 = never)</span><input class="input" type="number" name="draft_reminder_min" min="0" max="1440" value="{{ draft_reminder_min }}"></label>
       </div>
       <p class="ws-muted">A waiting proposal first reminds the person it’s for, then, as long again later, the duty managers. Nothing is sent twice, and nothing already there when Meshduty starts is alerted. Alerts follow “Who sees which cards”.</p>
+      <label class="ws-radio"><input type="checkbox" name="owner_pings"{% if owner_pings %} checked{% endif %}> Owner pings: tell people when they become a ticket’s owner, and when they stop being it (a direct message from Sky; nobody is told about their own change)</label>
+      <p class="ws-muted">Owner pings only reach people who have both a Fizzy user and a Meshduty user with the same email address; they’re off while alerts are off.</p>
+      {%- if let Some(names) = without_fizzy_user %}
+      {%- if !names.is_empty() %}
+      <p class="ws-notice" role="note" data-ws-without-fizzy-user><strong>{{ names.len() }} {% if names.len() == 1 %}person has{% else %}people have{% endif %} no Fizzy user</strong>, so they can’t own tickets or get owner pings: {{ names.join(", ") }}. Create a Fizzy user for each, with the same email address as in Meshduty and access to the incident board.</p>
+      {%- endif %}
+      {%- endif %}
     </section>
 
     <section class="ws-section" aria-labelledby="ws-settings-handover">

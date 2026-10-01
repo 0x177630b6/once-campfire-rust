@@ -32,8 +32,39 @@
         {%- endfor %}
       </select>
     </label>
+    {%- if owner.is_empty() %}
     <p class="ws-field"><span class="ws-field__label">Owner</span> {% if assignees.is_empty() %}<span class="ws-muted">no owner</span>{% else %}{{ assignees }}{% endif %}</p>
+    {%- endif %}
   </div>
+  {%- if !owner.is_empty() %}
+  {#- The owner control (campfire_workspace::owners): one owner per ticket. "Take it" and "Remove"
+      post {"owner": "me" | "none"}, the picker {"owner": "<user id>"} (hermes/workspace.js). -#}
+  <div class="ws-field ws-owner" data-ws-owner>
+    <span class="ws-field__label" id="ws-owner-label-{{ number }}">Owner</span>
+    <div class="ws-owner__row">
+      <span class="ws-owner__names">{% if assignees.is_empty() %}<span class="ws-muted">no owner</span>{% else %}{{ assignees }}{% endif %}</span>
+      {%- if owner.can_take %}
+      <button type="button" class="btn ws-btn ws-btn--small" data-ws-owner-set="me">Take it</button>
+      {%- endif %}
+      {%- if !owner.candidates.is_empty() %}
+      <label class="ws-owner__assign"><span class="for-screen-reader">Assign to</span>
+        <select class="input ws-select" name="owner" data-ws-change="owner" aria-describedby="ws-owner-label-{{ number }}">
+          <option value="" selected>Assign to…</option>
+          {%- for person in owner.candidates %}
+          <option value="{{ person.value }}"{% if person.selected %} disabled{% endif %}>{{ person.label }}{% if person.selected %} (owner){% endif %}</option>
+          {%- endfor %}
+        </select>
+      </label>
+      {%- endif %}
+      {%- if owner.can_remove %}
+      <button type="button" class="btn ws-btn ws-btn--small" data-ws-owner-set="none">Remove</button>
+      {%- endif %}
+    </div>
+    {%- if let Some(hint) = owner.hint %}
+    <p class="ws-muted ws-owner__hint">{{ hint }}</p>
+    {%- endif %}
+  </div>
+  {%- endif %}
 
   {%- if !departments.is_empty() %}
   <fieldset class="ws-sheet__departments" data-ws-change="departments"{% if !can_change %} disabled{% endif %}>

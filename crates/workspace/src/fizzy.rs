@@ -336,6 +336,8 @@ struct IdentityAccount {
 
 /// The most pages read of one list, so that a huge board can't stall a poll.
 pub const MAX_PAGES: u32 = 10;
+/// The most pages of users read (15 + 30 + 50 + 100 + 100 people).
+pub const USER_PAGES: u32 = 5;
 /// The most comment pages walked when Fizzy doesn't say how many comments there are.
 pub const MAX_COMMENT_PAGES: u32 = 20;
 /// `geared_pagination`'s default page sizes (Fizzy sets none): 15, 30, 50, then 100 per page.
@@ -489,6 +491,12 @@ impl<'a> Client<'a> {
 
     pub async fn user(&self, account: &str, id: &str) -> Result<Option<UserRef>, FizzyError> {
         self.get_json(&format!("/{account}/users/{id}.json")).await
+    }
+
+    /// The account's active users (`GET /users.json`, alphabetical, with their email address): who
+    /// can be made a card's owner.
+    pub async fn users(&self, account: &str) -> Result<Vec<UserRef>, FizzyError> {
+        self.get_list(&format!("/{account}/users.json"), USER_PAGES).await
     }
 
     /// A card's newest `keep` comments, oldest first, whether earlier ones were left out, and
