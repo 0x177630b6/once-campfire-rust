@@ -502,6 +502,16 @@ function updateChips(number, html) {
   }
 }
 
+// The owner control's buttons: "Take it" and "Remove" (the picker is a `data-ws-change` select).
+onEvent("click", event => {
+  const button = event.target.closest?.(".ws-sheet [data-ws-owner-set]")
+  const sheet = button?.closest(".ws-sheet")
+  if (!sheet || sheet.getAttribute("aria-busy") === "true") return
+  event.preventDefault()
+  const body = logic.changeBody("owner", { value: button.dataset.wsOwnerSet })
+  if (body) changeCard(sheet, "owner", body)
+})
+
 onEvent("change", event => {
   const control = event.target.closest?.(".ws-sheet [data-ws-change]")
   const sheet = control?.closest(".ws-sheet")
@@ -737,7 +747,8 @@ async function saveSettings(form) {
       severities: [ ...form.querySelectorAll("input[name=alert_severities]:checked") ].map(input => input.value),
       departmentRooms: checked("alert_department_rooms"),
       newReminder: number("new_reminder_min"),
-      draftReminder: number("draft_reminder_min")
+      draftReminder: number("draft_reminder_min"),
+      ownerPings: checked("owner_pings")
     },
     handover: {
       room: value("handover_room"),

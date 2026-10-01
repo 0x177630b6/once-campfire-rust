@@ -970,6 +970,34 @@ dialog.ws-overlay {
   gap: 0.75em 1em;
 }
 
+/* The sheet's owner control (campfire_workspace::owners): the owner, "Take it", "Assign to…",
+   "Remove", wrapping on a phone. */
+.ws-owner__row {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4em 0.5em;
+}
+
+.ws-owner__names {
+  color: var(--ui-text);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.ws-owner__assign {
+  display: flex;
+  max-inline-size: 100%;
+
+  .ws-select {
+    max-inline-size: 100%;
+  }
+}
+
+.ws-owner__hint {
+  margin-block-start: 0.15em;
+}
+
 .ws-sheet__departments,
 .ws-dept__rooms {
   border: 0;

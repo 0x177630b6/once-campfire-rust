@@ -62,6 +62,9 @@ export function changeBody(kind, { value, checked, checkedValues = [], stepId } 
     case "move": return { to: value }
     case "departments": return { tags: [ ...checkedValues ] }
     case "step": return { step_id: stepId, completed: Boolean(checked) }
+    // The owner control: "me" (Take it), "none" (Remove), or a person's id (Assign to…). The
+    // picker's first option ("Assign to…") is empty: nothing to post.
+    case "owner": return /^(me|none|\d+)$/.test(String(value ?? "")) ? { owner: String(value) } : null
   }
   return null
 }
@@ -117,7 +120,9 @@ export function settingsBody({
       severities: [ ...(notifications.severities || []) ],
       department_rooms: Boolean(notifications.departmentRooms),
       new_reminder_min: minutes(notifications.newReminder, 15),
-      draft_reminder_min: minutes(notifications.draftReminder, 10)
+      draft_reminder_min: minutes(notifications.draftReminder, 10),
+      // On unless the form says off (an older form without the box keeps them on).
+      owner_pings: notifications.ownerPings === undefined ? true : Boolean(notifications.ownerPings)
     },
     handover: {
       room_id: String(handover.room ?? "").trim() !== "" && Number.isInteger(room) && room > 0 ? room : null,

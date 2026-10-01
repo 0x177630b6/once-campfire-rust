@@ -67,6 +67,12 @@ test("card sheet changes", () => {
   assert.deepEqual(logic.changeBody("departments", { checkedValues: [ "engineering", "security" ] }), { tags: [ "engineering", "security" ] })
   assert.deepEqual(logic.changeBody("step", { stepId: "s1", checked: true }), { step_id: "s1", completed: true })
   assert.equal(logic.changeBody("fly", {}), null)
+  assert.deepEqual(logic.changeBody("owner", { value: "me" }), { owner: "me" })
+  assert.deepEqual(logic.changeBody("owner", { value: "none" }), { owner: "none" })
+  assert.deepEqual(logic.changeBody("owner", { value: "12" }), { owner: "12" })
+  assert.equal(logic.changeBody("owner", { value: "" }), null, "the picker's “Assign to…”: nothing to post")
+  assert.equal(logic.changeBody("owner", { value: "12; drop" }), null)
+  assert.equal(logic.changeBody("owner", {}), null)
 })
 
 test("the settings form as the server reads it", () => {
@@ -78,7 +84,7 @@ test("the settings form as the server reads it", () => {
     autonomy: { create: "ask_first", close: "never" },
     hermesUserId: "  03hermes ",
     visibility: { mode: "by_department_room", untagged: "duty_managers" },
-    notifications: { enabled: true, severities: [ "critical" ], departmentRooms: false, newReminder: "20", draftReminder: "" },
+    notifications: { enabled: true, severities: [ "critical" ], departmentRooms: false, newReminder: "20", draftReminder: "", ownerPings: false },
     handover: { room: "12", shiftEnds: "06:00, 14:00 22:00", timeZone: " Europe/Paris ", reminder: true }
   })
   assert.deepEqual(body, {
@@ -88,13 +94,16 @@ test("the settings form as the server reads it", () => {
     autonomy: { create: "ask_first", close: "never" },
     hermes_fizzy_user_id: "03hermes",
     visibility: { mode: "by_department_room", untagged: "duty_managers" },
-    notifications: { enabled: true, severities: [ "critical" ], department_rooms: false, new_reminder_min: 20, draft_reminder_min: 10 },
+    notifications: {
+      enabled: true, severities: [ "critical" ], department_rooms: false, new_reminder_min: 20, draft_reminder_min: 10, owner_pings: false
+    },
     handover: { room_id: 12, shift_ends: [ "06:00", "14:00", "22:00" ], time_zone: "Europe/Paris", reminder: true }
   })
   const defaults = logic.settingsBody({ managers: [ "5" ] })
   assert.equal(defaults.duty_managers, null, "not listed: the administrators")
   assert.equal(defaults.confirm_policy, "anyone")
   assert.equal(defaults.hermes_fizzy_user_id, null)
+  assert.equal(defaults.notifications.owner_pings, true, "owner pings default on")
   assert.deepEqual(defaults.visibility, { mode: "everyone", untagged: "everyone" })
   assert.equal(defaults.handover.room_id, null, "no room picked")
   assert.equal(logic.settingsBody({ handover: { room: "x" } }).handover.room_id, null)
