@@ -11,9 +11,9 @@ import { Controller } from "@hotwired/stimulus"
 // When the model calls `submit_incident`, its arguments plus the accumulated transcript are
 // POSTed to the report URL, which publishes the message in the room as the current user. When the
 // page has an ask URL (HERMES_ASK_URL on the server), the model can also call `ask_hermes`: the
-// question is POSTed there, Campfire asks the Hermes agent, and the answer goes back to the model
-// as the tool response, which it then speaks. The page shows each question as a small « Hermes »
-// line; those lines stay out of the report's transcript (the assistant's spoken answer is in it).
+// question is POSTed there, the server asks the Hermes agent (shown as Sky), and the answer goes
+// back to the model as the tool response, which it then speaks. The page shows each question as a
+// small "Sky" line; those lines stay out of the report's transcript (the assistant's spoken answer is in it).
 //
 // The protocol lives in LiveSession (no DOM, no audio) so it can be exercised on its own; the
 // Stimulus controller wires it to the microphone, the speaker and the page.
@@ -31,9 +31,9 @@ const ASK_TIMEOUT_MS = 65000
 const PLAYBACK_LEAD_S = 0.05
 
 // The report's transcript says "Employee" (fixed English labels, like the report's, whatever language
-// is spoken); the page says « Vous ».
+// is spoken); the page says "You".
 const LABELS = { user: "Employee", model: "Assistant" }
-const SCREEN_LABELS = { user: "Vous", model: "Assistant" }
+const SCREEN_LABELS = { user: "You", model: "Assistant" }
 
 // Sent as text right after setup so the assistant speaks first (greets, asks what they need). Text
 // input isn't transcribed, so it shows neither on the page nor in the report. In English, like the
@@ -41,7 +41,7 @@ const SCREEN_LABELS = { user: "Vous", model: "Assistant" }
 export const KICKOFF_TEXT = "[The session starts: greet the employee briefly, in the language your instructions say, and ask what they need or what happened.]"
 
 // Every start-up step has a deadline, so a stalled step ends with a message naming it instead of
-// an endless "Connexion…".
+// an endless "Connecting…".
 const STEP_TIMEOUT_MS = { mic: 60000, audio: 10000, token: 15000, connect: 20000 }
 
 export class StepTimeout extends Error {
@@ -57,57 +57,58 @@ export function withTimeout(promise, ms, step) {
   return Promise.race([promise, deadline]).finally(() => clearTimeout(timer))
 }
 
-// For the « Détails techniques » of an error, not the sentence.
+// For the "Technical details" of an error, not the sentence.
 const STEP_LABELS = {
-  mic: "autorisation du micro",
-  audio: "démarrage de l’audio du navigateur",
-  token: "ouverture de session sur le serveur Campfire",
-  connect: "connexion au service vocal Google (generativelanguage.googleapis.com)"
+  mic: "microphone permission",
+  audio: "starting the browser's audio",
+  token: "opening a session on the MeshDuty server",
+  connect: "connecting to Google's voice service (generativelanguage.googleapis.com)"
 }
 
-const NB = " " // before : ? ! ; and inside « »
-
 export const MESSAGES = {
-  ready: "Appuyez sur le micro pour commencer",
-  insecure: `Le micro n’est disponible qu’en HTTPS${NB}: ouvrez cette page via une adresse https://.`,
-  unsupported: "Ce navigateur ne permet pas la conversation vocale en direct. Essayez un navigateur récent.",
-  micDenied: "L’accès au micro est refusé.",
-  micDeniedHelp: `Chrome${NB}: cadenas de la barre d’adresse → Micro → Autoriser.\niPhone${NB}: Réglages → Safari → Micro. Puis réessayez.`,
-  micMissing: "Aucun micro détecté sur cet appareil.",
-  micError: "Impossible d’ouvrir le micro.",
-  micLost: "Le micro a été coupé (appel entrant, autre application ou écran verrouillé).",
-  stepMic: "Autorisation du micro…",
-  stepConnect: "Connexion à l’assistant…",
-  reconnecting: "Reconnexion…",
-  listening: "À vous",
-  speaking: "L’assistant parle…",
-  liveHint: "Confirmez le récapitulatif à l’assistant pour envoyer le ticket.",
-  resumeFailed: "Connexion rétablie, l’assistant a repris le fil.",
-  rateLimited: "Trop de sessions demandées en peu de temps. Patientez une minute puis réessayez.",
-  tokenError: "Impossible d’ouvrir une session vocale. Réessayez dans un instant.",
-  connectError: "Impossible de joindre l’assistant vocal. Vérifiez la connexion puis réessayez.",
-  timeout: "L’assistant vocal ne répond pas. Réessayez.",
-  closed: "La connexion a été interrompue.",
-  closedStatus: "Connexion interrompue",
-  retry: "Appuyez sur le micro pour réessayer",
-  unavailable: "Indisponible",
-  paused: "Conversation en pause",
-  submitting: "Envoi du ticket…",
-  submitError: "L’envoi du ticket a échoué. L’assistant va vous proposer de réessayer.",
-  finishing: "Ticket envoyé. L’assistant termine…",
-  asking: "Hermes consulté…",
-  askLabel: "Question à Hermes",
-  askPending: "En attente de la réponse…",
-  askAnswered: "Réponse reçue",
-  askFailed: "Pas de réponse",
-  published: "Ticket envoyé",
-  publishedIn: (room) => `Ticket envoyé dans «${NB}${room}${NB}»${NB}: Hermes le traite et confirme dans le salon.`
+  ready: "Tap the mic to start",
+  insecure: "The microphone only works over HTTPS: open this page at an https:// address.",
+  unsupported: "This browser can't hold a live voice conversation. Try a recent browser.",
+  micDenied: "Microphone access is blocked.",
+  micDeniedHelp: "Chrome: padlock in the address bar → Microphone → Allow.\niPhone: Settings → Safari → Microphone. Then try again.",
+  micMissing: "No microphone found on this device.",
+  micError: "Couldn't open the microphone.",
+  micLost: "The microphone was cut off (an incoming call, another app or the screen locked).",
+  stepMic: "Microphone permission…",
+  stepConnect: "Connecting to the assistant…",
+  reconnecting: "Reconnecting…",
+  listening: "Your turn",
+  speaking: "The assistant is speaking…",
+  liveHint: "Confirm the recap to the assistant to send the ticket.",
+  resumeFailed: "Reconnected; the assistant picked up where you left off.",
+  rateLimited: "Too many sessions in a short time. Wait a minute, then try again.",
+  tokenError: "Couldn't open a voice session. Try again in a moment.",
+  connectError: "Couldn't reach the voice assistant. Check the connection, then try again.",
+  timeout: "The voice assistant isn't answering. Try again.",
+  closed: "The connection was lost.",
+  closedStatus: "Connection lost",
+  closedHelp: "Tap the mic to carry on.",
+  retry: "Tap the mic to try again",
+  unavailable: "Unavailable",
+  paused: "Conversation paused",
+  submitting: "Sending the ticket…",
+  submitError: "Sending the ticket failed. The assistant will offer to try again.",
+  finishing: "Ticket sent. The assistant is wrapping up…",
+  asking: "Checking with Sky…",
+  askLabel: "Question for Sky",
+  askPending: "Waiting for the answer…",
+  askAnswered: "Answered",
+  askFailed: "No answer",
+  live: "Live.",
+  details: "Technical details",
+  published: "Ticket sent",
+  publishedIn: (room) => `Ticket sent to “${room}”: Sky files it and confirms in the room.`
 }
 
 // Button labels (the round button's accessible name).
 const TOGGLE_LABELS = {
-  idle: "Démarrer", starting: "Connexion…", live: "Raccrocher", finishing: "Raccrocher",
-  stopped: "Reprendre", closed: "Reprendre", error: "Réessayer", unavailable: "Indisponible", done: "Terminé"
+  idle: "Start", starting: "Connecting…", live: "Hang up", finishing: "Hang up",
+  stopped: "Resume", closed: "Resume", error: "Try again", unavailable: "Unavailable", done: "Done"
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -531,10 +532,10 @@ export function levelFromPcm16(buffer) {
 
 const pad = (n) => String(n).padStart(2, "0")
 
-// French typography for display: typographic apostrophes, a non-breaking space before ? ! : ; »
-// and after «.
-export function frenchSpacing(text) {
-  return text.replace(/'/g, "’").replace(/\s+([?!:;»])/g, `${NB}$1`).replace(/«\s+/g, `«${NB}`)
+// For display: typographic apostrophes. Nothing language-specific (the transcript is in whatever
+// language the employee speaks).
+export function displayText(text) {
+  return text.replace(/'/g, "’")
 }
 
 // 65 → "01:05"
@@ -547,8 +548,8 @@ export function formatClock(seconds) {
 // Stimulus controller
 //
 // States (data-voice-state): idle → starting → live ⇄ (finishing → done)
-//   live → stopped (« Raccrocher »), closed (connection lost), error; each can resume (retry())
-//   with the transcript kept, or « Recommencer » (in-page confirmation) wipes it.
+//   live → stopped ("Hang up"), closed (connection lost), error; each can resume (retry())
+//   with the transcript kept, or "Start over" (in-page confirmation) wipes it.
 //   unavailable: no HTTPS, no AudioWorklet.
 // While live, data-voice-activity is "speaking" while the assistant's audio plays, else
 // "listening".
@@ -621,7 +622,7 @@ export default class extends Controller {
     }
   }
 
-  // A fresh conversation. Only reached with an empty transcript (idle, or after « Recommencer »).
+  // A fresh conversation. Only reached with an empty transcript (idle, or after "Start over").
   async start() {
     if (this.state === "starting" || this.state === "live") return
     if (!this.#supported) return
@@ -643,7 +644,7 @@ export default class extends Controller {
     }
   }
 
-  // Resumes the conversation (after « Raccrocher », a lost connection or an error), transcript
+  // Resumes the conversation (after "Hang up", a lost connection or an error), transcript
   // kept: a fresh token, the session resumed when possible, and the transcript replayed to the
   // assistant either way (LiveSession's onReconnected).
   async retry() {
@@ -668,7 +669,7 @@ export default class extends Controller {
     }
   }
 
-  // « Raccrocher »: ends the call, keeps the transcript (and the session, to resume).
+  // "Hang up": ends the call, keeps the transcript (and the session, to resume).
   stop() {
     if (this.state === "finishing") return this.#finish()
     this.#teardown()
@@ -678,7 +679,7 @@ export default class extends Controller {
     this.#announce(this.state === "stopped" ? MESSAGES.paused : "")
   }
 
-  // The small « Annuler » while starting.
+  // The small "Cancel" while starting.
   cancel(event) {
     event?.preventDefault()
     if (this.state !== "starting") return
@@ -688,7 +689,7 @@ export default class extends Controller {
     this.#focus(this.toggleTarget)
   }
 
-  // « Recommencer »: asks first when there's something to lose.
+  // "Start over": asks first when there's something to lose.
   restart(event) {
     event?.preventDefault()
     if (this.transcript.empty) return this.confirmRestart()
@@ -748,15 +749,15 @@ export default class extends Controller {
   }
 
   // `ask_hermes`: the answer (or an error the assistant tells the employee about) is the tool
-  // response. The assistant waits for it (blocking function call), having said « Je vérifie
-  // auprès d'Hermes… ».
+  // response. The assistant waits for it (blocking function call), having said it is checking
+  // with Sky (in the employee's language).
   async #askHermes(args) {
     const question = String(args?.question || "").trim()
     if (!question) return { error: "Empty question." }
 
     const line = this.#appendHermesLine(question)
     this.#setTransient(MESSAGES.asking)
-    this.#announce(`${MESSAGES.askLabel}${NB}: ${question}`)
+    this.#announce(`${MESSAGES.askLabel}: ${question}`)
 
     try {
       const answer = await this.#postQuestion(question)
@@ -765,7 +766,7 @@ export default class extends Controller {
     } catch (error) {
       console.warn("voice: ask_hermes failed", error)
       this.#settleHermesLine(line, false)
-      return { error: "Hermes did not answer." }
+      return { error: "Sky did not answer." }
     } finally {
       if (this.transient === MESSAGES.asking) this.#setTransient(null)
     }
@@ -825,7 +826,7 @@ export default class extends Controller {
     console.warn("voice: connection closed", code, reason)
     this.#teardown()
     this.state = "closed"
-    this.#showNotice({ message: `${MESSAGES.closed} Appuyez sur le micro pour reprendre la conversation.`, details: `WebSocket fermé (code ${code}${reason ? `, ${reason}` : ""})` })
+    this.#showNotice({ message: `${MESSAGES.closed} ${MESSAGES.closedHelp}`, details: `WebSocket closed (code ${code}${reason ? `, ${reason}` : ""})` })
     this.#render()
   }
 
@@ -1022,7 +1023,7 @@ export default class extends Controller {
     this.state = "live"
     this.#startClock()
     this.#render()
-    this.#announce(`En direct. ${MESSAGES.liveHint}`)
+    this.#announce(`${MESSAGES.live} ${MESSAGES.liveHint}`)
     this.#acquireWakeLock()
     if (!this.toggleTarget.contains(document.activeElement)) this.#focus(this.toggleTarget)
   }
@@ -1040,7 +1041,7 @@ export default class extends Controller {
     if (this.state === "live") this.#renderStatus()
   }
 
-  // A status that wins over « À vous » / « L'assistant parle… » for a while (or until cleared).
+  // A status that wins over "Your turn" / "The assistant is speaking…" for a while (or until cleared).
   #setTransient(text, ms) {
     clearTimeout(this.transientTimer)
     this.transient = text
@@ -1092,12 +1093,12 @@ export default class extends Controller {
       this.lastLineElement = element
       this.announcedLine = null
     }
-    this.lastLineText.data = frenchSpacing(line.text)
+    this.lastLineText.data = displayText(line.text)
     this.#markPartial(this.lastLineElement)
     this.#stickTranscript()
   }
 
-  // A « Hermes » line in the transcript: the question, and below it where the answer stands. Not
+  // A "Sky" line (an ask_hermes question) in the transcript: the question, and below it where the answer stands. Not
   // part of `this.transcript` (so not in the report); the assistant's next words start a new
   // bubble below it.
   #appendHermesLine(question) {
@@ -1112,7 +1113,7 @@ export default class extends Controller {
     label.textContent = MESSAGES.askLabel
     const bubble = document.createElement("p")
     bubble.className = "voice__bubble"
-    bubble.textContent = frenchSpacing(question)
+    bubble.textContent = displayText(question)
     const state = document.createElement("span")
     state.className = "voice__hermes-state txt-small"
     state.textContent = MESSAGES.askPending
@@ -1147,7 +1148,7 @@ export default class extends Controller {
     this.#markPartial(null)
     if (this.announcedLine !== line) {
       this.announcedLine = line
-      this.#announce(`${SCREEN_LABELS.model}${NB}: ${frenchSpacing(line.text.trim())}`)
+      this.#announce(`${SCREEN_LABELS.model}: ${displayText(line.text.trim())}`)
     }
   }
 
@@ -1184,7 +1185,7 @@ export default class extends Controller {
     if (details) {
       const disclosure = document.createElement("details")
       const summary = document.createElement("summary")
-      summary.textContent = "Détails techniques"
+      summary.textContent = MESSAGES.details
       const code = document.createElement("code")
       code.textContent = details
       disclosure.append(summary, code)
@@ -1276,7 +1277,7 @@ export default class extends Controller {
     if (this.timerTarget.textContent !== text) this.timerTarget.textContent = text
   }
 
-  // The sentence stays plain; codes and hostnames go in « Détails techniques ».
+  // The sentence stays plain; codes and hostnames go in "Technical details".
   #describe(error) {
     if (error?.micError) {
       const details = [ error.name, error.message ].filter(Boolean).join(" : ")
@@ -1291,14 +1292,14 @@ export default class extends Controller {
       }
     }
     if (error instanceof StepTimeout) {
-      return { message: error.step === "mic" ? MESSAGES.micError : MESSAGES.timeout, details: `Délai dépassé à l’étape « ${STEP_LABELS[error.step] || error.step} »` }
+      return { message: error.step === "mic" ? MESSAGES.micError : MESSAGES.timeout, details: `Timed out at step “${STEP_LABELS[error.step] || error.step}”` }
     }
     if (error instanceof TokenError) {
-      const details = error.status ? `POST ${this.tokenUrlValue} → HTTP ${error.status}` : `POST ${this.tokenUrlValue} : réseau injoignable`
+      const details = error.status ? `POST ${this.tokenUrlValue} → HTTP ${error.status}` : `POST ${this.tokenUrlValue}: network unreachable`
       return { message: error.status === 429 ? MESSAGES.rateLimited : MESSAGES.tokenError, details }
     }
     if (error instanceof ConnectError) {
-      return { message: MESSAGES.connectError, details: `generativelanguage.googleapis.com : WebSocket fermé (code ${error.code}${error.reason ? `, ${error.reason}` : ""})` }
+      return { message: MESSAGES.connectError, details: `generativelanguage.googleapis.com: WebSocket closed (code ${error.code}${error.reason ? `, ${error.reason}` : ""})` }
     }
     return { message: MESSAGES.connectError, details: String(error?.message || error) }
   }

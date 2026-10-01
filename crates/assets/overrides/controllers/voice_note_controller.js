@@ -18,19 +18,19 @@ const MIN_SECONDS = 1
 const ERROR_MS = 6000
 
 export const MESSAGES = {
-  record: "Enregistrer un message vocal",
-  stop: "Envoyer le message vocal",
-  cancel: "Annuler l’enregistrement",
-  insecure: "Le micro n’est disponible qu’en HTTPS\u00a0: ouvrez Campfire via une adresse https://.",
-  unsupported: "Ce navigateur ne permet pas d’enregistrer un message vocal.",
-  micDenied: "Accès au micro refusé. Autorisez le micro pour ce site dans les réglages du navigateur, puis réessayez.",
-  micMissing: "Aucun micro détecté sur cet appareil.",
-  micError: "Impossible d’ouvrir le micro.",
-  recordError: "L’enregistrement a échoué.",
-  tooShort: "Enregistrez au moins une seconde.",
-  empty: "Aucun son n’a été enregistré.",
-  offline: "Hors ligne\u00a0: le message vocal partira dès que vous appuierez sur Envoyer.",
-  autoSend: (seconds) => `Envoi automatique dans ${seconds}\u00a0s`
+  record: "Record a voice message",
+  stop: "Send the voice message",
+  cancel: "Discard the recording",
+  insecure: "The microphone only works over HTTPS: open MeshDuty at an https:// address.",
+  unsupported: "This browser can't record a voice message.",
+  micDenied: "Microphone access is blocked. Allow the microphone for this site in the browser's settings, then try again.",
+  micMissing: "No microphone found on this device.",
+  micError: "Couldn't open the microphone.",
+  recordError: "The recording failed.",
+  tooShort: "Record at least one second.",
+  empty: "No sound was recorded.",
+  offline: "Offline: the voice message will go when you tap Send.",
+  autoSend: (seconds) => `Sending automatically in ${seconds}\u00a0s`
 }
 
 // MediaRecorder types by preference: [what to ask the recorder for, the File's type, extension].

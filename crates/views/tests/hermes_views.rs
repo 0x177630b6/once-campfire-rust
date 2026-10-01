@@ -67,11 +67,11 @@ fn the_composer_records_voice_notes_next_to_the_attachment_button() {
     assert!(form.find("Attach a file").unwrap() < note, "after the attachment button");
     assert!(note < form.find(r#"name="send""#).unwrap(), "before the send button");
     for fragment in [
-        r#"data-voice-note-target="toggle" data-action="voice-note#toggle" title="Enregistrer un message vocal">"#,
+        r#"data-voice-note-target="toggle" data-action="voice-note#toggle" title="Record a voice message">"#,
         r#"<img class="colorize--black hermes-voice-note__icon-record" aria-hidden="true" src="/assets/microphone.svg""#,
         r#"<img class="hermes-voice-note__icon-send" aria-hidden="true" src="/assets/arrow-up.svg""#,
-        r#"data-voice-note-target="cancel" data-action="voice-note#cancel" title="Annuler l’enregistrement" hidden"#,
-        r#"role="timer" aria-label="Durée de l’enregistrement"><span class="hermes-voice-note__dot" aria-hidden="true"></span><span data-voice-note-target="timer">0:00</span>"#,
+        r#"data-voice-note-target="cancel" data-action="voice-note#cancel" title="Discard the recording" hidden"#,
+        r#"role="timer" aria-label="Recording time"><span class="hermes-voice-note__dot" aria-hidden="true"></span><span data-voice-note-target="timer">0:00</span>"#,
         r#"data-voice-note-target="level" aria-hidden="true""#,
         r#"data-voice-note-target="warning" aria-live="polite""#,
         r#"data-voice-note-target="error" role="alert" hidden></p>"#,
@@ -93,14 +93,14 @@ fn the_composer_links_to_the_live_report_only_when_gemini_is_on() {
     });
     let form = composer(&html);
     let link = format!(
-        r#"<a class="btn btn--borderless txt-small flex-item-no-shrink hermes-live-link" href="/rooms/{}/voice" data-turbo-frame="_top" title="Ticket vocal (demande, panne, incident)">"#,
+        r#"<a class="btn btn--borderless txt-small flex-item-no-shrink hermes-live-link" href="/rooms/{}/voice" data-turbo-frame="_top" title="Voice ticket (request, fault, incident)">"#,
         show.room.id
     );
     let at = form.find(&link).expect(form);
     assert!(form.find("hermes-voice-note__toggle").unwrap() < at, "after the record button");
     assert!(form[at..].contains(r#"src="/assets/headset.svg""#));
-    assert!(form[at..].contains(r#"<span class="hermes-live-link__text" aria-hidden="true">Rapport</span>"#), "visible on touch screens");
-    assert!(form[at..].contains(r#"<span class="for-screen-reader">Ticket vocal (demande, panne, incident)</span>"#));
+    assert!(form[at..].contains(r#"<span class="hermes-live-link__text" aria-hidden="true">Report</span>"#), "visible on touch screens");
+    assert!(form[at..].contains(r#"<span class="for-screen-reader">Voice ticket (request, fault, incident)</span>"#));
     assert!(!form.contains("Gemini"));
     assert!(!html[..html.find("</nav>").unwrap()].contains("/voice"), "the nav's mic button is gone");
     assert!(!html.contains("hermes/hermes.css"), "linked from the head, by the seam (tests/hermes_head.rs)");
@@ -131,14 +131,14 @@ fn voice_notes_play_inline_with_a_compact_line() {
     assert!(
         html.contains(concat!(
             r#"<div class="hermes-audio" data-controller="voice-player">"#,
-            r#"<audio src="/rails/active_storage/blobs/redirect/abc--def/note.webm" controls="controls" preload="metadata" aria-label="Message vocal" data-voice-player-target="audio"></audio>"#,
+            r#"<audio src="/rails/active_storage/blobs/redirect/abc--def/note.webm" controls="controls" preload="metadata" aria-label="Voice message" data-voice-player-target="audio"></audio>"#,
             r#"<div class="hermes-audio__meta txt-small">"#
         )),
         "{html}"
     );
-    assert!(html.contains(r#"<span>Message vocal<span data-voice-player-target="duration"></span></span>"#), "{html}");
+    assert!(html.contains(r#"<span>Voice message<span data-voice-player-target="duration"></span></span>"#), "{html}");
     assert!(html.contains(r#"href="/rails/active_storage/blobs/redirect/abc--def/note.webm?disposition=attachment""#), "download");
-    assert!(html.contains("Télécharger le message vocal"));
+    assert!(html.contains("Download the voice message"));
     assert!(!html.contains("note-vocale-20260929"), "no file name row: {html}");
     assert!(!html.contains(" style=\"inline-size"), "sized by hermes/hermes.css");
 
@@ -150,9 +150,9 @@ fn voice_notes_play_inline_with_a_compact_line() {
 fn other_audio_files_keep_their_file_link() {
     let attachment = audio_attachment("interview <1>.mp3");
     let html = render(|ctx| attachment_presentation(ctx, &attachment));
-    assert!(html.contains(r#"preload="metadata" aria-label="Écouter interview &lt;1&gt;.mp3""#), "{html}");
+    assert!(html.contains(r#"preload="metadata" aria-label="Play interview &lt;1&gt;.mp3""#), "{html}");
     assert!(html.contains(r#"<span>interview &lt;1&gt;.mp3</span>"#), "the reference's file link: {html}");
-    assert!(!html.contains("Message vocal"));
+    assert!(!html.contains("Voice message"));
     assert!(html.ends_with("</div></div>"));
 }
 
@@ -175,9 +175,9 @@ fn the_voice_page_carries_the_controller_values_escaped() {
         asking.contains(r#"data-voice-report-url-value="/rooms/7/voice/report" data-voice-ask-url-value="/rooms/7/voice/ask" "#),
         "{asking}"
     );
-    assert!(html.contains("<title>Rapport vocal · Atelier &quot;B&quot; &lt;1&gt;</title>"), "{html}");
-    assert!(html.contains(r#"<h1 class="room__contents txt-medium overflow-ellipsis">Rapport vocal</h1>"#), "short title");
-    assert!(html.contains("dans «&nbsp;Atelier &quot;B&quot; &lt;1&gt;&nbsp;» après votre accord"), "the room in the intro");
+    assert!(html.contains("<title>Voice report · Atelier &quot;B&quot; &lt;1&gt;</title>"), "{html}");
+    assert!(html.contains(r#"<h1 class="room__contents txt-medium overflow-ellipsis">Voice report</h1>"#), "short title");
+    assert!(html.contains("to “Atelier &quot;B&quot; &lt;1&gt;” once you agree"), "the room in the intro");
     assert!(!html.contains("hermes/hermes.css"), "linked from the head, by the seam (tests/hermes_head.rs)");
     for (name, value) in [
         ("token-url", "/rooms/7/voice/token"),
@@ -199,8 +199,87 @@ fn the_voice_page_carries_the_controller_values_escaped() {
     assert!(html.contains(r#"data-voice-target="transcript" aria-live="off""#), "turns are announced once, not streamed");
     assert!(html.contains(r#"data-voice-target="announcer" role="status""#));
     assert!(html.contains(r#"data-voice-target="result" hidden"#));
-    assert!(html.contains(r#"data-voice-target="messageLink">Voir le message</a>"#));
+    assert!(html.contains(r#"data-voice-target="messageLink">View the message</a>"#));
     assert!(!html.contains("aria-pressed"));
     assert!(!html.contains("<style>"));
     assert!(html.contains(r#"<a class="btn" href="/rooms/7">"#), "back to the room");
+}
+
+/// The voice features speak English (owner decision, 1 Oct 2026; they were French): no French left
+/// in what their templates, scripts and routes show or answer. Comments may stay as they are, and
+/// the voice-note file prefix `note-vocale-` is a data contract (notes already posted carry it).
+#[test]
+fn the_voice_features_speak_english() {
+    const FRENCH: [&str; 24] = [
+        "vocal", "salon", "rapport", "enregistr", "annuler", "démarr", "reprendre", "recommencer", "envoy", "télécharg", "écouter",
+        "retour", "réessay", "connexion", "appuyez", "micro ", "chargement", "détails", "transcription", "garder", "effacer", "consulté",
+        "injoignable", "indisponible",
+    ];
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let read = |path: &str| std::fs::read_to_string(root.join(path)).unwrap_or_else(|error| panic!("{path}: {error}"));
+    // Literal text of a template: without `{# … #}` comments.
+    let template_text = |source: String| {
+        let mut out = String::new();
+        let mut rest = source.as_str();
+        while let Some(start) = rest.find("{#") {
+            out.push_str(&rest[..start]);
+            rest = rest[start..].find("#}").map_or("", |end| &rest[start + end + 2..]);
+        }
+        out + rest
+    };
+    // String literals of a script (`"`, `'`, `` ` ``) or a Rust file (`"`), outside `//` comments and
+    // Rust test modules. Good enough for these files: no string spans lines, no `//` inside one
+    // ends up mattering (a URL's `//` only shortens what's checked).
+    let literals = |source: String, quotes: &[char]| {
+        let code = source.split("#[cfg(test)]").next().unwrap_or("").to_string();
+        let mut out = Vec::new();
+        for line in code.lines().map(str::trim_start).filter(|line| !line.starts_with("//")) {
+            let mut quote = None;
+            let mut current = String::new();
+            let mut chars = line.chars().peekable();
+            while let Some(c) = chars.next() {
+                match quote {
+                    None if c == '/' && chars.peek() == Some(&'/') => break,
+                    None if quotes.contains(&c) => quote = Some(c),
+                    None => {}
+                    Some(_) if c == '\\' => {
+                        chars.next();
+                    }
+                    Some(q) if c == q => {
+                        out.push(std::mem::take(&mut current));
+                        quote = None;
+                    }
+                    Some(_) => current.push(c),
+                }
+            }
+        }
+        out.join("\n")
+    };
+    const JS: &[char] = &['"', '\'', '`'];
+    const RUST: &[char] = &['"'];
+    let sources = [
+        ("views/templates/hermes/voice.html", template_text(read("views/templates/hermes/voice.html"))),
+        ("views/templates/hermes/_composer_buttons.html", template_text(read("views/templates/hermes/_composer_buttons.html"))),
+        ("views/src/hermes.rs", literals(read("views/src/hermes.rs"), RUST)),
+        ("assets/overrides/controllers/voice_controller.js", literals(read("assets/overrides/controllers/voice_controller.js"), JS)),
+        (
+            "assets/overrides/controllers/voice_note_controller.js",
+            literals(read("assets/overrides/controllers/voice_note_controller.js"), JS),
+        ),
+        (
+            "assets/overrides/controllers/voice_player_controller.js",
+            literals(read("assets/overrides/controllers/voice_player_controller.js"), JS),
+        ),
+        ("campfire/src/controllers/voice.rs", literals(read("campfire/src/controllers/voice.rs"), RUST)),
+    ];
+    for (path, text) in sources {
+        let text = text.replace("note-vocale-", "").to_lowercase();
+        assert!(text.len() > 20, "{path}: read its text");
+        for word in FRENCH {
+            assert!(!text.contains(word), "{path} still says “{word}”");
+        }
+        for c in ['é', 'è', 'ê', 'à', 'ç', 'ù', 'ô', 'î', 'â', '«', '»'] {
+            assert!(!text.contains(c), "{path} still has “{c}”:\n{}", text.lines().find(|line| line.contains(c)).unwrap_or(""));
+        }
+    }
 }

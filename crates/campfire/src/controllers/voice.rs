@@ -78,7 +78,7 @@ pub async fn token(c: &mut Ctx) -> Result {
     let now = c.now();
     let live = feature(c)?;
     if !live.allow(user.id, now) {
-        return json_error(c, StatusCode::TOO_MANY_REQUESTS, "rate_limited", "Trop de sessions vocales demandées ; réessayez plus tard.");
+        return json_error(c, StatusCode::TOO_MANY_REQUESTS, "rate_limited", "Too many voice sessions requested; try again later.");
     }
 
     let room_name = room_display_name(c, &room).await?;
@@ -109,7 +109,7 @@ pub async fn token(c: &mut Ctx) -> Result {
         Err(error) => {
             tracing::warn!(room_id = room.id, user_id = user.id, %error, "could not mint a Gemini Live token");
             let code = if matches!(error, MintError::Timeout) { "upstream_timeout" } else { "upstream_error" };
-            json_error(c, StatusCode::BAD_GATEWAY, code, "Le service vocal est indisponible ; réessayez dans un instant.")
+            json_error(c, StatusCode::BAD_GATEWAY, code, "The voice service is unavailable; try again in a moment.")
         }
     }
 }
@@ -119,14 +119,14 @@ pub async fn report(c: &mut Ctx) -> Result {
     before_actions(c, Before::default()).await?;
     let (_, room) = concerns::set_room(c).await?;
     let Some(report) = IncidentReport::from_params(&c.request_params) else {
-        return json_error(c, StatusCode::UNPROCESSABLE_ENTITY, "invalid_report", "Le titre et le résumé sont obligatoires.");
+        return json_error(c, StatusCode::UNPROCESSABLE_ENTITY, "invalid_report", "A title and a summary are required.");
     };
     let Some(bot) = voice_bot(c, &room).await? else {
         return json_error(
             c,
             StatusCode::UNPROCESSABLE_ENTITY,
             "bot_not_in_room",
-            "Le bot chargé des comptes rendus n'est pas membre de ce salon.",
+            "The bot that files reports isn't a member of this room.",
         );
     };
 
@@ -149,11 +149,11 @@ pub async fn ask(c: &mut Ctx) -> Result {
     let user = require_current_user(c)?.clone();
     let question = c.request_params.get("question").and_then(Param::as_str).map(|q| q.split_whitespace().collect::<Vec<_>>().join(" "));
     let Some(question) = question.filter(|q| !q.is_empty()) else {
-        return json_error(c, StatusCode::UNPROCESSABLE_ENTITY, "invalid_question", "La question est vide.");
+        return json_error(c, StatusCode::UNPROCESSABLE_ENTITY, "invalid_question", "The question is empty.");
     };
     let question = hermes_ask::truncate_chars(&question, hermes_ask::MAX_QUESTION_CHARS);
     if !ask_feature(c)?.allow_ask(user.id, c.now()) {
-        return json_error(c, StatusCode::TOO_MANY_REQUESTS, "rate_limited", "Trop de questions posées à Hermes ; réessayez plus tard.");
+        return json_error(c, StatusCode::TOO_MANY_REQUESTS, "rate_limited", "Too many questions for Sky; try again later.");
     }
 
     let room_name = room_display_name(c, &room).await?;
@@ -176,11 +176,11 @@ pub async fn ask(c: &mut Ctx) -> Result {
         }
         Err(AskError::Timeout) => {
             tracing::warn!(room_id = room.id, user_id = user.id, elapsed_ms, "Hermes did not answer a live voice question in time");
-            json_error(c, StatusCode::GATEWAY_TIMEOUT, "upstream_timeout", "Hermes n’a pas répondu à temps.")
+            json_error(c, StatusCode::GATEWAY_TIMEOUT, "upstream_timeout", "Sky didn’t answer in time.")
         }
         Err(error) => {
             tracing::warn!(room_id = room.id, user_id = user.id, elapsed_ms, %error, "could not ask Hermes a live voice question");
-            json_error(c, StatusCode::BAD_GATEWAY, "upstream_error", "Hermes est injoignable pour le moment.")
+            json_error(c, StatusCode::BAD_GATEWAY, "upstream_error", "Sky can’t be reached right now.")
         }
     }
 }

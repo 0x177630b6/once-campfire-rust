@@ -264,7 +264,7 @@ async fn ask_timeouts_are_504_failures_502_and_questions_rate_limited() {
     let asker = install_asker(&app, || Err(AskError::Timeout));
     let timed_out = david.write(json_post(&voice_ask_path(ALL_TALK), &question)).await;
     assert_eq!(timed_out.status, StatusCode::GATEWAY_TIMEOUT);
-    assert_eq!(timed_out.json(), json!({ "error": "upstream_timeout", "message": "Hermes n’a pas répondu à temps." }));
+    assert_eq!(timed_out.json(), json!({ "error": "upstream_timeout", "message": "Sky didn’t answer in time." }));
     assert_eq!(asker.questions.lock().unwrap()[0].room_id, ALL_TALK);
 
     install_asker(&app, || Err(AskError::Status(500)));

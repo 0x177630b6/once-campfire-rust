@@ -1,7 +1,7 @@
 import { Controller } from "@hotwired/stimulus"
 
 // Hermes fork: an audio attachment's inline player (hermes::audio_preview). Writes the duration
-// next to « Message vocal » once the browser knows it: from the metadata (preload="metadata"),
+// next to "Voice message" once the browser knows it: from the metadata (preload="metadata"),
 // or, for recordings whose header has none (Chrome's MediaRecorder WebM), after a first play.
 
 const pad = (n) => String(n).padStart(2, "0")

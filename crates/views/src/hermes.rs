@@ -51,31 +51,31 @@ pub struct VoiceShow<'a> {
 
 impl Page for VoiceShow<'_> {
     fn page_title(&self) -> Option<String> {
-        Some(format!("Rapport vocal · {}", self.voice.room_name))
+        Some(format!("Voice report · {}", self.voice.room_name))
     }
 }
 
 /// Voice notes recorded from the composer are named `note-vocale-YYYYMMDD-HHMMSS.<ext>`
-/// (`voice_note_controller.js`).
+/// (`voice_note_controller.js`). A data contract: notes already posted carry it, so it stays French.
 const VOICE_NOTE_PREFIX: &str = "note-vocale-";
 
 /// An `audio/*` attachment: a player that fetches only the metadata up front (so it can show the
-/// duration), full width of the bubble. A voice note gets a compact « Message vocal · 0:07 » line
+/// duration), full width of the bubble. A voice note gets a compact "Voice message · 0:07" line
 /// and a download button (the `voice-player` controller fills in the duration once known); any
 /// other audio file keeps the file link the reference renders (name, download, share).
 pub(crate) fn audio_preview(ctx: &ViewContext, attachment: &AttachmentView) -> String {
     let voice_note = attachment.filename.starts_with(VOICE_NOTE_PREFIX);
-    let label = if voice_note { "Message vocal".to_string() } else { format!("Écouter {}", attachment.filename) };
+    let label = if voice_note { "Voice message".to_string() } else { format!("Play {}", attachment.filename) };
     let meta = if voice_note {
         format!(
             concat!(
                 r#"<div class="hermes-audio__meta txt-small">"#,
                 r#"<span class="hermes-audio__label">"#,
                 r#"<img class="colorize--black" aria-hidden="true" src="{icon}" width="16" height="16" />"#,
-                r#"<span>Message vocal<span data-voice-player-target="duration"></span></span></span>"#,
-                r#"<a class="btn message__action-btn hide-in-ios-pwa" style="--width: auto;" href="{download}" title="Télécharger">"#,
+                r#"<span>Voice message<span data-voice-player-target="duration"></span></span></span>"#,
+                r#"<a class="btn message__action-btn hide-in-ios-pwa" style="--width: auto;" href="{download}" title="Download">"#,
                 r#"<img aria-hidden="true" src="{download_icon}" width="20" height="20" />"#,
-                r#"<span class="for-screen-reader">Télécharger le message vocal</span></a>"#,
+                r#"<span class="for-screen-reader">Download the voice message</span></a>"#,
                 r#"</div>"#
             ),
             icon = escape(&ctx.asset("microphone.svg")),
