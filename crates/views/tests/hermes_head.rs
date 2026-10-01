@@ -88,6 +88,23 @@ impl WorkspaceHooks for Workspace {
     }
 }
 
+/// The theme's `theme-color` metas put back to upstream's (the theme changes nothing else in the
+/// head but its links).
+fn upstream_chrome(page: &str) -> String {
+    let themed = concat!(
+        r##"<meta name="theme-color" content="#f4f0e8" media="(prefers-color-scheme: light)">"##,
+        "\n    ",
+        r##"<meta name="theme-color" content="#181e1b" media="(prefers-color-scheme: dark)">"##
+    );
+    let upstream = concat!(
+        r##"<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">"##,
+        "\n    ",
+        r##"<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">"##
+    );
+    assert_eq!(page.matches(themed).count(), 1, "the theme's chrome colours: {page}");
+    page.replace(themed, upstream)
+}
+
 /// Where each of `needles` is in `page`'s head, asserting each is there exactly once.
 fn positions(page: &str, needles: &[&str]) -> Vec<usize> {
     let head_end = page.find("</head>").expect("a head");
@@ -111,27 +128,27 @@ fn the_head_links_the_fork_stylesheets_then_the_theme_after_custom_styles() {
 
     // The app at boot: the tokens, hermes.css, then the theme, after Custom styles; nothing else
     // changes.
-    install_page_assets(Some(PageAssets { theme: true }));
+    install_page_assets(Some(PageAssets { theme: true, brand: false }));
     let themed = room_page();
     let themed_voice = voice_page();
     let added = format!("{}{}{}{}", link("hermes/tokens.css"), link("hermes/hermes.css"), link("hermes/theme.css"), script());
     let at = positions(&themed, &[UPSTREAM_STYLESHEET, CUSTOM_STYLES, &added]);
     assert!(at[0] < at[1] && at[1] < at[2], "upstream, Custom styles, then ours");
-    assert_eq!(themed.replace(&added, ""), upstream, "nothing else changes");
-    assert_eq!(themed_voice.replace(&added, ""), upstream_voice, "the voice page links nothing else");
+    assert_eq!(upstream_chrome(&themed.replace(&added, "")), upstream, "nothing else changes but the chrome's colours");
+    assert_eq!(upstream_chrome(&themed_voice.replace(&added, "")), upstream_voice, "the voice page links nothing else");
 
     // The switch's script runs before the first paint: in the head, before anything in the body.
     assert!(THEME_SCRIPT.contains("data-theme") && THEME_SCRIPT.contains("localStorage"));
     assert!(!THEME_SCRIPT.contains("</script"));
 
     // CAMPFIRE_THEME=off: the fork's stylesheets only (no theme, no switch script).
-    install_page_assets(Some(PageAssets { theme: false }));
+    install_page_assets(Some(PageAssets { theme: false, brand: false }));
     let unthemed = room_page();
     assert!(!unthemed.contains("hermes/theme.css") && !unthemed.contains("<script>(function"));
     assert_eq!(unthemed.replace(&format!("{}{}", link("hermes/tokens.css"), link("hermes/hermes.css")), ""), upstream);
 
     // The workspace on: its stylesheet between the fork's and the theme.
-    install_page_assets(Some(PageAssets { theme: true }));
+    install_page_assets(Some(PageAssets { theme: true, brand: false }));
     install_workspace_hooks(Some(Arc::new(Workspace)));
     let with_workspace = room_page();
     let added = format!(
@@ -143,7 +160,7 @@ fn the_head_links_the_fork_stylesheets_then_the_theme_after_custom_styles() {
         script()
     );
     positions(&with_workspace, &[CUSTOM_STYLES, &added]);
-    assert_eq!(with_workspace.replace(&added, ""), upstream);
+    assert_eq!(upstream_chrome(&with_workspace.replace(&added, "")), upstream);
 
     // The workspace's hooks without the page assets (not how the app boots): the tokens still come
     // first, since workspace.css reads them.
@@ -159,9 +176,9 @@ fn the_head_links_the_fork_stylesheets_then_the_theme_after_custom_styles() {
 
     // The theme's Light / Dark / System switch (the profile page's seam): only with the theme on.
     assert_eq!(render(color_scheme_switch), "");
-    install_page_assets(Some(PageAssets { theme: false }));
+    install_page_assets(Some(PageAssets { theme: false, brand: false }));
     assert_eq!(render(color_scheme_switch), "");
-    install_page_assets(Some(PageAssets { theme: true }));
+    install_page_assets(Some(PageAssets { theme: true, brand: false }));
     let switch = render(color_scheme_switch);
     for value in ["light", "dark", "system"] {
         assert_eq!(switch.matches(&format!(r#"<input type="radio" name="hermes-theme" value="{value}" />"#)).count(), 1, "{switch}");

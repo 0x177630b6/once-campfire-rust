@@ -26,12 +26,26 @@ pub async fn service_worker(c: &mut Ctx) -> Result {
 pub async fn manifest(c: &mut Ctx) -> Result {
     concerns::before_actions(c, before()).await?;
     c.respond_to(&[&format::JSON])?;
-    let account = c.app().db.read(Account::first).await.map_err(Error::internal)?;
+    let (account, has_logo) = c
+        .app()
+        .db
+        .read(|conn| {
+            let account = Account::first(conn)?;
+            // Hermes fork: whether the maskable icon is the uploaded logo or the product's default.
+            let has_logo = match &account {
+                Some(account) => presenters::attachments::attached_blob(conn, "Account", account.id, "logo")?.is_some(),
+                None => false,
+            };
+            Ok((account, has_logo))
+        })
+        .await
+        .map_err(Error::internal)?;
     let asset_path = |path: &str| campfire_assets::asset_path(path);
     let manifest = pwa::Manifest {
         account_name: account.as_ref().map(|account| account.name.clone()),
         logo_path_small: presenters::accounts::fresh_account_logo_path(account.as_ref(), Some("small")),
         logo_path: presenters::accounts::fresh_account_logo_path(account.as_ref(), None),
+        has_logo,
         base_url: c.url_for(""),
         asset_path: &asset_path,
     };

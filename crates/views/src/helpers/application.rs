@@ -9,9 +9,10 @@ use super::links::link_to;
 use super::tag::{attrs, builder_tag, content_tag, content_tag_text, legacy_tag};
 use crate::ViewContext;
 
-/// `page_title_tag`: `@page_title || "Campfire"`.
+/// `page_title_tag`: `@page_title || "Campfire"` (Hermes fork: the product's name once the app
+/// installed the branding, `crate::hermes::product_name`).
 pub fn page_title_tag(page_title: Option<&str>) -> Html {
-    content_tag_text("title", attrs(), page_title.unwrap_or("Campfire"))
+    content_tag_text("title", attrs(), page_title.unwrap_or(crate::hermes::product_name()))
 }
 
 /// `current_user_meta_tags`.

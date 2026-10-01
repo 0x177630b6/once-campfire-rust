@@ -15,7 +15,7 @@ pub struct Show<'a> {
 
 impl Page for Show<'_> {
     fn page_title(&self) -> Option<String> {
-        Some("Set up Campfire".into())
+        Some(format!("Set up {}", crate::hermes::product_name()))
     }
     fn body_class(&self) -> Option<&str> {
         Some("signup")

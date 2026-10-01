@@ -15,7 +15,19 @@ impl FirstRun {
     /// user callbacks (open room grants, user's open-room memberships) run after commit and
     /// the explicit grant follows them.
     pub fn create(tx: &mut Tx<'_>, name: &str, email_address: &str, password_digest: PasswordDigest) -> Result<User> {
-        Account::create(tx, Self::ACCOUNT_NAME)?;
+        Self::create_named(tx, Self::ACCOUNT_NAME, name, email_address, password_digest)
+    }
+
+    /// Hermes fork: [`FirstRun::create`] with the account named `account_name` (the product's name,
+    /// where upstream names it "Campfire").
+    pub fn create_named(
+        tx: &mut Tx<'_>,
+        account_name: &str,
+        name: &str,
+        email_address: &str,
+        password_digest: PasswordDigest,
+    ) -> Result<User> {
+        Account::create(tx, account_name)?;
         let administrator = User::create(
             tx,
             NewUser {

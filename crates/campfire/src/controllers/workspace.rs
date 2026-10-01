@@ -96,11 +96,11 @@ fn log_write(record: &WriteRecord) {
 }
 
 /// Installs the fork's page assets (its stylesheets and, unless `CAMPFIRE_THEME=off`, the theme:
-/// docs/hermes-theme.md); then loads the bots, installs the render hooks and starts polling Fizzy;
+/// docs/hermes-theme.md) and the product's branding (MeshDuty); then loads the bots, installs the render hooks and starts polling Fizzy;
 /// while the workspace is off, makes sure no hooks are installed (so pages render exactly as
 /// upstream's, plus the page assets' links in the head).
 pub async fn start(app: &App) {
-    campfire_views::hermes::install_page_assets(Some(campfire_views::hermes::PageAssets { theme: app.config.theme }));
+    campfire_views::hermes::install_page_assets(Some(campfire_views::hermes::PageAssets { theme: app.config.theme, brand: true }));
     let Some(workspace) = app.workspace.clone() else {
         campfire_views::hermes::install_workspace_hooks(None);
         return;

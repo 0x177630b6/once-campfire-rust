@@ -1,0 +1,64 @@
+{
+  "name": {{ self.json(self.name()) }},{% if let Some(short_name) = self.short_name() %}
+  "short_name": {{ self.json(short_name) }},{% endif %}
+  "icons": [
+    {
+      "src": {{ self.json(logo_path_small) }},
+      "type": "image/png",
+      "sizes": "192x192"
+    },
+    {
+      "src": {{ self.json(logo_path) }},
+      "type": "image/png",
+      "sizes": "512x512"
+    },
+    {
+      "src": {{ self.json(&self.maskable_path()) }},
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "maskable"
+    }
+  ],
+  "start_url": "/",
+  "display": "standalone",
+  "scope": "/",
+  "description": {{ self.json(self.description()) }},
+  "categories": ["social", "business", "productivity"],
+  "theme_color": {{ self.json(self.theme_color()) }},
+  "background_color": {{ self.json(self.theme_color()) }},
+  "shortcuts": [
+    {
+      "name": "New chat room",
+      "description": {{ self.json(&crate::hermes::rebrand("Open Campfire and start a new chat room")) }},
+      "url": "rooms/opens/new",
+      "icons": [{ "src": {{ self.json(self.image_url("add.svg").as_str()) }}, "sizes": "any" }]
+    },
+    {
+      "name": "My profile",
+      "description": {{ self.json(&crate::hermes::rebrand("Open Campfire and view your profile")) }},
+      "url": "/users/me/profile",
+      "icons": [{ "src": {{ self.json(self.image_url("person.svg").as_str()) }}, "sizes": "any" }]
+    }
+  ]{% if self.upstream_screenshots() %},
+  "screenshots": [
+    {
+      "src": {{ self.json(self.image_url("screenshots/android-chat.png").as_str()) }},
+      "sizes": "1080x2400",
+      "form_factor": "narrow",
+      "label": {{ self.json(&crate::hermes::rebrand("Campfire is an installable, self-hosted group chat system.")) }}
+    },
+    {
+      "src": {{ self.json(self.image_url("screenshots/android-sidebar.png").as_str()) }},
+      "sizes": "1080x2400",
+      "form_factor": "narrow",
+      "label": "Easily invite people. Make rooms. @mentions, DMs, and mobile support."
+    },
+    {
+      "src": {{ self.json(self.image_url("screenshots/android-dark-mode.png").as_str()) }},
+      "sizes": "1080x2400",
+      "form_factor": "narrow",
+      "label": "Full support for dark mode, customizable to your brand."
+    }
+  ]{% endif %}
+}
+

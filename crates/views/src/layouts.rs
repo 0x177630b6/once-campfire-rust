@@ -10,7 +10,7 @@ use crate::helpers as h;
 
 /// The instance variables a page template hands to the application layout.
 pub trait Page {
-    /// `@page_title`; the layout falls back to "Campfire".
+    /// `@page_title`; the layout falls back to "Campfire" (the product's name once branded).
     fn page_title(&self) -> Option<String> {
         None
     }

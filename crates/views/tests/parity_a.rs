@@ -409,6 +409,7 @@ fn pwa_manifest_and_service_worker() {
         account_name: str_of(&account_fact(name, "name")),
         logo_path_small: account_fact(name, "logo_path_small").as_str().unwrap().into(),
         logo_path: account_fact(name, "logo_path").as_str().unwrap().into(),
+        has_logo: false,
         base_url: facts()["base_url"].as_str().unwrap().into(),
         asset_path: &asset_path,
     }
@@ -427,6 +428,7 @@ fn pwa_manifest_is_valid_json_whatever_the_account_is_called() {
         account_name: Some(name.into()),
         logo_path_small: "/account/logo?size=small&v=1".into(),
         logo_path: "/account/logo?v=1".into(),
+        has_logo: false,
         base_url: "http://campfire.test".into(),
         asset_path: &asset_path,
     }

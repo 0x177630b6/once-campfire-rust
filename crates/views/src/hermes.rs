@@ -9,6 +9,8 @@
 //! - [`head_tags`]: the fork's stylesheets and the product theme, linked from the layout's head
 //!   (docs/hermes-theme.md); nothing until the app installs [`PageAssets`] at boot.
 //! - [`color_scheme_switch`]: the Light / Dark / System control on the person's profile, with the theme on.
+//! - [`product_name`] and the other branding seams: "MeshDuty" where upstream shows "Campfire", the
+//!   browser chrome's colours, the desktop corner logo (docs/hermes-theme.md, "Branding").
 //!
 //! Their styles are `hermes/hermes.css` (crates/assets/overrides), linked by [`head_tags`].
 
@@ -150,11 +152,15 @@ pub const THEME_STYLESHEET: &str = "hermes/theme.css";
 /// saves a choice made with [`color_scheme_switch`]'s radios and keeps them checked after Turbo visits.
 pub const THEME_SCRIPT: &str = include_str!("theme_script.js");
 
-/// Hermes fork: what [`head_tags`] links on every page, installed by the app at boot.
+/// Hermes fork: what [`head_tags`] links on every page, and the product's branding, installed by
+/// the app at boot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PageAssets {
     /// The product theme (`CAMPFIRE_THEME`, on by default).
     pub theme: bool,
+    /// The product's own name, MeshDuty, wherever upstream says "Campfire" ([`product_name`]). The
+    /// app always sets it; the views' tests leave it out to compare upstream's bytes.
+    pub brand: bool,
 }
 
 static PAGE_ASSETS: std::sync::RwLock<Option<PageAssets>> = std::sync::RwLock::new(None);
@@ -217,5 +223,87 @@ pub fn color_scheme_switch(_ctx: &ViewContext) -> String {
         option("light", "Light"),
         option("dark", "Dark"),
         option("system", "System"),
+    )
+}
+
+// --- Branding: the product's name, the browser chrome, the corner logo ----------------------------
+
+/// The product's name, shown wherever upstream shows "Campfire" (owner decision, 1 Oct 2026).
+pub const PRODUCT_NAME: &str = "MeshDuty";
+/// Upstream's name, which the views keep until the app installs the branding (goldens).
+pub const UPSTREAM_PRODUCT_NAME: &str = "Campfire";
+/// The assistant (internally Hermes) as people see it.
+pub const ASSISTANT_NAME: &str = "Sky";
+/// The browser chrome (`theme-color`) and the manifest's colours with the theme on: the theme's
+/// `--bg-surface`, light and dark (theme.css), so the status bar continues the page.
+pub const THEME_COLOR_LIGHT: &str = "#f4f0e8";
+pub const THEME_COLOR_DARK: &str = "#181e1b";
+/// The default icon's maskable variant (the mark inside Android's safe zone), for the manifest
+/// when no account logo is uploaded. The plain icons are upstream's logical paths
+/// (`logos/app-icon.png`, `logos/app-icon-192.png`), overridden in crates/assets/overrides.
+pub const MASKABLE_ICON: &str = "hermes/icon-maskable-512.png";
+/// The default icon for iOS's home screen: full bleed (iOS rounds the corners itself and would
+/// show the plain icon's transparent corners black).
+pub const APPLE_TOUCH_ICON: &str = "hermes/apple-touch-icon.png";
+
+pub(crate) fn branded() -> bool {
+    page_assets().is_some_and(|assets| assets.brand)
+}
+
+pub(crate) fn themed() -> bool {
+    page_assets().is_some_and(|assets| assets.theme)
+}
+
+/// "MeshDuty" once the app installed the branding, else upstream's "Campfire" (the views' goldens).
+pub fn product_name() -> &'static str {
+    if branded() { PRODUCT_NAME } else { UPSTREAM_PRODUCT_NAME }
+}
+
+/// `text` with upstream's name replaced by the product's: upstream's fixed sentences (the invite
+/// link's share text, the translation popups, an image's alt text).
+pub fn rebrand(text: &str) -> String {
+    if branded() { text.replace(UPSTREAM_PRODUCT_NAME, PRODUCT_NAME) } else { text.to_string() }
+}
+
+/// The footers' "Campfire™ version …" name: upstream's trademark, or the product's plain name.
+pub fn product_trademark() -> &'static str {
+    if branded() { PRODUCT_NAME } else { "Campfire&trade;" }
+}
+
+/// The layout's `theme-color` metas (`templates-hermes/layouts/application.html`): upstream's white
+/// and black, or with the theme the palette's surface, light and dark. With the theme,
+/// [`THEME_SCRIPT`] also sets both to the chosen mode's colour when the person picked Light or Dark.
+pub fn theme_color_tags() -> String {
+    let (light, dark) = if themed() { (THEME_COLOR_LIGHT, THEME_COLOR_DARK) } else { ("#ffffff", "#000000") };
+    format!(
+        concat!(
+            r#"<meta name="theme-color" content="{light}" media="(prefers-color-scheme: light)">"#,
+            "\n    ",
+            r#"<meta name="theme-color" content="{dark}" media="(prefers-color-scheme: dark)">"#
+        ),
+        light = light,
+        dark = dark,
+    )
+}
+
+/// The layout's `apple-touch-icon`: the account logo as upstream, or, once branded and while no
+/// logo is uploaded, [`APPLE_TOUCH_ICON`].
+pub fn apple_touch_icon_url(ctx: &ViewContext) -> String {
+    if branded() && !ctx.account.has_logo { ctx.asset(APPLE_TOUCH_ICON) } else { ctx.account.logo_url.clone() }
+}
+
+/// The desktop corner logo (`#app-logo`): upstream's Campfire flame linking to once.com, or the
+/// product's mark (the default app icon) linking home.
+pub fn app_logo(ctx: &ViewContext) -> String {
+    if !branded() {
+        return format!(
+            "<a href=\"https://once.com\" id=\"app-logo\" target=\"_blank\" aria-label=\"Once software from 37signals home page\">\n      {}\n    </a>",
+            h::image_tag(ctx, "campfire-icon.png", h::attrs().alt("Campfire logo").attr("width", 256).attr("height", 216)).0
+        );
+    }
+    format!(
+        "<a href=\"/\" id=\"app-logo\" aria-label=\"{PRODUCT_NAME} home\">\n      {}\n    </a>",
+        h::image_tag(ctx, "logos/app-icon-192.png", h::attrs().alt(format!("{PRODUCT_NAME} logo")).attr("width", 192).attr("height", 192))
+            .0
     )
 }

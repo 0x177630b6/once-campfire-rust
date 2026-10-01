@@ -15,7 +15,7 @@ pub fn translations_for(key: &str) -> Html {
             format!(
                 "{}{}",
                 content_tag_text("dt", attrs(), language).0,
-                content_tag_text("dd", attrs().class("margin-none"), translation).0
+                content_tag_text("dd", attrs().class("margin-none"), &crate::hermes::rebrand(translation)).0
             )
         })
         .collect();

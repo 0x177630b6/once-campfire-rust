@@ -283,7 +283,9 @@ async fn test_notification() {
     deliver_test_notification(&service.net, &vapid(), &subscription, 4, "http://example.com/users/me/push_subscriptions").await.unwrap();
 
     let message: serde_json::Value = serde_json::from_str(&receiver.open(&service.server.received()[0].body)).unwrap();
-    assert_eq!(message["title"], "Campfire Test");
+    // Hermes fork: "MeshDuty Test" once a test in this binary booted the app (the branding is
+    // process-wide), upstream's title before.
+    assert!(["Campfire Test", "MeshDuty Test"].contains(&message["title"].as_str().unwrap()), "{message}");
     assert!(uuid::Uuid::parse_str(message["options"]["body"].as_str().unwrap()).is_ok());
     assert_eq!(message["options"]["icon"], "/account/logo");
     assert_eq!(message["options"]["data"], serde_json::json!({ "path": "http://example.com/users/me/push_subscriptions", "badge": 4 }));
