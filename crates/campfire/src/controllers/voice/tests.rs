@@ -121,6 +121,9 @@ async fn token_mints_with_the_locked_setup() {
     assert_eq!(requests.len(), 1);
     let setup = &requests[0]["bidiGenerateContentSetup"];
     assert_eq!(requests[0]["uses"], 1);
+    assert!(requests[0].get("fieldMask").is_none(), "no field mask: the whole setup is locked");
+    let lifetime = expires_at.duration_since(requests[0]["newSessionExpireTime"].as_str().unwrap().parse::<jiff::Timestamp>().unwrap());
+    assert_eq!(lifetime, jiff::SignedDuration::from_mins(29), "the voice page keeps its 30-minute tokens");
     assert_eq!(setup["model"], "models/gemini-3.8-live");
     assert_eq!(setup["tools"][0]["functionDeclarations"][0]["name"], "submit_incident");
     let instruction = setup["systemInstruction"]["parts"][0]["text"].as_str().unwrap();
@@ -230,7 +233,15 @@ async fn ask_forwards_the_question_to_the_bridge_and_returns_the_answer() {
     let forwarded: Value = serde_json::from_slice(&received[0].body).unwrap();
     assert_eq!(
         forwarded,
-        json!({ "room_id": ALL_TALK, "user_name": "David", "room_name": "All Talk", "question": "Qui appeler pour une fuite ?" })
+        json!({
+            "room_id": ALL_TALK,
+            "user_id": DAVID,
+            "user_name": "David",
+            "room_name": "All Talk",
+            "channel": "voice",
+            "question": "Qui appeler pour une fuite ?"
+        }),
+        "the speaker's id: the bridge keeps one Hermes thread per room and person"
     );
 
     // Capped at MAX_QUESTION_CHARS characters.
@@ -265,7 +276,8 @@ async fn ask_timeouts_are_504_failures_502_and_questions_rate_limited() {
     let timed_out = david.write(json_post(&voice_ask_path(ALL_TALK), &question)).await;
     assert_eq!(timed_out.status, StatusCode::GATEWAY_TIMEOUT);
     assert_eq!(timed_out.json(), json!({ "error": "upstream_timeout", "message": "Sky didn’t answer in time." }));
-    assert_eq!(asker.questions.lock().unwrap()[0].room_id, ALL_TALK);
+    let asked = asker.questions.lock().unwrap()[0].clone();
+    assert_eq!((asked.room_id, asked.user_id, asked.channel), (Some(ALL_TALK), DAVID, Channel::Voice));
 
     install_asker(&app, || Err(AskError::Status(500)));
     let failed = david.write(json_post(&voice_ask_path(ALL_TALK), &question)).await;

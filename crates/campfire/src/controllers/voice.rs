@@ -27,7 +27,7 @@ use crate::controllers::presenters::Presenter;
 use crate::controllers::presenters::accounts::attachable_sgid;
 use crate::controllers::presenters::page::{self, db_error};
 use crate::integrations::gemini_live::{self, GeminiLive, Interview, MintError};
-use crate::integrations::hermes_ask::{self, AskError, Question};
+use crate::integrations::hermes_ask::{self, AskError, Channel, Question};
 
 /// The page's path, for the room nav's mic button.
 pub fn voice_path(room_id: i64) -> String {
@@ -160,7 +160,17 @@ pub async fn ask(c: &mut Ctx) -> Result {
     let asker = ask_feature(c)?.asker().ok_or(Error::NotFound)?;
     let length = question.chars().count();
     let started = std::time::Instant::now();
-    let result = asker.ask(Question { room_id: room.id, user_name: user.name.clone(), room_name, question }).await;
+    // The speaker's id: the bridge keys the Hermes thread per room and person
+    // (`voice:<room_id>:<user_id>`), so nobody sees what someone else asked (SF-3, voice part).
+    let question = Question {
+        room_id: Some(room.id),
+        user_id: user.id,
+        user_name: user.name.clone(),
+        room_name: Some(room_name),
+        channel: Channel::Voice,
+        question,
+    };
+    let result = asker.ask(question).await;
     let elapsed_ms = started.elapsed().as_millis() as u64;
     match result {
         Ok(answer) => {

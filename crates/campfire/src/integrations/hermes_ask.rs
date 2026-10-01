@@ -25,23 +25,56 @@ pub const MAX_QUESTION_CHARS: usize = 1000;
 /// The largest bridge reply read; an answer is a few sentences.
 const MAX_REPLY_SIZE: usize = 64 * 1024;
 
-/// What the bridge gets: who asks, from which room, and the question.
+/// Where a question comes from: the bridge keeps one Hermes thread per person and channel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Channel {
+    /// The live voice page's `ask_hermes` (bridge thread `voice:<room_id>:<user_id>`).
+    Voice,
+    /// Sky push-to-talk's `ask_sky` (phase 1b; bridge thread `sky:<user_id>`, no call id).
+    #[cfg_attr(not(test), allow(dead_code))]
+    Sky,
+}
+
+impl Channel {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Voice => "voice",
+            Self::Sky => "sky",
+        }
+    }
+}
+
+/// What the bridge gets: who asks (their Campfire user id, so each person has their own Hermes
+/// thread: SF-3's voice part), from which room (always for the voice page; optional for Sky), on
+/// which channel, and the question.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Question {
-    pub room_id: i64,
+    pub room_id: Option<i64>,
+    pub user_id: i64,
     pub user_name: String,
-    pub room_name: String,
+    pub room_name: Option<String>,
+    pub channel: Channel,
     pub question: String,
 }
 
 impl Question {
+    /// The bridge's `POST /ask` body: `{"room_id"?, "room_name"?, "user_id", "user_name",
+    /// "channel", "question"}`; the room's fields are left out (not `null`) without a room. A
+    /// bridge older than batch S1 ignores `user_id` and `channel` (one thread per room, as before).
     pub fn to_json(&self) -> Value {
-        json!({
-            "room_id": self.room_id,
+        let mut body = json!({
+            "user_id": self.user_id,
             "user_name": self.user_name,
-            "room_name": self.room_name,
+            "channel": self.channel.as_str(),
             "question": self.question,
-        })
+        });
+        if let Some(room_id) = self.room_id {
+            body["room_id"] = json!(room_id);
+        }
+        if let Some(room_name) = &self.room_name {
+            body["room_name"] = json!(room_name);
+        }
+        body
     }
 }
 
@@ -149,7 +182,14 @@ mod tests {
     const ASK_PATH: &str = "/ask/s3cret";
 
     fn question() -> Question {
-        Question { room_id: 7, user_name: "Zoé".into(), room_name: "Atelier".into(), question: "Qui appeler ?".into() }
+        Question {
+            room_id: Some(7),
+            user_id: 42,
+            user_name: "Zoé".into(),
+            room_name: Some("Atelier".into()),
+            channel: Channel::Voice,
+            question: "Qui appeler ?".into(),
+        }
     }
 
     fn asker_for(server: &FakeServer) -> HttpAsker {
@@ -167,7 +207,19 @@ mod tests {
         assert_eq!((received.method.as_str(), received.target.as_str()), ("POST", ASK_PATH));
         assert_eq!(received.header("Content-Type"), Some("application/json"));
         let body: Value = serde_json::from_slice(&received.body).unwrap();
-        assert_eq!(body, json!({ "room_id": 7, "user_name": "Zoé", "room_name": "Atelier", "question": "Qui appeler ?" }));
+        assert_eq!(
+            body,
+            json!({ "room_id": 7, "user_id": 42, "user_name": "Zoé", "room_name": "Atelier", "channel": "voice", "question": "Qui appeler ?" })
+        );
+    }
+
+    #[test]
+    fn a_sky_question_may_have_no_room() {
+        let sky = Question { room_id: None, room_name: None, channel: Channel::Sky, ..question() };
+        let body = sky.to_json();
+        assert_eq!(body, json!({ "user_id": 42, "user_name": "Zoé", "channel": "sky", "question": "Qui appeler ?" }));
+        assert!(body.get("room_id").is_none(), "left out, not null");
+        assert!(body["user_id"].is_i64(), "an integer, as the bridge checks");
     }
 
     #[tokio::test]
