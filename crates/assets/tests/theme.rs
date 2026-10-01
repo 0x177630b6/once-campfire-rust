@@ -108,7 +108,11 @@ fn upstream_triplets_are_the_oklch_of_the_palette() {
 fn the_fonts_are_self_hosted_digested_and_licensed() {
     let css = theme();
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("overrides/hermes");
-    let urls: Vec<&str> = css.match_indices("url(\"").map(|(at, _)| css[at + 5..].split('"').next().unwrap()).collect();
+    let urls: Vec<&str> = css
+        .match_indices("url(\"")
+        .map(|(at, _)| css[at + 5..].split('"').next().unwrap())
+        .filter(|url| !url.starts_with("data:"))
+        .collect();
     assert_eq!(urls.len(), 8, "{urls:?}");
     assert!(!css.contains("googleapis") && !css.contains("gstatic"));
     for url in &urls {
