@@ -101,7 +101,10 @@ async fn administrators_get_the_button_on_every_page_and_hidden_on_the_voice_pag
     let mut david = app.david();
     let room = david.get(&format!("/rooms/{ALL_TALK}")).await.text();
     assert_eq!(room.matches(r#"id="sky-ptt""#).count(), 1);
-    assert!(room.contains(r#"<div id="sky-ptt" class="sky-ptt" data-turbo-permanent data-sky-token-url="/sky/token""#), "{room}");
+    let logic = campfire_assets::asset_path("hermes/sky_ptt_logic.js");
+    let root =
+        format!(r#"<div id="sky-ptt" class="sky-ptt" data-turbo-permanent data-sky-logic-url="{logic}" data-sky-token-url="/sky/token""#);
+    assert!(room.contains(&root), "{room}");
     assert!(
         room.contains(&format!(r#"<template data-sky-page data-screen="room" data-room="{ALL_TALK}" data-card="" data-hidden="false">"#))
     );
@@ -143,10 +146,12 @@ async fn the_token_is_locked_short_and_limited() {
     assert!(instruction.contains(r#""David""#) && instruction.ends_with(r#""es-MX", "es""#), "{instruction}");
     assert!(!reply.text().contains("test-key"));
 
-    // One new token an hour here; a reconnection of it counts a quarter.
+    // One new token an hour here. A "reconnection" of a token minted seconds ago is a whole token
+    // (a goAway comes near the end of a connection; the quarter is tested in campfire_workspace).
     let limited = david.write(json_post(TOKEN_PATH, &json!({}))).await;
     assert_eq!((limited.status, limited.json()["error"].clone()), (StatusCode::TOO_MANY_REQUESTS, json!("rate_limited")));
-    assert_eq!(david.write(json_post(TOKEN_PATH, &json!({ "reconnect_of": token_id }))).await.status, StatusCode::OK);
+    let early = david.write(json_post(TOKEN_PATH, &json!({ "reconnect_of": token_id }))).await;
+    assert_eq!(early.status, StatusCode::TOO_MANY_REQUESTS);
 
     // Forgery protection, no GET.
     let cross_site = david.send(json_post(TOKEN_PATH, &json!({})).header("sec-fetch-site", "cross-site")).await;

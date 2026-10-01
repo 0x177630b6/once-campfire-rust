@@ -71,6 +71,9 @@ const PER_TURN: u64 = 1_500;
 /// How long a token's receipt is kept for its cost report: the token's life plus a margin (the
 /// page reports when the warm session closes, or on the next page).
 pub const RECEIPT_KEEP: SignedDuration = SignedDuration::from_mins(30);
+/// A reconnection only counts a quarter for a token at least this old: Gemini's `goAway` comes near
+/// the end of a connection's life, not seconds after it opened.
+pub const RECONNECT_MIN_AGE: SignedDuration = SignedDuration::from_mins(5);
 /// How long a checked press is kept for the calls that refer to it (batch 1b's tools).
 pub const PRESS_KEEP: SignedDuration = SignedDuration::from_mins(10);
 /// The most presses and receipts kept per person (older ones are dropped first).
@@ -84,7 +87,8 @@ pub enum Mode {
     /// Nobody (default): every `/sky/*` route 404, nothing rendered.
     #[default]
     Off,
-    /// The phase 0 spike: administrators only, on the bare test page.
+    /// The phase 0 spike: administrators only. The plan's bare test page was not built; in batch
+    /// 1a it behaves exactly as [`Mode::Admins`] (the button carries the measurements).
     Spike,
     /// Administrators only.
     Admins,
@@ -111,7 +115,7 @@ impl Mode {
 ///
 /// | Variable | Default | Meaning |
 /// |---|---|---|
-/// | `SKY_PTT` | `off` | `off` \| `spike` \| `admins` \| `users` \| `on` ([`Mode`]) |
+/// | `SKY_PTT` | `off` | `off` \| `spike` (as `admins`) \| `admins` \| `users` \| `on` ([`Mode`]) |
 /// | `SKY_PTT_USERS` | empty | Pilot user ids for `users`, comma-separated (`1,5,9`) |
 /// | `SKY_TOKENS_PER_HOUR` | `30` | Sky tokens per person per rolling hour (a reconnection counts ¼) |
 /// | `SKY_PRESSES_PER_DAY` | `150` | Presses per person per house day |
@@ -330,8 +334,11 @@ struct Receipt {
     /// The mint went through: the floor was charged.
     minted: bool,
     reported: bool,
-    /// A reconnection token was already granted on this one.
+    /// A reconnection token was granted on this one (reserved while it is being minted, so two
+    /// at once can't both count a quarter; given back if that mint fails).
     renewed: bool,
+    /// This token is itself a reconnection: it can't be renewed at a quarter again.
+    reconnect: bool,
 }
 
 /// A token Sky may mint (the limits passed): its receipt id, sent to the page with the token.
@@ -339,6 +346,8 @@ struct Receipt {
 pub struct Grant {
     pub id: String,
     pub kind: TokenKind,
+    /// The receipt a reconnection renews.
+    parent: Option<String>,
 }
 
 /// What the page reports for one token's session: seconds of audio each way and the turns.
@@ -391,8 +400,10 @@ struct Usage {
 
 impl Sky {
     /// Sky with the usage saved at `path` (`WorkspaceConfig::storage_file(USAGE_FILE)`). A missing
-    /// file starts empty; one that can't be read or decoded also starts empty, and the error is
-    /// returned for the caller to log (it is replaced on the next save).
+    /// file starts empty; one that can't be decoded is renamed `sky-usage.json.corrupt-<seconds>`
+    /// (for an administrator to look at: the month's spend was in it) and counting starts empty;
+    /// one that can't be read also starts empty (replaced on the next save). The error is returned
+    /// for the caller to log.
     pub fn open(config: SkyConfig, path: PathBuf) -> (Self, Option<String>) {
         let (file, error) = match load(&path) {
             Ok(file) => (file, None),
@@ -474,31 +485,47 @@ impl Sky {
         Ok(())
     }
 
-    /// A token for `user_id` (`POST /sky/token`): a reconnection of an open session when
-    /// `reconnect_of` names this person's own receipt, still within the token's life and not
-    /// renewed yet (it then counts a quarter); a new session otherwise. Refused by the budget or
-    /// the hourly limit, as [`Sky::allow_token`]. Then [`Sky::minted`] or [`Sky::mint_failed`].
+    /// A token for `user_id` (`POST /sky/token`): a reconnection of an open session (a quarter)
+    /// when `reconnect_of` names this person's own minted token, itself a new session's (not a
+    /// reconnection: they can't be chained), at least [`RECONNECT_MIN_AGE`] old, within its life
+    /// and not renewed yet; a new session (a whole token) otherwise. Refused by the budget or the
+    /// hourly limit, as [`Sky::allow_token`]. Then [`Sky::minted`] or [`Sky::mint_failed`].
     pub fn grant_token(&self, user_id: i64, reconnect_of: Option<&str>, now: Timestamp, zone: &TimeZone) -> Result<Grant, Refusal> {
-        let kind = {
+        let parent = {
             let mut receipts = self.receipts_now(now);
-            let parent = reconnect_of.and_then(|id| receipts.get_mut(id)).filter(|receipt| {
-                receipt.user_id == user_id && receipt.minted && !receipt.renewed && receipt.minted_at + TOKEN_LIFETIME > now
+            let parent = reconnect_of.and_then(|id| receipts.get_mut(id).map(|receipt| (id, receipt))).filter(|(_, receipt)| {
+                receipt.user_id == user_id
+                    && receipt.minted
+                    && !receipt.reconnect
+                    && !receipt.renewed
+                    && receipt.minted_at + RECONNECT_MIN_AGE <= now
+                    && receipt.minted_at + TOKEN_LIFETIME > now
             });
-            match parent {
-                Some(parent) => {
-                    parent.renewed = true;
-                    TokenKind::Reconnect
-                }
-                None => TokenKind::New,
-            }
+            parent.map(|(id, receipt)| {
+                receipt.renewed = true;
+                id.to_string()
+            })
         };
-        self.allow_token(user_id, kind, now, zone)?;
+        let kind = if parent.is_some() { TokenKind::Reconnect } else { TokenKind::New };
+        if let Err(refusal) = self.allow_token(user_id, kind, now, zone) {
+            self.give_back(parent.as_deref(), now);
+            return Err(refusal);
+        }
         let id = new_id("t", now);
-        let receipt = Receipt { user_id, minted_at: now, minted: false, reported: false, renewed: false };
+        let receipt =
+            Receipt { user_id, minted_at: now, minted: false, reported: false, renewed: false, reconnect: kind == TokenKind::Reconnect };
         let mut receipts = self.receipts_now(now);
         receipts.insert(id.clone(), receipt);
         trim_per_user(&mut receipts, user_id, |receipt| (receipt.user_id, receipt.minted_at));
-        Ok(Grant { id, kind })
+        Ok(Grant { id, kind, parent })
+    }
+
+    /// A renewal that didn't happen: the parent may be renewed again.
+    fn give_back(&self, parent: Option<&str>, now: Timestamp) {
+        let Some(id) = parent else { return };
+        if let Some(receipt) = self.receipts_now(now).get_mut(id) {
+            receipt.renewed = false;
+        }
     }
 
     /// The token of `grant` was minted: its floor ([`MINT_FLOOR_MICRO_USD`]) counts at once.
@@ -514,6 +541,7 @@ impl Sky {
 
     /// The token of `grant` could not be minted: no receipt, and an error counted.
     pub fn mint_failed(&self, grant: &Grant, now: Timestamp, zone: &TimeZone) {
+        self.give_back(grant.parent.as_deref(), now);
         let receipt = self.receipts_now(now).remove(&grant.id);
         if let Some(receipt) = receipt {
             self.record(receipt.user_id, Outcome::Error, now, zone);
@@ -940,7 +968,14 @@ fn quoted(value: &str) -> String {
 
 fn load(path: &Path) -> Result<UsageFile, String> {
     match std::fs::read(path) {
-        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|error| format!("{} is not valid: {error}", path.display())),
+        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|error| {
+            // Kept aside, not overwritten by the next save: the month's spend is in it.
+            let aside = path.with_file_name(format!("{USAGE_FILE}.corrupt-{}", Timestamp::now().as_second()));
+            match std::fs::rename(path, &aside) {
+                Ok(()) => format!("{} is not valid ({error}); kept as {}, counting starts again", path.display(), aside.display()),
+                Err(rename) => format!("{} is not valid ({error}), and could not be kept aside: {rename}", path.display()),
+            }
+        }),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(UsageFile::default()),
         Err(error) => Err(format!("could not read {}: {error}", path.display())),
     }
@@ -1117,10 +1152,18 @@ mod tests {
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("\"2026-10-01\"") && text.contains("\"version\": 1"), "{text}");
 
-        // A damaged file: start empty, say why, and replace it on the next save.
+        // A damaged file: start empty, say why, keep it aside, write a new one on the next save.
         std::fs::write(&path, "{not json").unwrap();
         let (damaged, error) = Sky::open(SkyConfig::default(), path.clone());
-        assert!(error.unwrap().contains("is not valid"));
+        let error = error.unwrap();
+        assert!(error.contains("is not valid") && error.contains(".corrupt-"), "{error}");
+        let aside: Vec<_> = std::fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with("sky-usage.json.corrupt-"))
+            .collect();
+        assert_eq!(aside.len(), 1, "{aside:?}");
+        assert_eq!(std::fs::read_to_string(path.with_file_name(&aside[0])).unwrap(), "{not json");
         assert_eq!(damaged.usage(), UsageFile::default());
         damaged.allow_press(3, now, &zone).unwrap();
         damaged.save().unwrap();
@@ -1203,20 +1246,6 @@ mod tests {
         let huge = SessionUsage { held_ms: u64::MAX, reply_ms: u64::MAX, turns: u32::MAX };
         assert_eq!(huge.estimate_micro_usd(), TOKEN_COST_CEILING_MICRO_USD);
 
-        // A reconnection of this person's open session counts a quarter, once per token.
-        let renewed = sky.grant_token(1, Some(&grant.id), t0, &zone).unwrap();
-        assert_eq!(renewed.kind, TokenKind::Reconnect);
-        sky.minted(&renewed, t0, &zone);
-        assert_eq!(sky.grant_token(1, Some(&renewed.id), t0, &zone).map(|g| g.kind), Ok(TokenKind::Reconnect));
-        // 4 + 1 + 1 units of 8 spent: renewing `grant` again would be a new token (4), past the limit.
-        assert_eq!(sky.grant_token(1, Some(&grant.id), t0, &zone), Err(Refusal::RateLimited), "already renewed: a new token");
-        assert_eq!(sky.grant_token(2, Some(&grant.id), t0, &zone).map(|g| g.kind), Ok(TokenKind::New), "not theirs");
-        let late = t0 + SignedDuration::from_mins(11);
-        let fresh = sky.grant_token(3, None, late, &zone).unwrap();
-        sky.minted(&fresh, late, &zone);
-        let too_late = late + SignedDuration::from_mins(11);
-        assert_eq!(sky.grant_token(3, Some(&fresh.id), too_late, &zone).map(|g| g.kind), Ok(TokenKind::New), "past the token's life");
-
         // A failed mint: no receipt, an error counted, nothing charged.
         let failed = sky.grant_token(4, None, t0, &zone).unwrap();
         sky.mint_failed(&failed, t0, &zone);
@@ -1270,5 +1299,48 @@ mod tests {
         sky.save().unwrap();
         let reopened = Sky::open(SkyConfig::default(), path).0;
         assert_eq!(reopened.usage().months["2026-10"].presses, 160, "no save lost another's counters");
+    }
+
+    #[test]
+    fn reconnections_count_a_quarter_once_and_cannot_be_chained() {
+        let (sky, _) = sky(SkyConfig { tokens_per_hour: 3, ..SkyConfig::default() });
+        let zone = paris();
+        let t0 = at("2026-10-01T12:00:00Z");
+        let units = |user: i64, at: Timestamp| sky.today(user, at, &zone);
+        let first = sky.grant_token(1, None, t0, &zone).unwrap();
+        sky.minted(&first, t0, &zone);
+
+        // Too young: a goAway comes near the end of a connection, so this is a whole token.
+        let early = sky.grant_token(1, Some(&first.id), t0 + SignedDuration::from_mins(1), &zone).unwrap();
+        assert_eq!(early.kind, TokenKind::New);
+        sky.minted(&early, t0, &zone);
+
+        let later = t0 + SignedDuration::from_mins(6);
+        let renewed = sky.grant_token(1, Some(&first.id), later, &zone).unwrap();
+        assert_eq!(renewed.kind, TokenKind::Reconnect);
+        sky.minted(&renewed, later, &zone);
+        let even_later = t0 + SignedDuration::from_mins(9);
+        // Not twice, and a reconnection can't be renewed at a quarter: 4 + 4 + 1 of 12 units spent,
+        // so a whole token is refused.
+        assert_eq!(sky.grant_token(1, Some(&first.id), even_later, &zone), Err(Refusal::RateLimited), "already renewed");
+        assert_eq!(sky.grant_token(1, Some(&renewed.id), even_later, &zone), Err(Refusal::RateLimited), "no chaining");
+        assert_eq!((units(1, later).tokens, units(1, later).reconnects), (2, 1));
+
+        // Someone else's token, or one past its life: a whole token.
+        let (other, _) = self::sky(SkyConfig::default());
+        let mine = other.grant_token(1, None, t0, &zone).unwrap();
+        other.minted(&mine, t0, &zone);
+        assert_eq!(other.grant_token(2, Some(&mine.id), later, &zone).map(|g| g.kind), Ok(TokenKind::New), "not theirs");
+        let too_late = t0 + SignedDuration::from_mins(11);
+        assert_eq!(other.grant_token(1, Some(&mine.id), too_late, &zone).map(|g| g.kind), Ok(TokenKind::New), "past its life");
+
+        // A failed mint gives the renewal back.
+        let (failing, _) = self::sky(SkyConfig::default());
+        let parent = failing.grant_token(1, None, t0, &zone).unwrap();
+        failing.minted(&parent, t0, &zone);
+        let attempt = failing.grant_token(1, Some(&parent.id), later, &zone).unwrap();
+        assert_eq!(attempt.kind, TokenKind::Reconnect);
+        failing.mint_failed(&attempt, later, &zone);
+        assert_eq!(failing.grant_token(1, Some(&parent.id), later, &zone).map(|g| g.kind), Ok(TokenKind::Reconnect), "given back");
     }
 }
