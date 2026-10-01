@@ -15,4 +15,4 @@ exists) and `crates/views/script/check-shadowed` (also upstream changes since th
 
 | Shadowed | Upstream source | Upstream blob at copy | Reason |
 |---|---|---|---|
-| `users/profiles/show.html` | `users/profiles/show.html` | `d3990332d54a660a9573a06cf1538cb8f1cce0d5` | The theme's Light / Dark / System switch (`crate::hermes::theme_switch`), before the memberships. One added seam call, nothing else changed; it renders nothing until the app installs the page assets with the theme on, so the goldens keep upstream's bytes |
+| `users/profiles/show.html` | `users/profiles/show.html` | `d3990332d54a660a9573a06cf1538cb8f1cce0d5` | The theme's Light / Dark / System switch (`crate::hermes::color_scheme_switch`), before the memberships. One added seam call, nothing else changed; it renders nothing until the app installs the page assets with the theme on, so the goldens keep upstream's bytes |

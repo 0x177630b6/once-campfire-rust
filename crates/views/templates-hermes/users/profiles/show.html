@@ -79,7 +79,7 @@
       {{ h::profile_form_submit_button(ctx) }}
     </div>
 {% endfilter %}
-  {{ crate::hermes::theme_switch(ctx)|safe }}{# Hermes fork: the theme's Light / Dark / System switch, nothing with the theme off (docs/hermes-theme.md) #}<div class="margin-block pad-inline pad-block fill-shade border-radius">
+  {{ crate::hermes::color_scheme_switch(ctx)|safe }}{# Hermes fork: the theme's Light / Dark / System switch, nothing with the theme off (docs/hermes-theme.md) #}<div class="margin-block pad-inline pad-block fill-shade border-radius">
     <menu class="flex flex-column gap margin-none pad">
       {% for membership in shared_memberships %}{% include "users/profiles/_membership.html" %}{% endfor %}
 {% if !direct_memberships.is_empty() && !shared_memberships.is_empty() %}        <hr class="separator full-width" style="--border-style: solid">

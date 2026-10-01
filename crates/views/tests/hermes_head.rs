@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use askama::Template;
 use campfire_views::hermes::{
-    PageAssets, THEME_SCRIPT, VoiceShow, VoiceView, WorkspaceHooks, install_page_assets, install_workspace_hooks, theme_switch,
+    PageAssets, THEME_SCRIPT, VoiceShow, VoiceView, WorkspaceHooks, color_scheme_switch, install_page_assets, install_workspace_hooks,
 };
 use campfire_views::messages::MessageView;
 use campfire_views::rooms::{self, ShowView};
@@ -158,16 +158,16 @@ fn the_head_links_the_fork_stylesheets_then_the_theme_after_custom_styles() {
     assert_eq!(voice_page(), upstream_voice);
 
     // The theme's Light / Dark / System switch (the profile page's seam): only with the theme on.
-    assert_eq!(render(theme_switch), "");
+    assert_eq!(render(color_scheme_switch), "");
     install_page_assets(Some(PageAssets { theme: false }));
-    assert_eq!(render(theme_switch), "");
+    assert_eq!(render(color_scheme_switch), "");
     install_page_assets(Some(PageAssets { theme: true }));
-    let switch = render(theme_switch);
+    let switch = render(color_scheme_switch);
     for value in ["light", "dark", "system"] {
         assert_eq!(switch.matches(&format!(r#"<input type="radio" name="hermes-theme" value="{value}" />"#)).count(), 1, "{switch}");
     }
     assert!(switch.starts_with(r#"<fieldset class="hermes-theme-switch">"#) && switch.contains("<legend"), "{switch}");
     install_page_assets(None);
     let profile = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/templates-hermes/users/profiles/show.html")).unwrap();
-    assert!(profile.contains("{{ crate::hermes::theme_switch(ctx)|safe }}"));
+    assert!(profile.contains("{{ crate::hermes::color_scheme_switch(ctx)|safe }}"));
 }

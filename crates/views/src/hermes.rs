@@ -8,7 +8,7 @@
 //!   docs/hermes-workspace.md) plugs into rendering; nothing is installed while it's off.
 //! - [`head_tags`]: the fork's stylesheets and the product theme, linked from the layout's head
 //!   (docs/hermes-theme.md); nothing until the app installs [`PageAssets`] at boot.
-//! - [`theme_switch`]: the Light / Dark / System control on the person's profile, with the theme on.
+//! - [`color_scheme_switch`]: the Light / Dark / System control on the person's profile, with the theme on.
 //!
 //! Their styles are `hermes/hermes.css` (crates/assets/overrides), linked by [`head_tags`].
 
@@ -147,7 +147,7 @@ pub const THEME_STYLESHEET: &str = "hermes/theme.css";
 /// The light/dark switch's script, inlined in the head after the theme so it runs before the first
 /// paint: it puts the person's choice (`localStorage["hermes-theme"]`, per browser) on `<html>` as
 /// `data-theme="light"` or `"dark"`; no attribute means "System" (`prefers-color-scheme`). It also
-/// saves a choice made with [`theme_switch`]'s radios and keeps them checked after Turbo visits.
+/// saves a choice made with [`color_scheme_switch`]'s radios and keeps them checked after Turbo visits.
 pub const THEME_SCRIPT: &str = include_str!("theme_script.js");
 
 /// Hermes fork: what [`head_tags`] links on every page, installed by the app at boot.
@@ -203,7 +203,7 @@ pub fn head_tags(ctx: &ViewContext) -> String {
 /// The theme's Light / Dark / System radios (profile page, `templates-hermes/users/profiles/show.html`),
 /// handled by [`THEME_SCRIPT`]. Nothing unless the theme is on: the switch only means something with
 /// `theme.css`, and the views' goldens (nothing installed) keep upstream's bytes.
-pub fn theme_switch(_ctx: &ViewContext) -> String {
+pub fn color_scheme_switch(_ctx: &ViewContext) -> String {
     if !page_assets().is_some_and(|assets| assets.theme) {
         return String::new();
     }
