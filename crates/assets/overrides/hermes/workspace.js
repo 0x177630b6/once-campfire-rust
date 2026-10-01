@@ -229,7 +229,7 @@ function editDraft(draft) {
   const editor = form?.querySelector("[data-composer-target='text']")
   if (!editor) return
 
-  const name = draft.dataset.wsBotName || "Hermes"
+  const name = draft.dataset.wsBotName || "Sky"
   const mention = `<span class="mention">${escapeHTML(name)}</span>`
   const content = `<p><action-text-attachment sgid="${escapeAttribute(draft.dataset.wsBotSgid || "")}" content-type="application/vnd.campfire.mention" content="${escapeAttribute(mention)}"></action-text-attachment> change: </p>`
 

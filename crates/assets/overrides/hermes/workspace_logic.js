@@ -45,7 +45,7 @@ export function draftBusyText(decision) {
 // filed."); a text draft says what was posted in the room.
 export function draftSentText(decision, body = {}, proposal = false) {
   if (proposal) return body?.message || (decision === "confirm" ? "Done." : "Dismissed.")
-  return decision === "confirm" ? "Sent “confirm” to Hermes." : "Sent “cancel” to Hermes."
+  return decision === "confirm" ? "Sent “confirm” to Sky." : "Sent “cancel” to Sky."
 }
 
 // A proposal's state from GET /workspace/hermes/proposals.json: null while it waits (the buttons

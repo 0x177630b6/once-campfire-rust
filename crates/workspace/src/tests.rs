@@ -835,7 +835,7 @@ async fn creating_a_card_from_a_message() {
     );
     let comment = writes.last().unwrap().2.as_ref().unwrap()["comment"]["body"].as_str().unwrap().to_string();
     assert_eq!(
-        comment, "<p>Karim: Created from Maya’s message in engineering (in Campfire at /rooms/3/@55).</p>",
+        comment, "<p>Karim: Created from Maya’s message in engineering (in MeshDuty at /rooms/3/@55).</p>",
         "no CAMPFIRE_PUBLIC_URL: the path, as text"
     );
     assert_eq!(records.lock().unwrap().len(), 4, "create, two tags, comment");
@@ -855,7 +855,7 @@ fn the_link_back_to_the_message_uses_the_configured_url() {
         source.comment(&configured),
         ("Created from Maya’s message in #ops:".to_string(), Some("https://chat.example/rooms/3/@55".to_string()))
     );
-    assert_eq!(source.comment(&config()), ("Created from Maya’s message in #ops (in Campfire at /rooms/3/@55).".to_string(), None));
+    assert_eq!(source.comment(&config()), ("Created from Maya’s message in #ops (in MeshDuty at /rooms/3/@55).".to_string(), None));
 }
 
 #[tokio::test]
@@ -1132,10 +1132,10 @@ async fn the_settings_page_and_the_bot_view() {
     assert!(html.contains(r#"name="autonomy-comment" value="alone" aria-label="Comment on a card: Alone" checked"#));
     assert!(html.contains(r#"name="autonomy-close" value="ask_first" aria-label="Close a card: Ask first" checked"#));
     assert!(html.contains("Delete or reassign a card") && html.contains("Never (fixed)"));
-    assert!(html.contains("Hermes keeps its own Fizzy account.") && html.contains("fz-hermes (from HERMES_FIZZY_TOKEN)"));
+    assert!(html.contains("Sky keeps its own Fizzy account.") && html.contains("fz-hermes (from HERMES_FIZZY_TOKEN)"));
     // Phase 2.5–2.7: visibility (everyone by default, with the honest note), alerts, the handover.
     assert!(html.contains(r#"name="visibility_mode" value="everyone" checked"#), "{html}");
-    assert!(html.contains("This only hides cards in Campfire") && html.contains("Anyone with a Fizzy login sees the whole board"));
+    assert!(html.contains("This only hides cards in MeshDuty") && html.contains("Anyone with a Fizzy login sees the whole board"));
     assert!(html.contains("Only administrators can create rooms"));
     assert!(html.contains(r#"<input type="checkbox" name="restricted">"#), "{html}");
     assert!(html.contains(r#"name="alerts_enabled" checked"#) && html.contains(r#"name="alert_severities" value="critical" checked"#));
@@ -1404,7 +1404,7 @@ async fn a_confirmed_proposal_runs_as_hermes_and_says_who_confirmed() {
     assert_eq!(tags(&fizzy, number), ["engineering", "incident", "sev-low"]);
     assert_eq!(fizzy.live_card(number)["steps"][0]["content"], "Call the guest");
     let comment = fizzy.writes().last().unwrap().2.clone().unwrap()["comment"]["body"].as_str().unwrap().to_string();
-    assert_eq!(comment, "<p>Created from Maya’s message in front-desk (in Campfire at /rooms/3/@55).</p>", "Hermes's own token: no prefix");
+    assert_eq!(comment, "<p>Created from Maya’s message in front-desk (in MeshDuty at /rooms/3/@55).</p>", "Hermes's own token: no prefix");
     assert!(write_tokens(&fizzy).iter().all(|token| token == HERMES_TOKEN));
     let entry = workspace.hermes_log().get(&format!("p-{id}-done")).unwrap();
     assert_eq!((entry.kind, entry.card, entry.by_name.as_deref()), (Kind::Created, Some(number), Some("Karim")));
@@ -1524,7 +1524,7 @@ async fn undo_takes_back_what_campfire_ran_for_hermes() {
     assert!(card["closed"].as_bool().unwrap(), "closed, not deleted");
     assert!(fizzy.writes().iter().all(|(method, ..)| method != "DELETE"));
     let comment = fizzy.comments.lock().unwrap()[&number].last().unwrap()["body"]["html"].as_str().unwrap().to_string();
-    assert!(comment.starts_with("<p>Manager: Undone from Campfire: Hermes created this card by mistake."), "{comment}");
+    assert!(comment.starts_with("<p>Manager: Undone from MeshDuty: Sky created this card by mistake."), "{comment}");
     assert!(workspace.snapshot().card(number).unwrap().closed);
 }
 
@@ -1542,7 +1542,7 @@ async fn undo_is_refused_when_it_isn_t_safe_or_allowed() {
     workspace.change_card(&fizzy, &karim(), 12, Change::Comment("On it".into())).await.unwrap();
     let touched = workspace.undo(&fizzy, &maya(), &id).await.unwrap_err();
     assert_eq!(touched.code(), "changed_since");
-    assert!(touched.message().contains("from Campfire"), "{touched}");
+    assert!(touched.message().contains("from MeshDuty"), "{touched}");
 
     // Someone changed the severity: the state isn't what Hermes left.
     let step = done(propose(&fizzy, &workspace, json!({"action": "step", "card": 12, "step_id": "s1", "completed": true})).await.unwrap());
@@ -1687,7 +1687,7 @@ async fn the_hermes_tab_lists_pending_proposals_and_filters_the_log() {
     let html = askama::Template::render(&page).unwrap();
     assert!(html.contains(&format!(r#"id="proposal-{id}""#)) && html.contains("Close #12 Lift B out of service"), "{html}");
     assert!(html.contains(r#"data-ws-draft-action="confirm">Confirm</button>"#));
-    assert!(html.contains(r#"<span class="ws-via ws-via--campfire">via Campfire</span>"#));
+    assert!(html.contains(r#"<span class="ws-via ws-via--campfire">via MeshDuty</span>"#));
     assert!(html.contains("Commented on #12 Lift B out of service: “Seen”"));
     assert!(html.contains("Asked in front-desk: Which room was it: 103 or 113?"));
     assert!(html.contains("data-ws-undo=\"/workspace/hermes/actions/p-"), "Maya may undo what was done for her");

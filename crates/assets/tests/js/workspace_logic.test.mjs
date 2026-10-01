@@ -40,8 +40,8 @@ test("replies: a redirect or a 401 is a signed-out session, errors carry the ser
 test("draft status lines", () => {
   assert.equal(logic.draftBusyText("confirm"), "Filing…")
   assert.equal(logic.draftBusyText("dismiss"), "Dismissing…")
-  assert.equal(logic.draftSentText("confirm"), "Sent “confirm” to Hermes.")
-  assert.equal(logic.draftSentText("dismiss"), "Sent “cancel” to Hermes.")
+  assert.equal(logic.draftSentText("confirm"), "Sent “confirm” to Sky.")
+  assert.equal(logic.draftSentText("dismiss"), "Sent “cancel” to Sky.")
   assert.equal(logic.draftSentText("confirm", { message: "Card #14 filed." }, true), "Card #14 filed.")
   assert.equal(logic.draftSentText("dismiss", {}, true), "Dismissed.")
 })

@@ -159,7 +159,7 @@ mod tests {
         let board = bar(Tab::Board, None).render().unwrap();
         assert!(board.contains(r#"href="/workspace/board" aria-current="page""#));
         let hermes = bar(Tab::Hermes, None).render().unwrap();
-        assert!(hermes.contains(r#"href="/workspace/hermes" aria-current="page""#) && hermes.contains(">Hermes<"));
+        assert!(hermes.contains(r#"href="/workspace/hermes" aria-current="page""#) && hermes.contains(">Sky<"));
         let logic = html.find("workspace_logic-1.js").unwrap();
         assert!(logic < html.find("workspace-1.js").unwrap(), "the logic module loads first");
         let with_panel = TabBar { panel: "<div class=\"ws-panel-root\"></div>".into(), ..bar(Tab::Chats, None) }.render().unwrap();

@@ -46,12 +46,12 @@
         </li>
       </template>
       <p><button type="button" class="btn ws-btn" data-ws-add-department>Add a department</button></p>
-      <p class="ws-muted">Renaming a tag here doesn't rename it in Fizzy (there's no API for that): cards keep their old tag. Severity tags (<code>sev-…</code>) and the ticket types Hermes tags cards with (request, task, fault, complaint, incident, safety, handover, inspection) can't be department tags.</p>
+      <p class="ws-muted">Renaming a tag here doesn't rename it in Fizzy (there's no API for that): cards keep their old tag. Severity tags (<code>sev-…</code>) and the ticket types Sky tags cards with (request, task, fault, complaint, incident, safety, handover, inspection) can't be department tags.</p>
     </section>
 
     <section class="ws-section" aria-labelledby="ws-settings-managers">
       <h2 id="ws-settings-managers" class="ws-section__title">Duty managers</h2>
-      <label class="ws-radio"><input type="radio" name="managers" value="admins"{% if managers_are_admins %} checked{% endif %}> Campfire administrators{% if !administrators.is_empty() %} ({{ administrators }}){% endif %}</label>
+      <label class="ws-radio"><input type="radio" name="managers" value="admins"{% if managers_are_admins %} checked{% endif %}> MeshDuty administrators{% if !administrators.is_empty() %} ({{ administrators }}){% endif %}</label>
       <label class="ws-radio"><input type="radio" name="managers" value="listed"{% if !managers_are_admins %} checked{% endif %}> These people:</label>
       <fieldset class="ws-dept__rooms" data-ws-managers>
         <legend class="for-screen-reader">Duty managers</legend>
@@ -62,16 +62,16 @@
     </section>
 
     <section class="ws-section" aria-labelledby="ws-settings-policy">
-      <h2 id="ws-settings-policy" class="ws-section__title">Who can confirm Hermes drafts and change cards</h2>
+      <h2 id="ws-settings-policy" class="ws-section__title">Who can confirm Sky’s drafts and change cards</h2>
       {%- for policy in policies %}
       <label class="ws-radio"><input type="radio" name="confirm_policy" value="{{ policy.value }}"{% if policy.selected %} checked{% endif %}> {{ policy.label }}</label>
       {%- endfor %}
-      <p class="ws-muted" data-ws-policy-scope>This applies to the workspace’s buttons (File and Dismiss, including those of Hermes’s proposals, the card sheet, the board, the room panel, new cards). People with a Fizzy account on the board can still change cards there.</p>
+      <p class="ws-muted" data-ws-policy-scope>This applies to the workspace’s buttons (File and Dismiss, including those of Sky’s proposals, the card sheet, the board, the room panel, new cards). People with a Fizzy account on the board can still change cards there.</p>
     </section>
 
     <section class="ws-section" aria-labelledby="ws-settings-autonomy">
-      <h2 id="ws-settings-autonomy" class="ws-section__title">What Hermes may do alone</h2>
-      <p class="ws-muted">When Hermes proposes an action through Campfire: <strong>Alone</strong> runs it at once (it’s in the Hermes tab and can be undone for 24 hours), <strong>Ask first</strong> posts it as a draft that someone confirms (per the rule above; 24 hours to answer), <strong>Never</strong> refuses it. A live voice report its reporter confirmed is filed at once unless creating cards is set to Never.</p>
+      <h2 id="ws-settings-autonomy" class="ws-section__title">What Sky may do alone</h2>
+      <p class="ws-muted">When Sky proposes an action through MeshDuty: <strong>Alone</strong> runs it at once (it’s in the Sky tab and can be undone for 24 hours), <strong>Ask first</strong> posts it as a draft that someone confirms (per the rule above; 24 hours to answer), <strong>Never</strong> refuses it. A live voice report its reporter confirmed is filed at once unless creating cards is set to Never.</p>
       <table class="ws-autonomy">
         <thead><tr><th scope="col">Action</th>{% for dial in autonomy[0].choices %}<th scope="col">{{ dial.label }}</th>{% endfor %}</tr></thead>
         <tbody>
@@ -82,9 +82,9 @@
           <tr><th scope="row">Delete or reassign a card</th><td></td><td></td><td>Never (fixed)</td></tr>
         </tbody>
       </table>
-      <p class="ws-muted" data-ws-autonomy-scope><strong>Hermes keeps its own Fizzy account.</strong> This dial applies to what Hermes proposes through Campfire, which is what its incident-report skill does by default. With its own account it can still change cards directly (its skill only does that when Campfire can’t be reached), and its replies to @Hermes mentions in Fizzy comments are posted with that account by its bridge: neither goes through this dial (not even “Comment”). Those show in the Hermes tab as “direct”, and only the simple ones can be undone.</p>
-      <label class="ws-field"><span class="ws-field__label">Hermes’s Fizzy user id</span><input class="input" type="text" name="hermes_fizzy_user_id" value="{{ hermes_user_id }}" maxlength="64" pattern="[A-Za-z0-9_\-]*" placeholder="{% if let Some(learned) = hermes_user_learned %}{{ learned }} (from HERMES_FIZZY_TOKEN){% else %}learned from HERMES_FIZZY_TOKEN{% endif %}"></label>
-      <p class="ws-muted">For the Hermes tab to show what Hermes does directly in Fizzy. Leave it empty when Campfire holds Hermes’s token.</p>
+      <p class="ws-muted" data-ws-autonomy-scope><strong>Sky keeps its own Fizzy account.</strong> This dial applies to what Sky proposes through MeshDuty, which is what its incident-report skill does by default. With its own account it can still change cards directly (its skill only does that when MeshDuty can’t be reached), and its replies to @Sky mentions in Fizzy comments are posted with that account by its bridge: neither goes through this dial (not even “Comment”). Those show in the Sky tab as “direct”, and only the simple ones can be undone.</p>
+      <label class="ws-field"><span class="ws-field__label">Sky’s Fizzy user id</span><input class="input" type="text" name="hermes_fizzy_user_id" value="{{ hermes_user_id }}" maxlength="64" pattern="[A-Za-z0-9_\-]*" placeholder="{% if let Some(learned) = hermes_user_learned %}{{ learned }} (from HERMES_FIZZY_TOKEN){% else %}learned from HERMES_FIZZY_TOKEN{% endif %}"></label>
+      <p class="ws-muted">For the Sky tab to show what Sky does directly in Fizzy. Leave it empty when MeshDuty holds Sky’s token.</p>
     </section>
 
     <section class="ws-section" aria-labelledby="ws-settings-visibility">
@@ -100,23 +100,23 @@
       {%- if restricts_nothing %}
       <p class="ws-notice" role="note">No department is marked restricted: everyone still sees every card that has a department.</p>
       {%- endif %}
-      <p class="ws-muted" data-ws-visibility-scope><strong>This only hides cards in Campfire</strong> (Home, the board, room panels, card chips and sheets, mentions, the Hermes tab, alerts, the handover). Anyone with a Fizzy login sees the whole board in Fizzy itself. A room’s members are whoever was added to it, so turn on Campfire’s “Only administrators can create rooms” (Account settings): otherwise anyone can create a room, and whoever an administrator links it to a department grants its members that department’s cards. A restricted department can’t be linked to an open room (one everyone is in): saving refuses it.</p>
+      <p class="ws-muted" data-ws-visibility-scope><strong>This only hides cards in MeshDuty</strong> (Home, the board, room panels, card chips and sheets, mentions, the Sky tab, alerts, the handover). Anyone with a Fizzy login sees the whole board in Fizzy itself. A room’s members are whoever was added to it, so turn on MeshDuty’s “Only administrators can create rooms” (Account settings): otherwise anyone can create a room, and whoever an administrator links it to a department grants its members that department’s cards. A restricted department can’t be linked to an open room (one everyone is in): saving refuses it.</p>
     </section>
 
     <section class="ws-section" aria-labelledby="ws-settings-alerts">
       <h2 id="ws-settings-alerts" class="ws-section__title">Alerts</h2>
-      <label class="ws-radio"><input type="checkbox" name="alerts_enabled"{% if alerts_enabled %} checked{% endif %}> Alert the duty managers (a direct message from Hermes, with a phone notification where Campfire’s push is set up)</label>
+      <label class="ws-radio"><input type="checkbox" name="alerts_enabled"{% if alerts_enabled %} checked{% endif %}> Alert the duty managers (a direct message from Sky, with a phone notification where MeshDuty’s push is set up)</label>
       <fieldset class="ws-dept__rooms"><legend class="ws-field__label">When a card is filed as, or raised to</legend>
         {%- for severity in alert_severities %}
         <label class="ws-tag-toggle"><input type="checkbox" name="alert_severities" value="{{ severity.value }}"{% if severity.selected %} checked{% endif %}><span>{{ severity.label }}</span></label>
         {%- endfor %}
       </fieldset>
-      <label class="ws-radio"><input type="checkbox" name="alert_department_rooms"{% if alert_department_rooms %} checked{% endif %}> Also a short notice in the rooms of the card’s departments (Hermes must be a member)</label>
+      <label class="ws-radio"><input type="checkbox" name="alert_department_rooms"{% if alert_department_rooms %} checked{% endif %}> Also a short notice in the rooms of the card’s departments (Sky must be a member)</label>
       <div class="ws-sheet__fields">
         <label class="ws-field"><span class="ws-field__label">Remind if still in New after (minutes, 0 = never)</span><input class="input" type="number" name="new_reminder_min" min="0" max="1440" value="{{ new_reminder_min }}"></label>
-        <label class="ws-field"><span class="ws-field__label">Remind about a waiting Hermes proposal after (minutes, 0 = never)</span><input class="input" type="number" name="draft_reminder_min" min="0" max="1440" value="{{ draft_reminder_min }}"></label>
+        <label class="ws-field"><span class="ws-field__label">Remind about a proposal from Sky still waiting after (minutes, 0 = never)</span><input class="input" type="number" name="draft_reminder_min" min="0" max="1440" value="{{ draft_reminder_min }}"></label>
       </div>
-      <p class="ws-muted">A waiting proposal first reminds the person it’s for, then, as long again later, the duty managers. Nothing is sent twice, and nothing already there when Campfire starts is alerted. Alerts follow “Who sees which cards”.</p>
+      <p class="ws-muted">A waiting proposal first reminds the person it’s for, then, as long again later, the duty managers. Nothing is sent twice, and nothing already there when MeshDuty starts is alerted. Alerts follow “Who sees which cards”.</p>
     </section>
 
     <section class="ws-section" aria-labelledby="ws-settings-handover">

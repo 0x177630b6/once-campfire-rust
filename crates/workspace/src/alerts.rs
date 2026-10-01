@@ -319,7 +319,7 @@ pub fn plan(events: &[Event], plan: &Plan<'_>) -> Vec<Delivery> {
                 let tags = proposal_tags(proposal, plan.snapshot);
                 let place = match (proposal.context.room_id, proposal.draft_message_id) {
                     (Some(room), Some(message)) => format!(r#"<a href="/rooms/{room}/@{message}">the draft</a>"#),
-                    _ => format!(r#"<a href="/workspace/hermes#proposal-{}">the Hermes tab</a>"#, escape(&proposal.id)),
+                    _ => format!(r#"<a href="/workspace/hermes#proposal-{}">the Sky tab</a>"#, escape(&proposal.id)),
                 };
                 if *to_managers {
                     let whom = match (&proposal.context.user_name, &proposal.context.room_name) {
@@ -329,7 +329,7 @@ pub fn plan(events: &[Event], plan: &Plan<'_>) -> Vec<Delivery> {
                         (None, None) => String::new(),
                     };
                     let line = format!(
-                        "<strong>Hermes has been waiting {minutes} min</strong> for a confirmation: {}{whom} · {place}",
+                        "<strong>Sky has been waiting {minutes} min</strong> for a confirmation: {}{whom} · {place}",
                         escape(&proposal.summary)
                     );
                     for person in &managers {
@@ -341,7 +341,7 @@ pub fn plan(events: &[Event], plan: &Plan<'_>) -> Vec<Delivery> {
                     let member = proposal.context.room_id.is_some_and(|room| plan.directory.is_member(person, room));
                     if member && sees(person, &tags) {
                         let line = format!(
-                            "<strong>Hermes is waiting for your confirmation</strong> ({minutes} min): {} · {place}",
+                            "<strong>Sky is waiting for your confirmation</strong> ({minutes} min): {} · {place}",
                             escape(&proposal.summary)
                         );
                         add(To::Person(person), line);

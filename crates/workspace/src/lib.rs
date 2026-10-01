@@ -305,7 +305,7 @@ impl Workspace {
             Ok(mut next) => {
                 // Hermes's own actions, for its log; a failure here doesn't fail the poll.
                 if let Err(error) = self.poll_hermes(&client, &next, now).await {
-                    next.lookup_errors.push(format!("Hermes's activities: {error}"));
+                    next.lookup_errors.push(format!("Sky's activities: {error}"));
                 }
                 Ok(next)
             }

@@ -208,7 +208,7 @@ impl Proposal {
             Status::Pending => "Waiting for a confirmation".into(),
             Status::Running => "Being filed…".into(),
             Status::Done if self.decided_by_name.is_some() => format!("Confirmed{by}"),
-            Status::Done => "Done (Hermes may do this alone)".into(),
+            Status::Done => "Done (Sky may do this alone)".into(),
             Status::Dismissed => format!("Dismissed{by}"),
             Status::Expired => "Dismissed (timed out)".into(),
             Status::Superseded => "Replaced by a newer proposal".into(),
@@ -296,7 +296,7 @@ pub fn parse(body: &Value, settings: &Settings, snapshot: &Snapshot) -> Result<(
         other => {
             return Err(ActionError::invalid(
                 "unknown_action",
-                format!("Campfire doesn't do “{other}” for Hermes (create, move, close, severity, departments, step, comment)."),
+                format!("MeshDuty doesn't do “{other}” for Sky (create, move, close, severity, departments, step, comment)."),
             ));
         }
     };
@@ -364,7 +364,7 @@ pub fn describe(request: &Request, settings: &Settings, snapshot: &Snapshot) -> 
 /// link's `title`, which Action Text keeps) is what gives it File / Dismiss buttons that decide this
 /// proposal ([`marker_in`]).
 pub fn draft_html(proposal: &Proposal, extra_note: Option<&str>) -> String {
-    let mut html = format!("<p><strong>Hermes proposes:</strong> {}</p>", escape(&proposal.summary));
+    let mut html = format!("<p><strong>Sky proposes:</strong> {}</p>", escape(&proposal.summary));
     for detail in &proposal.details {
         let lines: Vec<String> = detail.lines().map(escape).collect();
         html.push_str(&format!("<p>{}</p>", lines.join("<br>")));
@@ -599,7 +599,7 @@ mod tests {
             departments: None,
         };
         let html = draft_html(&proposal, None);
-        assert!(html.starts_with("<p><strong>Hermes proposes:</strong> Create a card: Leak &lt;b&gt;</p>"), "{html}");
+        assert!(html.starts_with("<p><strong>Sky proposes:</strong> Create a card: Leak &lt;b&gt;</p>"), "{html}");
         assert!(html.contains("<p>Water<br>under &lt;door&gt;</p>"));
         assert!(html.contains("for Maya"));
         assert_eq!(marker_in(&html).as_deref(), Some("abc123"));

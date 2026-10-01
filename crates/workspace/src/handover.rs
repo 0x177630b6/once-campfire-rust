@@ -79,7 +79,7 @@ impl HandoverSettings {
         self.time_zone = self.time_zone.trim().to_string();
         if shifts::time_zone(&self.time_zone).is_none() {
             return Err(SettingsError(format!(
-                "“{}” isn't a time zone Campfire knows (an IANA name such as Europe/Paris, or a POSIX TZ rule).",
+                "“{}” isn't a time zone MeshDuty knows (an IANA name such as Europe/Paris, or a POSIX TZ rule).",
                 self.time_zone
             )));
         }

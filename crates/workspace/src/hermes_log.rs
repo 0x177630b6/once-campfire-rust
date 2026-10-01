@@ -402,14 +402,14 @@ pub fn direct_entry(activity: &Activity, card: Option<&Card>, can_delete_comment
                     Kind::Commented,
                     text,
                     None,
-                    Some("Only Hermes's own token can delete its comment, and Campfire doesn't hold it (HERMES_FIZZY_TOKEN)."),
+                    Some("Only Sky's own token can delete its comment, and MeshDuty doesn't hold it (HERMES_FIZZY_TOKEN)."),
                 ),
             }
         }
-        "card_assigned" | "card_unassigned" => (Kind::Assigned, on("Changed the owners of"), None, Some("Campfire never reassigns cards.")),
-        "card_board_changed" => (Kind::Moved, on("Moved to this board"), None, Some("Moving between boards isn't undone from Campfire.")),
+        "card_assigned" | "card_unassigned" => (Kind::Assigned, on("Changed the owners of"), None, Some("MeshDuty never reassigns cards.")),
+        "card_board_changed" => (Kind::Moved, on("Moved to this board"), None, Some("Moving between boards isn't undone from MeshDuty.")),
         "card_auto_postponed" => return None,
-        other => (Kind::Other, format!("{} ({other})", on("Changed")), None, Some("Not an action Campfire can take back.")),
+        other => (Kind::Other, format!("{} ({other})", on("Changed")), None, Some("Not an action MeshDuty can take back.")),
     };
     let description = activity.eventable["description"].as_str().map(str::to_string).or_else(|| card.map(|card| card.description.clone()));
     let mut entry = Entry::new(format!("a-{}", activity.id), at, kind, Via::Direct, text);

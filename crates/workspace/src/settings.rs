@@ -577,7 +577,7 @@ fn read(path: &Path) -> Result<(Settings, Option<String>), SettingsError> {
     let mut warning = None;
     if crate::shifts::time_zone(&settings.handover.time_zone).is_none() {
         warning = Some(format!(
-            "the handover's time zone “{}” in {} isn't one Campfire knows: UTC is used until an administrator saves the settings",
+            "the handover's time zone “{}” in {} isn't one MeshDuty knows: UTC is used until an administrator saves the settings",
             settings.handover.time_zone.chars().take(64).collect::<String>(),
             path.display()
         ));

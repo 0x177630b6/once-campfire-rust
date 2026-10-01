@@ -24,10 +24,10 @@
     <ul class="ws-list">
       {%- for proposal in proposals %}
       <li class="ws-item ws-item--draft">
-        <p class="ws-item__meta"><span class="ws-ai">Hermes asks</span>{% if let Some(name) = proposal.for_label %} for {{ name }}{% endif %}{% if let Some(room) = proposal.room_name %} in {% if let Some(url) = proposal.message_url %}<a href="{{ url }}" data-turbo-frame="_top">{{ room }}</a>{% else %}{{ room }}{% endif %}{% endif %} · <time datetime="{{ proposal.created_at }}" data-local-time-target="datetime"></time></p>
+        <p class="ws-item__meta"><span class="ws-ai">Sky asks</span>{% if let Some(name) = proposal.for_label %} for {{ name }}{% endif %}{% if let Some(room) = proposal.room_name %} in {% if let Some(url) = proposal.message_url %}<a href="{{ url }}" data-turbo-frame="_top">{{ room }}</a>{% else %}{{ room }}{% endif %}{% endif %} · <time datetime="{{ proposal.created_at }}" data-local-time-target="datetime"></time></p>
         <p class="ws-item__title">{{ proposal.summary }}</p>
         {%- if proposal.buttons.is_empty() %}
-        <p class="ws-muted"><a class="ws-link" href="/workspace/hermes#proposal-{{ proposal.id }}">In the Hermes tab</a></p>
+        <p class="ws-muted"><a class="ws-link" href="/workspace/hermes#proposal-{{ proposal.id }}">In the Sky tab</a></p>
         {%- else %}
         {{ proposal.buttons|safe }}
         {%- endif %}
@@ -35,7 +35,7 @@
       {%- endfor %}
       {%- for draft in to_confirm %}
       <li class="ws-item ws-item--draft">
-        <p class="ws-item__meta"><span class="ws-ai">Hermes drafted a ticket</span> in <a href="{{ draft.url }}" data-turbo-frame="_top">{{ draft.room_name }}</a> · <time datetime="{{ draft.created_at }}" data-local-time-target="datetime"></time></p>
+        <p class="ws-item__meta"><span class="ws-ai">Sky drafted a ticket</span> in <a href="{{ draft.url }}" data-turbo-frame="_top">{{ draft.room_name }}</a> · <time datetime="{{ draft.created_at }}" data-local-time-target="datetime"></time></p>
         <p class="ws-item__title">{{ draft.title }}{% if let Some(severity) = draft.severity %} <span class="ws-sev ws-sev--{{ severity }}">{{ severity }}</span>{% endif %}</p>
         {{ draft.buttons|safe }}
       </li>

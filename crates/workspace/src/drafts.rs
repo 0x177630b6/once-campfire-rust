@@ -302,7 +302,7 @@ pub fn proposal_buttons(proposal: &crate::proposals::Proposal, bot: &Bot, place:
     format!(
         concat!(
             r#"<div class="ws-draft ws-draft--proposal" data-ws-proposal="{id}" data-ws-draft-url="{url}" data-ws-bot-name="{name}" data-ws-bot-sgid="{sgid}">"#,
-            r#"<span class="ws-draft__hint">Hermes proposal awaiting confirmation</span>"#,
+            r#"<span class="ws-draft__hint">Sky’s proposal awaiting confirmation</span>"#,
             r#"<span class="ws-draft__actions">"#,
             r#"<button type="button" class="btn btn--reversed ws-draft__btn" data-ws-draft-action="confirm">{file}</button>"#,
             "{edit}",

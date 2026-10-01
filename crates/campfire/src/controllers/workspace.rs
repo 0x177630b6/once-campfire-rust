@@ -872,7 +872,7 @@ pub async fn hermes(c: &mut Ctx) -> Result {
     let mut view = workspace.hermes_page(&viewer, &filter, &source).await.map_err(|error| Error::internal(anyhow::anyhow!(error)))?;
     view.fizzy_links = workspace.fizzy_links(&viewer, on_lan(c, &workspace));
     let content = view.render().map_err(Error::internal)?;
-    page(c, StatusCode::OK, "Hermes", content).await
+    page(c, StatusCode::OK, "Sky", content).await
 }
 
 /// `GET /workspace/hermes/proposals.json?ids=a,b`: `{"proposals": {"a": {"status", "label"}}}`, for
@@ -917,12 +917,12 @@ pub async fn decide(c: &mut Ctx) -> Result {
         if let Some(room) = room {
             let link = h::escape(&url);
             let what = if proposal.action == "create" {
-                "Filed Hermes’s proposal".to_string()
+                "Filed Sky’s proposal".to_string()
             } else if workspace.proposal_visible_to_room(&proposal, room_id) {
                 h::escape(&proposal.summary)
             } else {
                 // Phase 2.7: the summary names a card some of the room's members may not see.
-                "Confirmed Hermes’s proposal".to_string()
+                "Confirmed Sky’s proposal".to_string()
             };
             let body = format!(r#"<p>{what}: <a href="{link}">{link}</a></p>"#);
             let posted = async {
@@ -1010,9 +1010,9 @@ pub async fn bot_propose(c: &mut Ctx) -> Result {
             tracing::info!(proposal = %proposal.id, action = %proposal.action, duplicate, "Hermes proposal waiting for a confirmation");
             let mut reply = hermes::proposal_json(&proposal);
             reply["message"] = json!(if proposal.draft_message_id.is_some() {
-                "Waiting for a confirmation in Campfire (expires in 24 h): the draft is in the room."
+                "Waiting for a confirmation in MeshDuty (expires in 24 h): the draft is in the room."
             } else {
-                "Waiting for a confirmation in Campfire's Hermes tab (expires in 24 h)."
+                "Waiting for a confirmation in MeshDuty's Sky tab (expires in 24 h)."
             });
             reply["duplicate"] = json!(duplicate);
             c.json(StatusCode::ACCEPTED, &reply)
@@ -1049,7 +1049,7 @@ fn refuse_other_bots(c: &mut Ctx, workspace: &Workspace, bot: &User) -> Option<R
     Some(c.json(
         StatusCode::FORBIDDEN,
         &json!({ "status": "refused", "error": "not_hermes_bot",
-                 "message": "Campfire takes proposals from Hermes's bot only (HERMES_BOT is unset or names another bot)." }),
+                 "message": "MeshDuty takes proposals from Sky's bot only (HERMES_BOT is unset or names another bot)." }),
     ))
 }
 
