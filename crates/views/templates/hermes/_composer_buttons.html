@@ -27,9 +27,9 @@
                 </div>
 {%- endif %}
 {%- if let Some(voice_path) = show.voice_path %}
-                <a class="btn btn--borderless txt-small flex-item-no-shrink hermes-live-link" href="{{ voice_path }}" data-turbo-frame="_top" title="Voice ticket (request, fault, incident)">
+                <a class="btn btn--borderless txt-small flex-item-no-shrink hermes-live-link" href="{{ voice_path }}" data-turbo-frame="_top" title="Voice report (request, fault, incident)">
                   <img class="colorize--black" aria-hidden="true" src="{{ ctx.asset("headset.svg") }}" width="22" height="22" />
                   <span class="hermes-live-link__text" aria-hidden="true">Report</span>
-                  <span class="for-screen-reader">Voice ticket (request, fault, incident)</span>
+                  <span class="for-screen-reader">Voice report (request, fault, incident)</span>
                 </a>
 {%- endif %}

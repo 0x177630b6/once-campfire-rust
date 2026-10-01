@@ -74,7 +74,7 @@ export const MESSAGES = {
   micMissing: "No microphone found on this device.",
   micError: "Couldn't open the microphone.",
   micLost: "The microphone was cut off (an incoming call, another app or the screen locked).",
-  stepMic: "Microphone permission…",
+  stepMic: "Asking for microphone access…",
   stepConnect: "Connecting to the assistant…",
   reconnecting: "Reconnecting…",
   listening: "Your turn",

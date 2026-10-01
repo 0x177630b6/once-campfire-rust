@@ -286,9 +286,10 @@ The room composer gets up to two buttons after the attachment (paperclip) button
   sends any text typed in the composer. The button stays hidden where the browser can't record; on
   plain HTTP it shows and explains that HTTPS is needed.
 - **Live report** (headset, only when `ShowView::voice_path` is set, i.e. `GEMINI_API_KEY`): a
-  link to `/rooms/:id/voice` named "Voice ticket (request, fault, incident)", out of the composer's turbo frame
+  link to `/rooms/:id/voice` named "Voice report (request, fault, incident)", out of the composer's turbo frame
   (`data-turbo-frame="_top"`). On touch screens (no hover title) it shows a small "Report" label
-  under the icon, in the round buttons' footprint. It replaces the room nav's mic button of
+  under the icon, in the round buttons' footprint ("Voice report", the page's title, is too wide for
+  that 44 px button; the link's accessible name and hover title say "Voice report …"). It replaces the room nav's mic button of
   v0.1.1-hermes.2.
 
 On touch screens (`pointer: coarse`) every composer button is 2.75rem (44 px).

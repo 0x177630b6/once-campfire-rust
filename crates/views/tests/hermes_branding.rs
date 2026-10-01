@@ -62,6 +62,10 @@ fn manifest(account_name: Option<&str>, has_logo: bool) -> serde_json::Value {
     serde_json::from_str(&json).expect("valid JSON")
 }
 
+// Keep this ONE test: the branding is a process-wide switch (`PAGE_ASSETS`, installed and removed
+// below), and the test harness runs tests in parallel threads. Split into several tests, one would
+// install the branding while another expects upstream's bytes, and they'd fail at random. Add new
+// branded checks inside it, between `install_page_assets(Some(..))` and `install_page_assets(None)`.
 #[test]
 fn the_product_is_called_meshduty_once_branded() {
     // Not installed (the goldens): upstream's name.
