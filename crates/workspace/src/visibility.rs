@@ -209,6 +209,9 @@ pub struct Directory {
     pub memberships: HashMap<i64, BTreeSet<i64>>,
     /// Room id → its name, for notices.
     pub rooms: HashMap<i64, String>,
+    /// Active people's email addresses (lowercase), for owner pings: a Fizzy owner is matched to a
+    /// Campfire person by address ([`crate::owners`]).
+    pub emails: HashMap<i64, String>,
     /// Whether it has been read at least once.
     pub loaded: bool,
 }
@@ -221,7 +224,24 @@ impl Directory {
     }
 
     pub fn viewer(&self, id: i64) -> Option<Viewer> {
-        self.people.get(&id).map(|(name, administrator)| Viewer { id, name: name.clone(), email: None, administrator: *administrator })
+        self.people.get(&id).map(|(name, administrator)| Viewer {
+            id,
+            name: name.clone(),
+            email: self.emails.get(&id).cloned(),
+            administrator: *administrator,
+        })
+    }
+
+    /// The active person with this email address (any case). Two people sharing an address (which
+    /// Campfire allows) match nobody: an owner ping can't tell them apart.
+    pub fn person_by_email(&self, email: &str) -> Option<i64> {
+        let email = email.trim().to_lowercase();
+        if email.is_empty() {
+            return None;
+        }
+        let mut matches = self.emails.iter().filter(|(id, address)| **address == email && self.people.contains_key(id)).map(|(id, _)| *id);
+        let first = matches.next()?;
+        matches.next().is_none().then_some(first)
     }
 
     pub fn rooms_of(&self, user_id: i64) -> BTreeSet<i64> {
