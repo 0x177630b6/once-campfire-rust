@@ -168,6 +168,10 @@ them as `--ui-*` overrides if they should keep applying.
 | `--ui-ai-line` | `oklch(74% 0.184 70)` | `oklch(62.1% 0.146 70)` | AI dashed borders, "✦" marks, the AI count badge, via `--ws-ai-line` |
 | `--ui-ai-tint` | `oklch(96% 0.034 100)` | `oklch(27% 0.045 75)` | AI backgrounds (draft boxes, draft items, direct badge), via `--ws-ai-soft` |
 | `--ui-on-ai-line` | `oklch(26% 0.018 40)` | same | Text on the AI count badge |
+| `--ui-ptt` | `var(--ui-accent)` | follows | Sky push-to-talk: the floating disc at rest (Meshduty: `--voice-fill`, terracotta), its ring and live caret |
+| `--ui-ptt-active` | `color-mix(in oklch, var(--ui-ptt) 82%, black)` | follows | The disc while held |
+| `--ui-ptt-ai` | `oklch(50% 0.07 215)` | same | The disc while Sky thinks or speaks, Sky's dot and header in the replies (Meshduty: `--ai` darkened 20%, so the white icon keeps 3:1 in dark mode too) |
+| `--ui-on-ptt` | `oklch(100% 0 0)` | same | The icon on the disc, the "S" dot |
 | `--ui-radius-sm` | `0.25em` | – | Chip, card, card number |
 | `--ui-radius-md` | `0.5em` | – | Board columns, "⋯" menu, the sheet's report |
 | `--ui-radius-bubble` | `0.66em` (upstream's bubble) | – | Drafts, notices, list items, comments; voice bubbles |

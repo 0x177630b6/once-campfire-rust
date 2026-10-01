@@ -923,8 +923,9 @@ Every one is marked `Hermes fork:` in the file. Line numbers as of this commit.
 | `crates/campfire/src/app.rs:47-48` | `AppState::workspace: Option<Arc<Workspace>>` | Actions reach it with `c.app()` |
 | `crates/campfire/src/app.rs:112-113, 126` | `let workspace = controllers::workspace::build(&config);` and the field in the `AppState` literal | Built before `config` moves into the state |
 | `crates/campfire/src/app.rs:129-130` | `controllers::workspace::start(&app).await;` | Bots, hooks and the poll task need the booted app; while off it only makes sure no hooks are installed. It also installs the fork's page assets and theme (`install_page_assets`), workspace on or off |
-| `crates/campfire/src/controllers.rs:48-49` | `pub mod workspace;` | The adapter module |
-| `crates/campfire/src/controllers.rs:329-354` | Twenty rows in `HERMES_ROUTES` (three for phase 0, nine for phase 1, six for phase 2, two for phase 2.6) | The fork's own route table (the Rails table stays identical to `bin/rails routes`) |
+| `crates/campfire/src/controllers.rs:50-51` | `pub mod workspace;` | The adapter module |
+| `crates/campfire/src/controllers.rs:44-45` | `pub mod sky;` | Sky push-to-talk's routes (docs/hermes-gemini-live.md, "Sky push-to-talk") |
+| `crates/campfire/src/controllers.rs:331-360` | Twenty-three rows in `HERMES_ROUTES` (three for phase 0, nine for phase 1, six for phase 2, two for phase 2.6, three for Sky push-to-talk: `POST /sky/token`, `/sky/context`, `/sky/usage`) | The fork's own route table (the Rails table stays identical to `bin/rails routes`) |
 | `crates/views/src/messages/presentation.rs:19-20` | `MessageContent::Text { html } => crate::hermes::workspace_message_html(message, html)` | The one hook in message rendering: chips and draft buttons, at render time |
 | `crates/views/templates/layouts/application.html:26` | `{{ crate::hermes::head_tags(ctx)\|safe }}` after `custom_styles_tag`, same line | The head seam (docs/hermes-theme.md): `tokens.css`, `hermes.css`, `workspace.css` while the workspace is on, then `theme.css`, each with `data-turbo-track="reload"`, after Custom styles so the theme wins, and with the theme the light/dark switch's inline script. Renders `""` until the app installs its page assets (so the goldens keep upstream's bytes), and being on the same line adds no whitespace |
 | `crates/views/templates/layouts/application.html:55` | `{{ crate::hermes::workspace_overlay(ctx)\|safe }}` after the lightbox include, same line | The body seam: scripts and tab bar. Renders `""` while off, and being on the same line adds no whitespace |
@@ -939,7 +940,10 @@ Every one is marked `Hermes fork:` in the file. Line numbers as of this commit.
 | `crates/db/src/models/first_run.rs:18-30`, `crates/campfire/src/controllers/first_runs.rs:41-43` | `FirstRun::create_named`; the first run names the account after the product | Branding: a new install's account is "Meshduty" (upstream: "Campfire") |
 | `crates/views/tests/parity_a.rs:412, 431`, `crates/views/tests/support/facts.rs:86-92` | `has_logo: false` in the manifest goldens' view models; the fork's `hermes/` assets resolve in the goldens' context | Branding tests (`tests/hermes_branding.rs`) render upstream pages through the golden facts |
 
-Phases 1 and 2 added no seam: only rows in the existing `HERMES_ROUTES` block. Phase 2.7's per-viewer
+Phases 1 and 2 added no seam: only rows in the existing `HERMES_ROUTES` block. Sky push-to-talk
+(batch 1a) added the `pub mod sky;` line and three rows; its button rides the existing body seam
+(the tab bar partial, `TabBar::sky`), its config the existing `WorkspaceConfig::from_lookup`
+(`SKY_*`), and its usage store lives in the `Workspace` (`Workspace::sky`). Phase 2.7's per-viewer
 chips live behind the existing message hook (it marks links instead of rendering chips while
 visibility is restricted), and the alerts are posted from the adapter with the app's own functions. Everything else is
 in fork-owned files (phase 2's new environment variables, `HERMES_FIZZY_TOKEN` and `HERMES_BOT`, are

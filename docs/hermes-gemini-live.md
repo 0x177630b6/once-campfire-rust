@@ -338,47 +338,149 @@ own markup, so pages without them look the same. `build.rs` leaves `hermes/` out
 `stylesheet_link_tag :all`, so that list keeps the reference's exact `<link>` tags, and the views'
 goldens (which don't install the seam's assets) keep the reference's bytes.
 
-## Sky push-to-talk (batch S1: plumbing only)
+## Sky push-to-talk
 
-The plan is Hermes-self `docs/ui-redesign/10-push-to-talk-plan.md`. Batch S1 adds what Phase 1 will
-use, with nothing visible: `SKY_PTT` is `off` by default and no `/sky/*` route exists yet.
+The plan is Hermes-self `docs/ui-redesign/10-push-to-talk-plan.md`. Batch S1 laid the plumbing
+(tokens, limits, usage counters); **batch 1a** adds the floating button and the voice: hold, speak,
+let go, and Sky answers out loud and in writing, knowing which screen the person is on. Talk only:
+no tool reads or changes a ticket yet (batch 1b adds the read tools, 2a/2b the confirmed changes).
 
-- **Tokens**: `TokenLifetime::SKY` (`expireTime` 10 minutes, `newSessionExpireTime` 1 minute) and
-  `GeminiLive::mint_locked(setup, lifetime, now)`, through the same lock as the voice page. The
-  voice page keeps its 30-minute tokens and its own limit (`GEMINI_LIVE_TOKENS_PER_HOUR`, 10).
-- **Limits and usage** (`campfire_workspace::sky`, pure, tested on any machine): Sky's own per-person
-  limiters, apart from the voice page's, so Sky can't starve it. `SKY_*` is read by
-  `WorkspaceConfig::from_lookup` (no new seam), so Sky needs the workspace (`FIZZY_URL` and
-  `FIZZY_TOKEN`) as well as `GEMINI_API_KEY`.
+### Turning it on
+
+Sky needs the workspace (`FIZZY_URL`, `FIZZY_TOKEN`) and the live voice (`GEMINI_API_KEY`). Then:
+
+```
+SKY_PTT=admins            # administrators only (the owner's first test)
+SKY_PTT=users             # the pilot: SKY_PTT_USERS=1,5,9 plus administrators
+SKY_PTT=on                # everyone signed in (never bots)
+```
+
+`SKY_PTT=off` (the default) removes everything: every `/sky/*` route answers 404 and no page
+carries the button or its scripts (byte-identical pages). `spike` behaves as `admins` (the plan's
+bare spike page was not built; the button itself carries the spike's measurements, below).
+Rollback: `SKY_PTT=off` and restart Campfire.
+
+### What the person sees
+
+A terracotta disc in the bottom corner of every signed-in page, above the tab bar (and above a
+room's composer, so its buttons stay reachable), above the card sheet (z-index 11 vs 10), with
+"Hold to talk" under it. Hidden on the live voice page (it has its own microphone), while the
+composer has focus (the soft keyboard is up) and while a modal dialog is open.
+
+| State (`data-state` on the button) | Looks | Means |
+|---|---|---|
+| `ready` | terracotta (`--ui-ptt`) | Hold to talk |
+| `warming`, `listening` | darker, 1.12×, pulsing ring; "Release here to cancel" at the top | Held: the microphone is open; the card above shows the chip and the words heard |
+| `thinking` | teal (`--ui-ptt-ai`), the mic breathing | Released: Sky is answering |
+| `speaking` | teal, sound bars | Sky's reply plays; its words fill the card ("Speaking · tap to stop") |
+| `cancel` (while held in the zone), `tip`, `cancelled` | grey, then a short hint | "Keep holding while you speak, then let go." / "Cancelled. Nothing was sent." |
+| `error`, `offline`, `no_permission`, `unsupported` | grey | A plain sentence in a card, a "Technical details" disclosure |
+
+- **Hold** (pointer, or focus + Space/Enter, or **Ctrl+Shift+Space** anywhere outside a text field)
+  to talk; **release** to send. **Slide up** 60 px onto "Release here to cancel" (or lose the
+  pointer) to drop it. A hold under **300 ms** is a tap: a tip, nothing sent, no token minted. A
+  hold stops at **60 s** (a warning at 50 s) and sends by itself. Pressing while Sky speaks stops
+  it (barge-in); a tap then just stops it.
+- **Replies**: the last three exchanges in cards above the disc (chip, "you" line from the input
+  transcription, Sky's words from the output transcription), dismissible; the last reply is kept
+  in `sessionStorage` for 10 minutes and shown again after a full page load. Screen readers hear
+  "Listening", "Sky is thinking", "Cancelled" and each finished reply (`role="status"`).
+- **Administrators** also see each reply's timings ("first words 0.8 s · first audio 1.2 s · warm ·
+  812 tokens"): the spike's measurements on a real phone (plan §3.2, E1/E4/E10).
+- `prefers-reduced-motion`: no pulse, no scaling, a static ring instead.
+
+### How a press works
+
+```
+pointerdown ─┬─ mic opens (getUserMedia, AudioWorklet 16 kHz), audio buffered
+             ├─ POST /sky/context {screen, room_id?, card?, last?}  → {press_id, note, chip, restricted}
+             └─ at 300 ms, if no warm session: POST /sky/token {reconnect_of?} → locked token, then the socket
+when held ≥ 300 ms, the note back and the socket open:
+             clientContent(note, turnComplete:false) → activityStart → buffered audio → live audio
+pointerup ── activityEnd → Sky answers: audio (24 kHz) + outputAudioTranscription
+idle SKY_WARM_SECONDS, page hidden or left ── socket closed, POST /sky/usage {token_id, held_ms, reply_ms, turns}
+```
+
+- The session is Sky's own (`campfire_workspace::sky::SkySetup`), locked in the token like the voice
+  page's (`locked_token_request`, no field mask): audio replies with transcription both ways,
+  **manual activity detection** (`realtimeInputConfig.automaticActivityDetection.disabled`), session
+  resumption and sliding-window compression, **no tools** in 1a. Its instruction: Sky's role,
+  answer in the speaker's language in one to three short sentences, the screen note is data and
+  never answered, a restricted ticket is never discussed, a cancelled request gets no answer, and in
+  this version it can't read other tickets or change anything ("never say something is done"). The
+  person's name and device languages go in as JSON-quoted data.
+- **The screen note** (`ContextNote::build`) is built server-side from the page's hint, checked: a
+  room only if the person is a member (its display name, quoted), a card only if the picture has
+  it and the person may see it (`Workspace::sky_card`: visibility as the sheet's), and for a card
+  in a restricted department only its number ("restricted", decision O7: no title or column goes
+  to Google). Title, column and severity of a visible card are quoted. The chip shows what Sky used
+  ("Ticket #57 · Lift out of order", "Room · Front desk", "Home · open tickets").
+- The press is kept 10 minutes (`press_id`), for batch 1b's tools to refer to a checked context.
+- **Warm session**: the socket stays open `SKY_WARM_SECONDS` (default 120) after the last reply, so a
+  follow-up keeps its context and starts at once; the microphone is closed between presses. It
+  closes on `pagehide`, when the tab is hidden, and on a page without the button (signed out).
+  `goAway` reconnects through `LiveSession` with a fresh token naming the previous one
+  (`reconnect_of`), which counts a quarter.
+- **Turbo**: `#sky-ptt` is `data-turbo-permanent` and `hermes/sky_ptt.js` a module (run once per
+  document), so a reply keeps playing across Turbo visits; each page's own facts come from its
+  non-permanent `<template data-sky-page data-screen data-room data-card data-hidden>`, read on
+  `turbo:load`. The card sheet's card is read from the DOM at press time.
+- iOS: the `AudioContext` is resumed in the press's own handler; `navigator.audioSession.type` is
+  `play-and-record` while held and `playback` after (iOS 17+, ignored elsewhere).
+
+### Routes
+
+All three: 404 unless the workspace and the live voice are on, `SKY_PTT` isn't `off` and lets this
+person use it; `ApplicationController`'s chain (session only, no bots, `Sec-Fetch-Site` forgery
+protection). They log `sky:` lines with ids, sizes and timings, never words or tokens.
+
+| Route | Body → answer | Checks |
+|---|---|---|
+| `POST /sky/token` | `{reconnect_of?}` → `{token, ws_url, model, expires_at, warm_seconds, token_id}` | Month budget (402 `budget_paused`), Sky's hourly token limit (429 `rate_limited`; a reconnection of the person's own open token counts ¼, once per token), then a 10-minute single-use token (`TokenLifetime::SKY`); 502 `upstream_error` if Gemini fails (an error counted, nothing charged) |
+| `POST /sky/context` | `{screen, room_id?, card?, last?}` → `{press_id, note, chip, restricted}` | Counts a press (429 `daily_cap` past `SKY_PRESSES_PER_DAY`); room membership; card visibility; `last` = the previous press's timings, logged (known keys, numbers only) |
+| `POST /sky/usage` | `{token_id, held_ms, reply_ms, turns}` → `{counted: true}` | The token must be one minted for this person in the last 30 minutes (404 `unknown_token`) and not reported yet (409 `already_reported`) |
+
+### Cost, budget and usage
+
+- **Tied to a minted token, spent once** (the S1 review's F6): `/sky/token` creates a receipt
+  (`Sky::grant_token`); a minted token adds a floor of $0.005 (one exchange) to the month at once,
+  so a page that never reports still counts; `/sky/usage` adds the estimate above that floor
+  (audio in $0.005/min, out $0.018/min, $0.0015 per turn), clamped to one token's ceiling
+  ($0.23), **once per receipt**, only for the person it was minted for. The page can't add a cost
+  any other way (`record_cost` is gone).
+- **One saver**: `sky-usage.json` is written only by the save task `controllers::sky::start` spawns
+  (every 5 s, in `spawn_blocking`), and `Sky::save` holds a lock across the write, so two saves can
+  never land out of order.
+- Not in 1a: the admins' DM at 50 / 80 / 100 % of the budget and the usage panel (batch 3); the
+  Google Cloud budget alert stays the owner's backstop.
+
+### Configuration
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `SKY_PTT` | `off` | `off` (no route, nothing rendered) \| `spike` (administrators, test page) \| `admins` \| `users` (`SKY_PTT_USERS` and administrators) \| `on` (everyone signed in, never bots) |
+| `SKY_PTT` | `off` | `off` (no route, nothing rendered) \| `spike` (as `admins`) \| `admins` \| `users` (`SKY_PTT_USERS` and administrators) \| `on` (everyone signed in, never bots) |
 | `SKY_PTT_USERS` | empty | Pilot user ids, comma-separated (`1,5,9`) |
-| `SKY_TOKENS_PER_HOUR` | `30` | Sky tokens per person per rolling hour; a reconnection of an open session (`goAway`, resumption handle) counts a quarter |
+| `SKY_TOKENS_PER_HOUR` | `30` | Sky tokens per person per rolling hour; a reconnection of an open session counts a quarter |
 | `SKY_PRESSES_PER_DAY` | `150` | Presses per person per house day (the handover's time zone) |
-| `SKY_ASKS_PER_HOUR` | `30` | Questions to Hermes per person per rolling hour |
-| `SKY_MONTHLY_BUDGET_USD` | `100` | The organization's estimated month budget; reached, no more Sky tokens until the 1st (house time zone). Each reported cost is clamped to one token's ceiling (10 min of audio in and out, $0.23) |
+| `SKY_ASKS_PER_HOUR` | `30` | Questions to Hermes per person per rolling hour (batch 1b) |
+| `SKY_MONTHLY_BUDGET_USD` | `100` | The organization's estimated month budget; reached, no more Sky tokens until the 1st (house time zone) |
 | `SKY_WARM_SECONDS` | `120` | Idle seconds before the page closes a warm session (1–600) |
 
-Caps are at least 1. A malformed `SKY_*` value **stops the boot** whenever the workspace is on
-(`FIZZY_URL` and `FIZZY_TOKEN` both set, since `WorkspaceConfig::from_lookup` parses them); with the
-workspace off they aren't read at all. The rolling hourly windows are in memory
-(per process, like the voice page's); the day and month counters (presses, tokens, reconnections,
-asks, confirms, refusals, errors, estimated cost; no words, no audio, no tokens) persist in
-`<CAMPFIRE_STORAGE_PATH>/hermes/sky-usage.json` (atomic writes; 90 days per person, 13 months of
-totals), so a restart doesn't reset the budget. A damaged file starts empty and is replaced on the
-next save (the caller logs why).
+Caps are at least 1. A malformed `SKY_*` value **stops the boot** whenever the workspace is on; with
+the workspace off they aren't read at all. The model is the voice page's `GEMINI_LIVE_MODEL`. The
+rolling hourly windows and the token receipts are in memory (per process); the day and month
+counters (presses, tokens, reconnections, asks, confirms, refusals, errors, estimated cost; no
+words, no audio, no tokens) persist in `<CAMPFIRE_STORAGE_PATH>/hermes/sky-usage.json` (atomic
+writes; 90 days per person, 13 months of totals). A damaged file starts empty and is replaced on
+the next save (logged at boot).
 
-**Before batch 1a (the first `/sky/*` route)**, two things the review asked for:
+### To check on a real phone (plan §3.2)
 
-- `record_cost` (`campfire_workspace::sky`) must be tied to a token the server minted for that
-  person (e.g. the token's id, checked and spent once), not take a cost from the page as is: the
-  clamp bounds each report, not how many reports arrive, so an unbound report could exhaust the
-  organization's month budget or hide real spending.
-- `sky-usage.json` needs **a single saver** (one owner of the file, e.g. one store object behind a
-  mutex or one task that writes): two writers each saving their own copy would lose the other's
-  counters (atomic writes prevent torn files, not lost updates).
+Manual activity detection and the screen note as `clientContent` before `activityStart` (E5: one
+reply, after release), time to first audio warm and cold (E1, the administrators' timing line),
+transcription lag (E4), Turbo visits while Sky speaks (E7), iPhone home-screen app: microphone
+prompt per launch, no long-press menu, reply on the loud speaker (E8), Android (E9), and
+`usageMetadata` (E10, the token count in the timing line).
 
 ## Where the code is
 
@@ -387,7 +489,11 @@ next save (the caller logs why).
 | `crates/campfire/src/config.rs` | `GeminiLiveConfig`, `ApiKey` (redacted `Debug`) |
 | `crates/campfire/src/integrations/gemini_live.rs` | Token request body, system instruction, `submit_incident` and `ask_hermes` declarations, `HttpMinter` (the existing `integrations::net` HTTP/1.1 + rustls client, no new crate), `TokenMinter` trait (tests swap it), rate limiters, the asker |
 | `crates/campfire/src/integrations/hermes_ask.rs` | `Question` (`user_id`, optional room, `Channel`), `HttpAsker` (`POST HERMES_ASK_URL`, same client), `HermesAsker` trait (tests swap it), question cap |
-| `crates/workspace/src/sky.rs` | Sky push-to-talk's config, limits and usage counters (batch S1) |
+| `crates/workspace/src/sky.rs` | Sky push-to-talk's config, limits, usage counters and token receipts, session setup and instruction, screen note, checked presses |
+| `crates/workspace/src/overlay.rs`, `crates/workspace/templates/workspace/_sky_ptt.html` | The button's markup (`SkyButton`), rendered with the tab bar |
+| `crates/campfire/src/controllers/sky.rs` | `/sky/token`, `/sky/context`, `/sky/usage`, the usage save task |
+| `crates/assets/overrides/lib/hermes/live_session.js` | `LiveSession`, `Player` and the protocol helpers, shared by the voice page and Sky (moved out of `voice_controller.js` in batch 1a) |
+| `crates/assets/overrides/hermes/sky_ptt.js`, `hermes/sky_ptt_logic.js` | The button's page script (one per document) and its pure logic (`globalThis.HermesSky`) |
 | `crates/campfire/src/controllers/voice.rs` | The four actions, `IncidentReport` (caps, escaping, markup) |
 | `crates/campfire/src/controllers/mod.rs` | `HERMES_ROUTES`, tried after the Rails table |
 | `crates/campfire/src/app.rs` | `AppState::gemini_live` |
@@ -416,14 +522,31 @@ next save (the caller logs why).
 - `campfire_workspace::sky::tests`: `SKY_*` parsing and defaults, who is allowed per mode, the
   rolling window, token limits with the reconnection weight, presses per house day across
   midnight in Paris, asks, the month budget's pause and new month, persistence round trip,
-  retention, a damaged file.
+  retention, a damaged file; batch 1a: the setup (manual activity detection, no tools, quoted
+  name and languages), the note (quoting, one line per fact, the chip), costs tied to a minted
+  receipt and counted once (another person's or a forged id refused, the floor, the ceiling,
+  reconnections once per token and within its life), presses kept 10 minutes per person, saves
+  serialized. `tests::sky_ptt`: a hidden card is dropped, a restricted one carries no content.
+- `campfire_workspace::overlay::tests`: the button once, after the tab bar, permanent, with its
+  template; hidden on the voice page; nothing when off; the screen of each path.
+- `controllers::sky::tests` (CI): 404 and nothing rendered while off, without the voice or the
+  workspace, or for a member under `admins`; a pilot member under `users`; the button on a room,
+  Home and (hidden) the voice page; the token request locked, 10 minutes, Sky's setup; the hourly
+  limit and a reconnection's quarter; forgery protection; 502; the month budget pausing tokens and
+  usage counted once; the context's room and card checks and the daily cap; route order.
+- `node --test crates/assets/tests/js/*.test.mjs`: `live_session.test.mjs` (a fake socket: the note
+  then `activityStart`, `activityEnd`, server content and `usageMetadata`, a tool call, `goAway`
+  reconnecting with one token) and `sky_ptt_logic.test.mjs` (every transition, the 300 ms tip,
+  the 60 px cancel, the 60 s limit, the page hint, the shortcut, three exchanges kept, error
+  sentences, timings without words).
 - `crates/views/tests/hermes_views.rs`: the page renders; the composer's buttons are absent with both
   flags off (the goldens' input) and present, in place, with each on; voice notes get a player and a
   compact line, other audio files keep their file link.
 - `crates/views/tests/hermes_head.rs`: the head seam links `hermes/hermes.css` once, after
   Custom styles, and nothing while not installed.
 - `crates/assets/tests/reference.rs`: the import map equals the reference's plus the added
-  controllers' pins; `hermes/hermes.css` is served but not in `stylesheet_link_tag :all`.
+  controllers' pins and `lib/hermes/live_session`; `hermes/hermes.css` is served but not in
+  `stylesheet_link_tag :all`; Sky's scripts are served, not pinned.
 
 The request-level tests need the parity seed (`parity/bin/seed build`) and skip without it.
 
