@@ -1925,8 +1925,9 @@ dialog.ws-overlay {
   padding: var(--space-2) 0;
 }
 
-.hermes-theme-switch__legend {
+.hermes-theme-switch .hermes-theme-switch__legend {
   color: var(--overline-ink);
+  font-family: var(--font-sans);
   flex-basis: 100%;
   float: left;
   justify-content: center;
