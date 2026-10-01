@@ -95,9 +95,12 @@ fn log_write(record: &WriteRecord) {
     );
 }
 
-/// Loads the bots, installs the render hooks and starts polling Fizzy; while the workspace is off,
-/// makes sure no hooks are installed (so pages render exactly as upstream's).
+/// Installs the fork's page assets (its stylesheets and, unless `CAMPFIRE_THEME=off`, the theme:
+/// docs/hermes-theme.md); then loads the bots, installs the render hooks and starts polling Fizzy;
+/// while the workspace is off, makes sure no hooks are installed (so pages render exactly as
+/// upstream's, plus the page assets' links in the head).
 pub async fn start(app: &App) {
+    campfire_views::hermes::install_page_assets(Some(campfire_views::hermes::PageAssets { theme: app.config.theme }));
     let Some(workspace) = app.workspace.clone() else {
         campfire_views::hermes::install_workspace_hooks(None);
         return;
@@ -323,9 +326,18 @@ struct Hooks {
     voice: bool,
 }
 
+/// The pages that get the workspace: a signed-in person's (not a bot's).
+fn gets_the_overlay(ctx: &ViewContext) -> bool {
+    ctx.current_user.as_ref().is_some_and(|user| !user.bot)
+}
+
 impl WorkspaceHooks for Hooks {
+    fn stylesheets(&self, ctx: &ViewContext) -> Vec<String> {
+        if gets_the_overlay(ctx) { vec![ctx.asset(overlay::STYLESHEET)] } else { Vec::new() }
+    }
+
     fn layout_overlay(&self, ctx: &ViewContext) -> String {
-        if !ctx.current_user.as_ref().is_some_and(|user| !user.bot) {
+        if !gets_the_overlay(ctx) {
             return String::new();
         }
         let Some(user) = ctx.current_user.as_ref() else { return String::new() };
@@ -349,7 +361,6 @@ impl WorkspaceHooks for Hooks {
             chats_url: ctx.last_room_visited_id.map(campfire_routes::room).unwrap_or_else(|| "/".into()),
             report_url: report_room.filter(|_| self.voice).map(overlay::voice_path),
             cards_url: overlay::CARDS_PATH.into(),
-            stylesheet_url: ctx.asset("hermes/workspace.css"),
             script_url: ctx.asset("hermes/workspace.js"),
             logic_url: ctx.asset("hermes/workspace_logic.js"),
             home_icon: ctx.asset("hermes/home.svg"),

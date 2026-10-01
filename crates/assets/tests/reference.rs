@@ -155,22 +155,25 @@ fn javascript_importmap_tags_match_the_reference() {
 }
 
 #[test]
-fn the_hermes_stylesheet_is_served_but_not_linked_everywhere() {
-    // Hermes fork: only the Hermes templates link it, so `stylesheet_link_tag :all` (every other
-    // page) stays the reference's.
-    assert!(added().iter().any(|logical| logical == "hermes/hermes.css"));
+fn the_hermes_stylesheets_are_served_but_not_in_the_global_list() {
+    // Hermes fork: the layout's head seam (campfire_views::hermes::head_tags) links them after
+    // `stylesheet_link_tag :all`, which stays the reference's list.
+    for (logical, contains) in [("hermes/hermes.css", ".hermes-voice-note"), ("hermes/theme.css", "product theme")] {
+        assert!(added().iter().any(|added| added == logical), "{logical}");
+        let path = campfire_assets::stylesheet_path(logical);
+        let stem = logical.trim_end_matches(".css");
+        assert!(path.starts_with(&format!("/assets/{stem}-")) && path.ends_with(".css"), "{path}");
+        let served = get(&path);
+        assert!(String::from_utf8_lossy(&served.body).contains(contains), "{logical}");
+    }
     assert!(!campfire_assets::all_stylesheet_paths().iter().any(|logical| logical.starts_with("hermes/")));
-    let path = campfire_assets::stylesheet_path("hermes/hermes.css");
-    assert!(path.starts_with("/assets/hermes/hermes-") && path.ends_with(".css"), "{path}");
-    let served = get(&path);
-    assert!(String::from_utf8_lossy(&served.body).contains(".hermes-voice-note"));
 }
 
 #[test]
 fn the_workspace_assets_are_served_but_never_linked_or_pinned() {
-    // Hermes fork: the Duty Manager Workspace (docs/hermes-workspace.md). Only its tab bar partial
-    // links them, and only while the workspace is on, so every upstream page keeps the reference's
-    // stylesheet tags and import map.
+    // Hermes fork: the Duty Manager Workspace (docs/hermes-workspace.md). Only the layout's seams
+    // link them (the stylesheet in the head, the scripts with the tab bar), and only while the
+    // workspace is on, so `stylesheet_link_tag :all` and the import map stay the reference's.
     let added = added();
     for logical in ["hermes/workspace.css", "hermes/workspace.js", "hermes/workspace_logic.js", "hermes/home.svg", "hermes/board.svg"] {
         assert!(added.iter().any(|added| added == logical), "{logical}");

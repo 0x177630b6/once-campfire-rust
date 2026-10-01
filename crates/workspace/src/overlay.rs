@@ -1,8 +1,9 @@
-//! What the workspace adds to every page of a signed-in user, through the one hook at the end of
-//! the application layout: its stylesheet and script, the phone tab bar (Home · Chats · Report ·
+//! What the workspace adds to every page of a signed-in user, through the hook at the end of
+//! the application layout: its scripts, the phone tab bar (Home · Chats · Report ·
 //! Boards · Hermes; a small rail on wide screens), and, on the page of a room linked to a department, the
 //! room's cards panel ([`crate::pages::RoomPanel`]). Report opens the live voice report of the room
-//! on screen (or of the last room visited), only when that feature is on.
+//! on screen (or of the last room visited), only when that feature is on. Its stylesheet,
+//! [`STYLESHEET`], is linked from the layout's head instead (`campfire_views::hermes::head_tags`).
 
 use askama::Template;
 
@@ -22,7 +23,7 @@ pub enum Tab {
 #[template(path = "workspace/_tab_bar.html")]
 pub struct TabBar {
     pub active: Tab,
-    /// `false` keeps only the stylesheet and script (pages with their own bottom bar).
+    /// `false` keeps only the scripts (pages with their own bottom bar).
     pub show_bar: bool,
     pub home_url: String,
     pub board_url: String,
@@ -30,7 +31,6 @@ pub struct TabBar {
     pub chats_url: String,
     pub report_url: Option<String>,
     pub cards_url: String,
-    pub stylesheet_url: String,
     pub script_url: String,
     /// The script's pure logic (`hermes/workspace_logic.js`), loaded before it.
     pub logic_url: String,
@@ -45,6 +45,10 @@ pub struct TabBar {
     /// menus only then (the server checks again).
     pub can_create: bool,
 }
+
+/// The workspace's stylesheet (crates/assets/overrides), linked from the layout's head on the pages
+/// that get the tab bar.
+pub const STYLESHEET: &str = "hermes/workspace.css";
 
 /// `/workspace`
 pub const HOME_PATH: &str = "/workspace";
@@ -108,7 +112,6 @@ mod tests {
             chats_url: "/".into(),
             report_url: report_url.map(str::to_string),
             cards_url: CARDS_PATH.into(),
-            stylesheet_url: "/assets/hermes/workspace-1.css".into(),
             script_url: "/assets/hermes/workspace-1.js".into(),
             logic_url: "/assets/hermes/workspace_logic-1.js".into(),
             home_icon: "/assets/hermes/home-1.svg".into(),
@@ -147,7 +150,7 @@ mod tests {
     #[test]
     fn renders_the_bar() {
         let html = bar(Tab::Home, Some("/rooms/3/voice")).render().unwrap();
-        assert!(html.contains(r#"<link rel="stylesheet" href="/assets/hermes/workspace-1.css">"#));
+        assert!(!html.contains("<link") && !html.contains(".css"), "the stylesheet is linked from the head: {html}");
         assert!(html.contains(r#"<script type="module" src="/assets/hermes/workspace-1.js"></script>"#));
         assert!(html.contains(r#"data-ws-cards-url="/workspace/cards.json""#));
         assert!(html.contains(r#"href="/workspace" aria-current="page""#));

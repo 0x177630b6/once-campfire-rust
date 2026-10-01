@@ -1,11 +1,11 @@
 {#- Hermes fork: the live voice ticket — request, fault, complaint, incident (docs/hermes-gemini-live.md). A column: the intro,
     the transcript (the only part that scrolls), and a control bar at the bottom with the round
-    mic / hang-up button. Styles: hermes/hermes.css. -#}
+    mic / hang-up button. Styles: hermes/hermes.css, linked from the layout's head
+    (crate::hermes::head_tags). -#}
 {% extends "layouts/application.html" %}
 
 {%- block head %}
   <meta name="turbo-cache-control" content="no-cache">
-  <link rel="stylesheet" href="{{ ctx.asset("hermes/hermes.css") }}">
 {%- endblock %}
 
 {%- block nav %}

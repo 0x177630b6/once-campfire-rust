@@ -5,10 +5,8 @@
       bar (bin, timer and level, send): see hermes/hermes.css;
     - live report (`show.voice_path`, when GEMINI_API_KEY is set): the Gemini Live page, out of
       the composer's turbo frame.
-    Their styles, and the audio player's, are the one Hermes stylesheet, linked here. -#}
-{%- if show.voice_note || show.voice_path.is_some() %}
-                <link rel="stylesheet" href="{{ ctx.asset("hermes/hermes.css") }}">
-{%- endif %}
+    Their styles, and the audio player's, are hermes/hermes.css, linked from the layout's head
+    on every page (crate::hermes::head_tags). -#}
 {%- if show.voice_note %}
                 <div class="hermes-voice-note" data-controller="voice-note" data-voice-note-max-seconds-value="300" data-voice-note-warn-seconds-value="30" hidden>
                   <button class="btn btn--borderless txt-small hermes-voice-note__cancel" type="button" data-voice-note-target="cancel" data-action="voice-note#cancel" title="Annuler l’enregistrement" hidden>

@@ -23,7 +23,7 @@
     {{ h::builder_tag("link", h::attrs().attr("rel", "apple-touch-icon").attr("href", ctx.account.logo_url.as_str())) }}
 
     {{ h::raw(ctx.stylesheet_tags) }}
-    {{ h::custom_styles_tag(ctx) }}
+    {{ h::custom_styles_tag(ctx) }}{{ crate::hermes::head_tags(ctx)|safe }}{# Hermes fork: the fork's stylesheets and the product theme, after Custom styles; nothing until the app installs them (docs/hermes-theme.md) #}
 
     {{ h::raw(ctx.importmap_tags) }}
 

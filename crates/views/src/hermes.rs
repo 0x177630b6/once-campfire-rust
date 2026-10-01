@@ -6,8 +6,10 @@
 //! - [`audio_preview`]: an audio attachment (a voice note from the composer) as an inline player.
 //! - [`WorkspaceHooks`]: where the Duty Manager Workspace (`campfire_workspace`,
 //!   docs/hermes-workspace.md) plugs into rendering; nothing is installed while it's off.
+//! - [`head_tags`]: the fork's stylesheets and the product theme, linked from the layout's head
+//!   (docs/hermes-theme.md); nothing until the app installs [`PageAssets`] at boot.
 //!
-//! Their styles are `hermes/hermes.css` (crates/assets/overrides), which the Hermes templates link.
+//! Their styles are `hermes/hermes.css` (crates/assets/overrides), linked by [`head_tags`].
 
 use askama::Template;
 use serde::Deserialize;
@@ -96,11 +98,15 @@ pub(crate) fn audio_preview(ctx: &ViewContext, attachment: &AttachmentView) -> S
 // --- Duty Manager Workspace hooks -----------------------------------------------------------------
 
 /// Hermes fork: what the Duty Manager Workspace (docs/hermes-workspace.md, `campfire_workspace`)
-/// adds to rendering, through two seams in upstream files: the end of `layouts/application.html`
-/// ([`workspace_overlay`]) and `message_presentation`'s text case ([`workspace_message_html`]).
-/// Nothing is installed while the feature is off, and both render exactly what upstream does.
+/// adds to rendering, through three seams in upstream files: the head and the end of
+/// `layouts/application.html` ([`head_tags`], [`workspace_overlay`]) and `message_presentation`'s
+/// text case ([`workspace_message_html`]). Nothing is installed while the feature is off, and all
+/// three render exactly what upstream does.
 pub trait WorkspaceHooks: Send + Sync {
-    /// Appended to the application layout's body (stylesheet, script, tab bar).
+    /// The digested URLs of the stylesheets [`head_tags`] links for this page (the workspace's own,
+    /// on the pages that get the overlay), after the fork's and before the theme.
+    fn stylesheets(&self, ctx: &ViewContext) -> Vec<String>;
+    /// Appended to the application layout's body (scripts, tab bar).
     fn layout_overlay(&self, ctx: &ViewContext) -> String;
     /// A text message's body as shown (card chips, draft buttons), or `None` to keep it. It ends up
     /// in the shared message fragment cache, so it must not depend on who's looking.
@@ -126,4 +132,49 @@ pub fn workspace_overlay(ctx: &ViewContext) -> String {
 /// The message seam: the body as stored unless the workspace decorates it.
 pub(crate) fn workspace_message_html(message: &crate::messages::MessageView, html: &str) -> String {
     workspace_hooks().and_then(|hooks| hooks.message_html(message, html)).unwrap_or_else(|| html.to_string())
+}
+
+// --- Page assets: the fork's stylesheets and the product theme, in <head> ------------------------
+
+/// The voice features' styles (composer buttons, recording bar, audio player, live voice page).
+pub const HERMES_STYLESHEET: &str = "hermes/hermes.css";
+/// The product theme: loaded last, so it wins over upstream, Custom styles and the fork's CSS.
+pub const THEME_STYLESHEET: &str = "hermes/theme.css";
+
+/// Hermes fork: what [`head_tags`] links on every page, installed by the app at boot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PageAssets {
+    /// The product theme (`CAMPFIRE_THEME`, on by default).
+    pub theme: bool,
+}
+
+static PAGE_ASSETS: std::sync::RwLock<Option<PageAssets>> = std::sync::RwLock::new(None);
+
+/// Installs (or, with `None`, removes) the page assets. The app does it once at boot.
+pub fn install_page_assets(assets: Option<PageAssets>) {
+    *PAGE_ASSETS.write().unwrap_or_else(|e| e.into_inner()) = assets;
+}
+
+fn page_assets() -> Option<PageAssets> {
+    *PAGE_ASSETS.read().unwrap_or_else(|e| e.into_inner())
+}
+
+/// The head seam, right after Custom styles (`custom_styles_tag`): `hermes.css`,
+/// the workspace's stylesheet while it's on, then the theme, in that order, so that the theme wins
+/// every tie. Each `<link>` has `data-turbo-track="reload"`, like upstream's stylesheets: a page
+/// still open when a deploy changes one reloads at its next visit. The list is the same on every
+/// page of a signed-in person (a different list would make Turbo reload on each visit). Empty while
+/// nothing is installed, so the views' tests and goldens get upstream's bytes.
+pub fn head_tags(ctx: &ViewContext) -> String {
+    let assets = page_assets();
+    let workspace = workspace_hooks().map(|hooks| hooks.stylesheets(ctx)).unwrap_or_default();
+    let mut hrefs = Vec::new();
+    if assets.is_some() {
+        hrefs.push(ctx.asset(HERMES_STYLESHEET));
+    }
+    hrefs.extend(workspace);
+    if assets.is_some_and(|assets| assets.theme) {
+        hrefs.push(ctx.asset(THEME_STYLESHEET));
+    }
+    hrefs.iter().map(|href| format!("\n    <link rel=\"stylesheet\" href=\"{}\" data-turbo-track=\"reload\" />", escape(href))).collect()
 }

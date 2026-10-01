@@ -75,12 +75,12 @@ fn the_composer_records_voice_notes_next_to_the_attachment_button() {
         r#"data-voice-note-target="level" aria-hidden="true""#,
         r#"data-voice-note-target="warning" aria-live="polite""#,
         r#"data-voice-note-target="error" role="alert" hidden></p>"#,
-        r#"<link rel="stylesheet" href="/assets/hermes/hermes.css">"#,
     ] {
         assert!(form.contains(fragment), "{fragment}");
     }
     assert!(!form.contains("aria-pressed"), "the label changes instead");
     assert!(!form.contains("<style>"), "the styles are in hermes/hermes.css");
+    assert!(!form.contains("<link"), "hermes/hermes.css is linked from the head (tests/hermes_head.rs)");
     assert!(!html.contains("headset"), "no live button without Gemini");
     assert!(!html[..html.find("</nav>").unwrap()].contains("microphone"), "nothing in the nav");
 }
@@ -103,13 +103,12 @@ fn the_composer_links_to_the_live_report_only_when_gemini_is_on() {
     assert!(form[at..].contains(r#"<span class="for-screen-reader">Ticket vocal (demande, panne, incident)</span>"#));
     assert!(!form.contains("Gemini"));
     assert!(!html[..html.find("</nav>").unwrap()].contains("/voice"), "the nav's mic button is gone");
-    assert_eq!(form.matches("hermes/hermes.css").count(), 1, "the stylesheet once");
+    assert!(!html.contains("hermes/hermes.css"), "linked from the head, by the seam (tests/hermes_head.rs)");
 
     // Gemini on, voice notes off: the live link alone.
     let (_, html) = show_room(|show| show.voice_path = Some("/rooms/1/voice".into()));
     assert!(composer(&html).contains(r#"href="/rooms/1/voice" data-turbo-frame="_top""#));
     assert!(!html.contains(r#"data-controller="voice-note""#));
-    assert!(composer(&html).contains("hermes/hermes.css"));
 }
 
 fn audio_attachment(filename: &str) -> AttachmentView {
@@ -179,7 +178,7 @@ fn the_voice_page_carries_the_controller_values_escaped() {
     assert!(html.contains("<title>Rapport vocal · Atelier &quot;B&quot; &lt;1&gt;</title>"), "{html}");
     assert!(html.contains(r#"<h1 class="room__contents txt-medium overflow-ellipsis">Rapport vocal</h1>"#), "short title");
     assert!(html.contains("dans «&nbsp;Atelier &quot;B&quot; &lt;1&gt;&nbsp;» après votre accord"), "the room in the intro");
-    assert!(html.contains(r#"<link rel="stylesheet" href="/assets/hermes/hermes.css">"#));
+    assert!(!html.contains("hermes/hermes.css"), "linked from the head, by the seam (tests/hermes_head.rs)");
     for (name, value) in [
         ("token-url", "/rooms/7/voice/token"),
         ("report-url", "/rooms/7/voice/report"),

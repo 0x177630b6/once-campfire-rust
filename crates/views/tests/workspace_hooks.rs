@@ -1,4 +1,4 @@
-//! Hermes fork: the Duty Manager Workspace's two rendering seams (`campfire_views::hermes`). The
+//! Hermes fork: the Duty Manager Workspace's rendering seams (`campfire_views::hermes`). The
 //! hooks are process-wide, so this is a test binary of its own, with a single test: nothing else
 //! renders while they're installed.
 
@@ -16,6 +16,10 @@ use messages_support::golden;
 struct Marking;
 
 impl WorkspaceHooks for Marking {
+    fn stylesheets(&self, _ctx: &ViewContext) -> Vec<String> {
+        vec!["/assets/ws-test.css".into()]
+    }
+
     fn layout_overlay(&self, ctx: &ViewContext) -> String {
         format!("<nav class=\"ws-test\" data-user=\"{}\"></nav>", ctx.current_user_id().unwrap_or(0))
     }
@@ -40,6 +44,11 @@ fn the_hooks_render_nothing_until_installed_and_nothing_once_removed() {
     let decorated = room_page();
     install_workspace_hooks(None);
 
+    // The stylesheet goes once, in the head.
+    let link = "\n    <link rel=\"stylesheet\" href=\"/assets/ws-test.css\" data-turbo-track=\"reload\" />";
+    assert_eq!(decorated.matches(link).count(), 1);
+    assert!(decorated.find(link).unwrap() < decorated.find("</head>").unwrap());
+    let decorated = decorated.replace(link, "");
     // The overlay goes once, right after the lightbox, before the app logo.
     assert_eq!(decorated.matches("<nav class=\"ws-test\"").count(), 1);
     let overlay = decorated.find("<nav class=\"ws-test\"").unwrap();

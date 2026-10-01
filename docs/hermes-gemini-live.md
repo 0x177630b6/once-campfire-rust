@@ -298,10 +298,12 @@ line and a download button instead of the file-name row; the `voice-player` cont
 duration once the browser knows it (Chrome's MediaRecorder WebM has none until played). Other audio
 files keep the reference's file link (name, download, share) under the player.
 
-All these styles live in one stylesheet, `crates/assets/overrides/hermes/hermes.css`, linked by the
-Hermes templates themselves (the composer partial, the voice page). `build.rs` leaves `hermes/` out
-of `stylesheet_link_tag :all`, so every page without Hermes features keeps the reference's exact
-`<link>` tags and the parity tests hold.
+All these styles live in one stylesheet, `crates/assets/overrides/hermes/hermes.css`, linked on
+every page from the layout's head by the fork's head seam (`campfire_views::hermes::head_tags`,
+docs/hermes-theme.md), with `data-turbo-track="reload"`. Its rules only match the voice features'
+own markup, so pages without them look the same. `build.rs` leaves `hermes/` out of
+`stylesheet_link_tag :all`, so that list keeps the reference's exact `<link>` tags, and the views'
+goldens (which don't install the seam's assets) keep the reference's bytes.
 
 ## Where the code is
 
@@ -334,6 +336,8 @@ of `stylesheet_link_tag :all`, so every page without Hermes features keeps the r
 - `crates/views/tests/hermes_views.rs`: the page renders; the composer's buttons are absent with both
   flags off (the goldens' input) and present, in place, with each on; voice notes get a player and a
   compact line, other audio files keep their file link.
+- `crates/views/tests/hermes_head.rs`: the head seam links `hermes/hermes.css` once, after
+  Custom styles, and nothing while not installed.
 - `crates/assets/tests/reference.rs`: the import map equals the reference's plus the added
   controllers' pins; `hermes/hermes.css` is served but not in `stylesheet_link_tag :all`.
 

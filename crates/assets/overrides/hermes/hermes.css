@@ -1,15 +1,19 @@
 /* Hermes fork: the voice features' styles (docs/hermes-gemini-live.md).
  *
- * Linked only by the Hermes templates (hermes/_composer_buttons, hermes/voice), never by
- * `stylesheet_link_tag :all` (build.rs leaves `hermes/` out of it), so every page without them stays
- * byte-identical to the reference. Built on Campfire's own variables and components: .btn,
- * .btn--negative, the message bubble colour, the flash look, pulsing-outline, the submitting dots. */
+ * Linked on every page from the layout's head (crate::hermes::head_tags in crates/views, after
+ * Custom styles, before the workspace's stylesheet and the theme), never by
+ * `stylesheet_link_tag :all` (build.rs leaves `hermes/` out of it). Every rule targets the voice
+ * features' own markup, so pages without it look the same with or without this file. Built on
+ * Campfire's own variables and components: .btn, .btn--negative, the message bubble colour, the
+ * flash look, pulsing-outline, the submitting dots. */
 
 /* ---------------------------------------------------------------------------------------------
  * Composer: touch targets */
 
+/* The room's composer only (the one around form#composer), not the search page's look-alike bar.
+ * :where() keeps the selector's specificity at (0,2,0). */
 @media (pointer: coarse) {
-  .composer .btn {
+  .composer:has(:where(#composer)) .btn {
     --btn-size: 2.75rem;
   }
 }

@@ -126,7 +126,7 @@ pub async fn boot(config: Config) -> anyhow::Result<Booted> {
         workspace, // Hermes fork
     });
 
-    // Hermes fork: the workspace's render hooks and Fizzy poll (none while it's off).
+    // Hermes fork: the fork's page assets and theme; the workspace's render hooks and Fizzy poll (none while it's off).
     controllers::workspace::start(&app).await;
 
     let mut registry = jobs::Registry::with_core_jobs();

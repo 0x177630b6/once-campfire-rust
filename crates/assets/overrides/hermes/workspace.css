@@ -1,8 +1,8 @@
 /* Hermes fork: the Duty Manager Workspace (docs/hermes-workspace.md, crates/workspace).
  *
- * Linked by the workspace's tab bar partial, which the layout renders only while the workspace is
- * on (FIZZY_URL and FIZZY_TOKEN) and for signed-in users; build.rs leaves `hermes/` out of
- * `stylesheet_link_tag :all`, so upstream pages keep their exact <link> tags. Built on Campfire's
+ * Linked from the layout's head (crate::hermes::head_tags in crates/views, after hermes.css and
+ * before the theme) only while the workspace is on (FIZZY_URL and FIZZY_TOKEN) and for signed-in
+ * users; build.rs leaves `hermes/` out of `stylesheet_link_tag :all`. Built on Campfire's
  * variables (colors.css, which switch for dark mode by themselves) plus the few Fizzy-side tokens
  * below, from the approved mockup: severity, Hermes-pending amber, column tones. */
 

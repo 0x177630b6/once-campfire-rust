@@ -124,7 +124,9 @@ Fizzy JSON API ◀── poll task ──▶ Snapshot (memory) ──▶ Workspa
   The page says "Sent" only on a `201` that wasn't redirected; an expired session (the chain
   redirects to the sign-in page, which `fetch` follows) says to sign in again.
 - **Tab bar** (`campfire_workspace::overlay`): rendered by the layout seam for signed-in, non-bot
-  users; it links `hermes/workspace.css` and the `hermes/workspace.js` module itself. Report is
+  users; it loads the `hermes/workspace.js` module itself, while `hermes/workspace.css` is linked
+  for the same users from the layout's head (`WorkspaceHooks::stylesheets`, through the head seam
+  of docs/hermes-theme.md, before the theme). Report is
   `/rooms/:id/voice` for the room on screen, else the last room visited, and only when the live
   voice report is on (`GEMINI_API_KEY`). Hidden on the voice page (it has its own bar) and while
   typing in the composer (soft keyboard).
@@ -790,8 +792,8 @@ redirects to the sign-in page (fetch follows it): the script says to sign in aga
 | `…/src/pages.rs`, `templates/workspace/{board,sheet,_panel,_list_card,new_card,settings}.html` | Board, card sheet, room panel, new-card form, settings page, the bot's settings JSON |
 | `…/src/lib.rs` | `Workspace` (state shared by poll, hooks and routes: snapshot, settings, token source, audit sink), `ChatSource` trait (the app implements it) |
 | `crates/campfire/src/controllers/workspace.rs` | **The adapter**: boot (`build`, `start`: bots, hooks, poll task, the write log), the directory and the alerts' delivery from the poll task (phase 2.5/2.7), the actions, `ChatSource` over campfire_db (one SQL query: the user's rooms' messages of the last day), a draft's reporter (one SQL query), rooms and people for the settings, `HttpClient` over `integrations::net` (GET, POST, PUT, DELETE) |
-| `crates/views/src/hermes.rs` (end) | `WorkspaceHooks`, `install_workspace_hooks`, the two seam functions (fork-owned file) |
-| `crates/assets/overrides/hermes/workspace.css`, `workspace.js`, `workspace_logic.js`, `home.svg`, `board.svg`; `crates/assets/tests/js/workspace_logic.test.mjs` | Frontend (the Hermes tab's icon is upstream's `bot.svg`). Under `hermes/`, which `build.rs` leaves out of `stylesheet_link_tag :all`; the script isn't pinned in the import map (only `pin_all_from` directories are), so upstream pages keep their exact asset tags |
+| `crates/views/src/hermes.rs` (end) | `WorkspaceHooks`, `install_workspace_hooks`, the seam functions; `PageAssets`, `install_page_assets`, `head_tags` (fork-owned file) |
+| `crates/assets/overrides/hermes/workspace.css`, `workspace.js`, `workspace_logic.js`, `home.svg`, `board.svg`; `crates/assets/tests/js/workspace_logic.test.mjs` | Frontend (the Hermes tab's icon is upstream's `bot.svg`). Under `hermes/`, which `build.rs` leaves out of `stylesheet_link_tag :all`; the script isn't pinned in the import map (only `pin_all_from` directories are), so upstream's asset tags stay the reference's. The stylesheet is linked from the head seam (docs/hermes-theme.md) |
 
 ## Seams in upstream-owned files
 
@@ -805,11 +807,13 @@ Every one is marked `Hermes fork:` in the file. Line numbers as of this commit.
 | `crates/campfire/src/config.rs:213-214` | `workspace: WorkspaceConfig::from_lookup(&get)?` | Parsing lives in the workspace crate |
 | `crates/campfire/src/app.rs:47-48` | `AppState::workspace: Option<Arc<Workspace>>` | Actions reach it with `c.app()` |
 | `crates/campfire/src/app.rs:112-113, 126` | `let workspace = controllers::workspace::build(&config);` and the field in the `AppState` literal | Built before `config` moves into the state |
-| `crates/campfire/src/app.rs:129-130` | `controllers::workspace::start(&app).await;` | Bots, hooks and the poll task need the booted app; while off it only makes sure no hooks are installed |
+| `crates/campfire/src/app.rs:129-130` | `controllers::workspace::start(&app).await;` | Bots, hooks and the poll task need the booted app; while off it only makes sure no hooks are installed. It also installs the fork's page assets and theme (`install_page_assets`), workspace on or off |
 | `crates/campfire/src/controllers.rs:48-49` | `pub mod workspace;` | The adapter module |
 | `crates/campfire/src/controllers.rs:329-354` | Twenty rows in `HERMES_ROUTES` (three for phase 0, nine for phase 1, six for phase 2, two for phase 2.6) | The fork's own route table (the Rails table stays identical to `bin/rails routes`) |
 | `crates/views/src/messages/presentation.rs:19-20` | `MessageContent::Text { html } => crate::hermes::workspace_message_html(message, html)` | The one hook in message rendering: chips and draft buttons, at render time |
-| `crates/views/templates/layouts/application.html:55` | `{{ crate::hermes::workspace_overlay(ctx)\|safe }}` after the lightbox include, same line | The one include in the layout: stylesheet, script, tab bar. Renders `""` while off, and being on the same line adds no whitespace |
+| `crates/views/templates/layouts/application.html:26` | `{{ crate::hermes::head_tags(ctx)\|safe }}` after `custom_styles_tag`, same line | The head seam (docs/hermes-theme.md): `hermes.css`, `workspace.css` while the workspace is on, then `theme.css`, each with `data-turbo-track="reload"`, after Custom styles so the theme wins. Renders `""` until the app installs its page assets (so the goldens keep upstream's bytes), and being on the same line adds no whitespace |
+| `crates/views/templates/layouts/application.html:55` | `{{ crate::hermes::workspace_overlay(ctx)\|safe }}` after the lightbox include, same line | The body seam: scripts and tab bar. Renders `""` while off, and being on the same line adds no whitespace |
+| `crates/campfire/src/config.rs` (module docs, `Config::theme`, `theme_switch`, a test) | `CAMPFIRE_THEME`, on unless `off` | The theme's kill switch (docs/hermes-theme.md) |
 
 Phases 1 and 2 added no seam: only rows in the existing `HERMES_ROUTES` block. Phase 2.7's per-viewer
 chips live behind the existing message hook (it marks links instead of rendering chips while
@@ -819,7 +823,7 @@ read by the workspace crate's own `WorkspaceConfig::from_lookup`; the adapter re
 `GEMINI_LIVE_VOICE_BOT` from the app's existing config).
 
 Not seams (fork-owned or new files): `crates/workspace/**`, `controllers/workspace.rs`,
-`crates/views/src/hermes.rs`, `crates/views/tests/workspace_hooks.rs`,
+`crates/views/src/hermes.rs`, `crates/views/tests/workspace_hooks.rs`, `crates/views/tests/hermes_head.rs`,
 `crates/assets/overrides/hermes/*`, a test in `crates/assets/tests/reference.rs`, a row in
 `crates/assets/OVERRIDES.md`, this document.
 
@@ -829,10 +833,11 @@ Not seams (fork-owned or new files): `crates/workspace/**`, `controllers/workspa
    every seam still there, once.
 2. `cargo test -p campfire_workspace --offline` (the feature, anywhere), and
    `node --test crates/assets/tests/js/*.test.mjs` (the page logic, Node 22, no npm).
-3. `cargo test -p campfire_views --offline`: the goldens (hooks not installed = upstream's bytes)
-   and `tests/workspace_hooks.rs` (the overlay lands once after the lightbox; removing the hooks
-   gives upstream's bytes back). If upstream moved the lightbox include or the `app-logo` link, move
-   the seam and fix that test.
+3. `cargo test -p campfire_views --offline`: the goldens (hooks and page assets not installed =
+   upstream's bytes), `tests/workspace_hooks.rs` (the overlay lands once after the lightbox; removing
+   the hooks gives upstream's bytes back) and `tests/hermes_head.rs` (the head seam's links land
+   once, after Custom styles, in order). If upstream moved the lightbox include, the `app-logo` link
+   or `custom_styles_tag`, move the seam and fix those tests.
 4. `cargo test -p campfire_assets --offline`: the import map and `stylesheet_link_tag :all` still
    equal the reference's; the workspace assets are served, not linked, not pinned.
 5. If upstream changed any of what `controllers/workspace.rs` borrows, fix that file (the compiler
@@ -895,8 +900,10 @@ Not seams (fork-owned or new files): `crates/workspace/**`, `controllers/workspa
   the `Authorization` header, cards asked by chips fetched next poll, other boards' cards never
   chips nor re-asked at once, one failed card or user lookup doesn't fail the poll and is retried,
   Fizzy down keeps the picture, missing board looked up again).
-- `crates/views/tests/workspace_hooks.rs`: hooks off = upstream bytes; on = overlay once in place
-  and message hook applied, nothing else changed; removed = upstream bytes again.
+- `crates/views/tests/workspace_hooks.rs`: hooks off = upstream bytes; on = stylesheet once in the
+  head, overlay once in place and message hook applied, nothing else changed; removed = upstream
+  bytes again. `crates/views/tests/hermes_head.rs`: the head seam's order (upstream, Custom styles,
+  `hermes.css`, `workspace.css`, `theme.css`), `CAMPFIRE_THEME=off`, nothing while not installed.
 - `crates/assets/tests/reference.rs`: workspace assets served, not in `stylesheet_link_tag :all`,
   not in the import map.
 - Phase 1, in `crates/workspace` against a **stateful** fake Fizzy (writes change its cards the

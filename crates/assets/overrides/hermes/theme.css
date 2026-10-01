@@ -1,0 +1,15 @@
+/* Hermes fork: the product theme (docs/hermes-theme.md).
+ *
+ * This is the one stylesheet that gives the app its look: it redefines tokens (upstream's
+ * `--lch-*` / `--color-*` and the fork's `--ui-*`) and then restyles components by their existing
+ * class names. It is linked on every page from the layout's head (crate::hermes::head_tags in
+ * crates/views) LAST: after upstream's stylesheets, after the account's Custom styles and after the
+ * fork's own stylesheets, so it wins every tie. `CAMPFIRE_THEME=off` leaves it out.
+ *
+ * Rules for this file (docs/ui-redesign handbook in the Hermes repo, §4):
+ * - give every colour token a light and a dark value;
+ * - keep `[hidden]` winning (`&[hidden] { display: none }` on anything that sets `display`);
+ * - keep a visible `:focus-visible` on every button, link and input;
+ * - group selector overrides by the upstream file they override, to keep sync diffs readable.
+ *
+ * Empty for now: the app looks exactly as it does without it. */

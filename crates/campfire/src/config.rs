@@ -30,6 +30,8 @@
 //!   `GEMINI_LIVE_TOKENS_PER_HOUR` and `GEMINI_LIVE_EXTRA_INSTRUCTIONS` tune it ([`GeminiLiveConfig`]).
 //!   `HERMES_ASK_URL` (the Hermes bridge's `/ask/<secret>` URL, a secret: never logged) lets the
 //!   interviewer ask Hermes mid-interview (`ask_hermes`), `HERMES_ASKS_PER_HOUR` caps it per user.
+//! - Hermes fork, the product theme (docs/hermes-theme.md): `CAMPFIRE_THEME` (`on`, the default, or
+//!   `off`) links `hermes/theme.css` on every page; `off` leaves only the fork's own stylesheets.
 //!
 //! Storage paths mirror `Rails.root.join("storage")`: the database under `db/`, blobs under
 //! `files/` (`config/storage.yml`), backups under `backups/` (`script/admin/prepare-backup`).
@@ -67,6 +69,8 @@ pub struct Config {
     /// Hermes fork: the Duty Manager Workspace (docs/hermes-workspace.md); `None` unless `FIZZY_URL`
     /// and `FIZZY_TOKEN` are set.
     pub workspace: Option<campfire_workspace::WorkspaceConfig>,
+    /// Hermes fork: `CAMPFIRE_THEME` (default on): link the product theme, `hermes/theme.css`.
+    pub theme: bool,
 }
 
 /// Hermes fork: what the live voice report (`controllers::voice`) needs from the environment.
@@ -212,6 +216,8 @@ impl Config {
             },
             // Hermes fork: FIZZY_* and WORKSPACE_* (campfire_workspace::config).
             workspace: campfire_workspace::WorkspaceConfig::from_lookup(&get)?,
+            // Hermes fork: the product theme (docs/hermes-theme.md).
+            theme: theme_switch(present("CAMPFIRE_THEME").as_deref())?,
         })
     }
 }
@@ -234,6 +240,15 @@ fn hermes_ask_url(url: &str) -> anyhow::Result<ApiKey> {
         bail!("HERMES_ASK_URL must be an http:// or https:// URL (e.g. http://campfire-bridge:8645/ask/<secret>)");
     }
     Ok(ApiKey::new(url))
+}
+
+/// Hermes fork: `CAMPFIRE_THEME`, on unless `off` (or `false`, `0`, `no`).
+fn theme_switch(value: Option<&str>) -> anyhow::Result<bool> {
+    match value.map(|value| value.trim().to_ascii_lowercase()).as_deref() {
+        None | Some("on" | "true" | "1" | "yes") => Ok(true),
+        Some("off" | "false" | "0" | "no") => Ok(false),
+        Some(_) => bail!("CAMPFIRE_THEME must be on or off"),
+    }
 }
 
 /// The install's own HTTPS URL when it has a TLS domain; the project's otherwise.
@@ -356,6 +371,20 @@ mod tests {
         assert!(blank.gemini_live.unwrap().hermes_ask_url.is_none(), "compose's ${{VAR:+…}} gives an empty value");
         // Without Gemini there's no live session to ask from.
         assert!(config(&[("SECRET_KEY_BASE", "abc"), ("HERMES_ASK_URL", "http://x/ask/s")]).unwrap().gemini_live.is_none());
+    }
+
+    #[test]
+    fn the_theme_is_on_unless_switched_off() {
+        // Hermes fork: CAMPFIRE_THEME.
+        let theme = |value: &str| config(&[("SECRET_KEY_BASE", "abc"), ("CAMPFIRE_THEME", value)]).map(|config| config.theme);
+        assert!(config(&[("SECRET_KEY_BASE", "abc")]).unwrap().theme);
+        for on in ["on", " ON ", "true", "1", "yes", " "] {
+            assert!(theme(on).unwrap(), "{on:?}");
+        }
+        for off in ["off", "Off", "false", "0", "no"] {
+            assert!(!theme(off).unwrap(), "{off:?}");
+        }
+        assert!(theme("dark").is_err());
     }
 
     #[test]
