@@ -45,8 +45,16 @@ pub const USAGE_PATH: &str = "/sky/usage";
 const SAVE_EVERY: Duration = Duration::from_secs(5);
 
 /// The press timings the page may report with the next press (`last`), all numbers but `outcome`.
-const TIMINGS: [&str; 7] =
-    ["held_ms", "context_ms", "connect_ms", "release_to_first_text_ms", "release_to_first_audio_ms", "reply_ms", "reply_chars"];
+const TIMINGS: [&str; 8] = [
+    "held_ms",
+    "context_ms",
+    "connect_ms",
+    "release_to_first_text_ms",
+    "release_to_first_audio_ms",
+    "reply_ms",
+    "reply_chars",
+    "total_tokens",
+];
 /// `last.outcome`'s values.
 const OUTCOMES: [&str; 6] = ["answered", "no_reply", "cancelled", "tip", "error", "interrupted"];
 
@@ -298,7 +306,7 @@ fn positive_id(param: Option<&Param>) -> Option<i64> {
 fn log_last_press(user_id: i64, last: Option<&ParamMap>) {
     let Some(last) = last else { return };
     let value = |key: &str| number(last.get(key)).map(|n| n.min(3_600_000) as i64).unwrap_or(-1);
-    let [held, context, connect, first_text, first_audio, reply, reply_chars] = TIMINGS.map(value);
+    let [held, context, connect, first_text, first_audio, reply, reply_chars, total_tokens] = TIMINGS.map(value);
     let outcome = last.get("outcome").and_then(Param::as_str).filter(|outcome| OUTCOMES.contains(outcome)).unwrap_or("unknown");
     let warm = matches!(last.get("warm"), Some(Param::Bool(true)));
     tracing::info!(
@@ -313,6 +321,7 @@ fn log_last_press(user_id: i64, last: Option<&ParamMap>) {
         release_to_first_audio_ms = first_audio,
         reply_ms = reply,
         reply_chars,
+        total_tokens,
         "sky: last press"
     );
 }

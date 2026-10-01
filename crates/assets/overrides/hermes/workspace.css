@@ -1305,3 +1305,381 @@ dialog.ws-overlay {
     inline-size: 1.2em;
   }
 }
+
+/* ---------------------------------------------------------------------------------------------
+ * Sky push-to-talk (batch 1a; docs/hermes-gemini-live.md, "Sky push-to-talk"; hermes/sky_ptt.js).
+ * The floating disc in the bottom corner of every page, above the tab bar and above the card sheet
+ * (z-index 10), the replies' cards above it, "Release here to cancel" at the top. Colours from the
+ * `--ui-ptt*` tokens: terracotta at rest and held, Sky's teal while it thinks or speaks. */
+
+.sky-ptt {
+  --sky-ptt-size: 3.5rem;
+  --sky-ptt-lift: 0rem;
+
+  align-items: flex-end;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  inset-block-end: calc(var(--ws-tabbar-height) + 0.6rem + var(--sky-ptt-lift));
+  inset-inline-end: calc(1rem + env(safe-area-inset-right, 0px));
+  pointer-events: none;
+  position: fixed;
+  z-index: 11;
+
+  > * {
+    pointer-events: auto;
+  }
+
+  &[hidden] {
+    display: none;
+  }
+}
+
+/* A room: above the composer, so its buttons stay reachable. */
+body:has(form#composer) .sky-ptt {
+  --sky-ptt-lift: 4.25rem;
+}
+
+/* Typing (the soft keyboard is up), or a modal dialog open: out of the way. */
+body:has(.composer :focus-within, .composer:focus-within, dialog:modal) .sky-ptt {
+  display: none;
+}
+
+.sky-ptt__button {
+  align-items: center;
+  background: var(--ui-ptt);
+  block-size: var(--sky-ptt-size);
+  border: 0;
+  border-radius: var(--ui-radius-round);
+  box-shadow: 0 0.5rem 1.25rem color-mix(in srgb, var(--ui-ptt) 35%, transparent);
+  color: var(--ui-on-ptt);
+  cursor: pointer;
+  display: grid;
+  inline-size: var(--sky-ptt-size);
+  justify-items: center;
+  padding: 0;
+  position: relative;
+  touch-action: none;
+  transition: transform 0.12s ease-out, background-color 0.12s;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+
+  > * {
+    grid-area: 1 / 1;
+    pointer-events: none;
+  }
+
+  &::before {
+    border: 2px solid var(--ui-ptt);
+    border-radius: var(--ui-radius-round);
+    content: "";
+    inset: -0.5rem;
+    opacity: 0;
+    position: absolute;
+  }
+
+  &:focus-visible {
+    outline: 3px solid var(--ui-ptt-ai);
+    outline-offset: 3px;
+  }
+
+  &[data-state="warming"],
+  &[data-state="listening"] {
+    background: var(--ui-ptt-active);
+    transform: scale(1.12);
+
+    &::before {
+      animation: sky-ptt-ring 1.1s ease-out infinite;
+    }
+  }
+
+  &[data-state="thinking"],
+  &[data-state="speaking"] {
+    background: var(--ui-ptt-ai);
+    box-shadow: 0 0.5rem 1.25rem color-mix(in srgb, var(--ui-ptt-ai) 35%, transparent);
+  }
+
+  &[data-state="thinking"] .sky-ptt__mic {
+    animation: sky-ptt-breathe 1.2s ease-in-out infinite;
+  }
+
+  &[data-state="cancel"],
+  &[data-state="error"],
+  &[data-state="offline"],
+  &[data-state="no_permission"],
+  &[data-state="unsupported"] {
+    background: var(--ui-text-muted);
+    box-shadow: var(--ui-shadow);
+  }
+}
+
+.sky-ptt__mic {
+  block-size: 45%;
+  inline-size: 45%;
+}
+
+.sky-ptt__bars,
+.sky-ptt__wave {
+  align-items: center;
+  display: flex;
+  gap: 2px;
+  block-size: 1rem;
+
+  i {
+    animation: sky-ptt-bar 0.8s ease-in-out infinite;
+    background: currentColor;
+    block-size: 0.3rem;
+    border-radius: 2px;
+    inline-size: 3px;
+  }
+
+  i:nth-child(2) { animation-delay: 0.1s; }
+  i:nth-child(3) { animation-delay: 0.2s; }
+  i:nth-child(4) { animation-delay: 0.3s; }
+  i:nth-child(5) { animation-delay: 0.4s; }
+}
+
+.sky-ptt__bars {
+  visibility: hidden;
+}
+
+.sky-ptt__button[data-state="speaking"] {
+  .sky-ptt__mic {
+    visibility: hidden;
+  }
+
+  .sky-ptt__bars {
+    visibility: visible;
+  }
+}
+
+.sky-ptt__tip {
+  color: var(--ui-text-muted);
+  font-size: 0.7rem;
+  font-weight: 600;
+  inline-size: calc(var(--sky-ptt-size) + 1.5rem);
+  margin-block-start: -0.25rem;
+  margin-inline-end: -0.75rem;
+  pointer-events: none;
+  text-align: center;
+  text-shadow: 0 0 0.3rem var(--ui-surface);
+}
+
+/* "Release here to cancel", at the top of the screen while held. */
+.sky-ptt__cancel {
+  background: var(--ui-surface);
+  border: 1px solid var(--ui-border-strong);
+  border-radius: var(--ui-radius-pill);
+  box-shadow: var(--ui-shadow);
+  color: var(--ui-text);
+  font-size: 0.8rem;
+  inset-block-start: calc(env(safe-area-inset-top, 0px) + 4.5rem);
+  inset-inline-start: 50%;
+  margin: 0;
+  padding: 0.4rem 0.8rem;
+  position: fixed;
+  transform: translateX(-50%);
+  white-space: nowrap;
+
+  &[hidden] {
+    display: none;
+  }
+}
+
+.sky-ptt__cancel--hot {
+  background: var(--ui-danger-tint);
+  border-color: var(--ui-danger);
+  color: var(--ui-danger);
+}
+
+/* The replies: the newest at the bottom, just above the disc. */
+.sky-ptt__stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  inline-size: calc(100vw - 2rem - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px));
+  max-block-size: 40dvh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+
+  &[hidden] {
+    display: none;
+  }
+}
+
+.sky-ptt__card {
+  animation: sky-ptt-rise 0.18s ease-out;
+  background: var(--ui-surface);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-lg);
+  box-shadow: var(--ui-shadow-lifted);
+  color: var(--ui-text);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  font-size: 0.875rem;
+  gap: 0.35rem;
+  padding: 0.6rem 0.75rem;
+  position: relative;
+
+  p {
+    margin: 0;
+  }
+
+  details {
+    color: var(--ui-text-muted);
+    font-size: 0.75rem;
+  }
+}
+
+.sky-ptt__card--notice {
+  border-color: var(--ui-border-strong);
+}
+
+.sky-ptt__who {
+  align-items: center;
+  color: var(--ui-ptt-ai);
+  display: flex;
+  font-size: 0.7rem;
+  font-weight: 600;
+  gap: 0.4rem;
+  letter-spacing: 0.06em;
+}
+
+.sky-ptt__dot {
+  align-items: center;
+  background: var(--ui-ptt-ai);
+  block-size: 1.1rem;
+  border-radius: var(--ui-radius-round);
+  color: var(--ui-on-ptt);
+  display: inline-flex;
+  font-size: 0.65rem;
+  font-weight: 700;
+  inline-size: 1.1rem;
+  justify-content: center;
+}
+
+.sky-ptt__chip {
+  align-self: flex-start;
+  background: var(--ui-ai-tint);
+  border-radius: var(--ui-radius-sm);
+  color: var(--ui-ai);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.7rem;
+  padding: 0.1rem 0.45rem;
+}
+
+.sky-ptt__you {
+  color: var(--ui-text-muted);
+}
+
+.sky-ptt__you--live::after {
+  animation: sky-ptt-blink 1s steps(1) infinite;
+  color: var(--ui-ptt);
+  content: "▍";
+}
+
+.sky-ptt__speaking {
+  align-items: center;
+  color: var(--ui-ptt-ai);
+  display: flex;
+  font-size: 0.75rem;
+  gap: 0.5rem;
+}
+
+.sky-ptt__debug,
+.sky-ptt__details {
+  color: var(--ui-text-muted);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.7rem;
+  white-space: pre-wrap;
+}
+
+.sky-ptt__dismiss {
+  background: none;
+  border: 0;
+  border-radius: var(--ui-radius-round);
+  color: var(--ui-text-muted);
+  cursor: pointer;
+  font-size: 0.8rem;
+  inset-block-start: 0.35rem;
+  inset-inline-end: 0.4rem;
+  padding: 0.2rem 0.4rem;
+  position: absolute;
+
+  &:focus-visible {
+    outline: 2px solid var(--ui-ptt-ai);
+    outline-offset: 1px;
+  }
+}
+
+.sky-ptt__hint {
+  align-self: flex-end;
+  background: var(--ui-surface);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-pill);
+  box-shadow: var(--ui-shadow);
+  color: var(--ui-text-muted);
+  font-size: 0.8rem;
+  margin: 0;
+  padding: 0.3rem 0.7rem;
+}
+
+/* Wide screens: the tab bar is a rail on the left; the disc sits in the bottom corner. */
+@media (min-width: 100ch) {
+  .sky-ptt {
+    --sky-ptt-size: 3rem;
+
+    inset-block-end: calc(1rem + env(safe-area-inset-bottom, 0px) + var(--sky-ptt-lift));
+  }
+
+  .sky-ptt__stack {
+    inline-size: 22.5rem;
+  }
+}
+
+@keyframes sky-ptt-ring {
+  from { opacity: 0.7; transform: scale(0.9); }
+  to { opacity: 0; transform: scale(1.5); }
+}
+
+@keyframes sky-ptt-breathe {
+  50% { opacity: 0.55; }
+}
+
+@keyframes sky-ptt-bar {
+  50% { block-size: 1rem; }
+}
+
+@keyframes sky-ptt-blink {
+  50% { opacity: 0; }
+}
+
+@keyframes sky-ptt-rise {
+  from { opacity: 0.4; transform: translateY(0.5rem); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sky-ptt__button,
+  .sky-ptt__card {
+    animation: none;
+    transition: none;
+  }
+
+  .sky-ptt__button::before,
+  .sky-ptt__button .sky-ptt__mic,
+  .sky-ptt__bars i,
+  .sky-ptt__wave i,
+  .sky-ptt__you--live::after {
+    animation: none !important;
+  }
+
+  .sky-ptt__button[data-state="warming"],
+  .sky-ptt__button[data-state="listening"] {
+    box-shadow: 0 0 0 0.35rem color-mix(in srgb, var(--ui-ptt) 30%, transparent);
+    transform: none;
+  }
+}

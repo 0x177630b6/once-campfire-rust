@@ -45,6 +45,13 @@
   --ui-ai-tint: oklch(96% 0.034 100);
   --ui-on-ai-line: oklch(26% 0.018 40);
 
+  /* Sky push-to-talk (workspace.css): the floating disc at rest and while held, Sky's colour while
+   * it thinks or speaks, and the icon on them (the same in both modes: they are fills) */
+  --ui-ptt: var(--ui-accent);
+  --ui-ptt-active: color-mix(in oklch, var(--ui-ptt) 82%, black);
+  --ui-ptt-ai: oklch(50% 0.07 215);
+  --ui-on-ptt: oklch(100% 0 0);
+
   /* Radius */
   --ui-radius-sm: 0.25em;
   --ui-radius-md: 0.5em;

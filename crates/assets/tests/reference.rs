@@ -197,6 +197,29 @@ fn the_workspace_assets_are_served_but_never_linked_or_pinned() {
 }
 
 #[test]
+fn sky_push_to_talk_assets_are_served_and_only_the_shared_session_is_pinned() {
+    // Hermes fork: Sky push-to-talk (docs/hermes-gemini-live.md). Its scripts are plain modules the
+    // tab bar loads (only for the people SKY_PTT lets use it); they import the shared Gemini Live
+    // session through the import map (`lib/hermes/live_session`), which the voice page uses too.
+    let added = added();
+    for logical in ["hermes/sky_ptt.js", "hermes/sky_ptt_logic.js", "lib/hermes/live_session.js"] {
+        assert!(added.iter().any(|added| added == logical), "{logical}");
+        assert_eq!(get(&campfire_assets::asset_path(logical)).status, 200, "{logical}");
+    }
+    let tags = campfire_assets::javascript_importmap_tags();
+    assert!(!tags.contains("hermes/sky_ptt"), "not pinned");
+    assert!(tags.contains(r#""lib/hermes/live_session""#));
+    let script = get(&campfire_assets::asset_path("hermes/sky_ptt.js"));
+    assert!(String::from_utf8_lossy(&script.body).contains(r#"from "lib/hermes/live_session""#));
+    let logic = get(&campfire_assets::asset_path("hermes/sky_ptt_logic.js"));
+    assert!(String::from_utf8_lossy(&logic.body).contains("globalThis.HermesSky"));
+    let css = String::from_utf8_lossy(&get(&campfire_assets::stylesheet_path("hermes/workspace.css")).body).into_owned();
+    assert!(css.contains(".sky-ptt") && css.contains("&[hidden]"), "the disc's styles, [hidden] winning");
+    let tokens = String::from_utf8_lossy(&get(&campfire_assets::stylesheet_path("hermes/tokens.css")).body).into_owned();
+    assert!(tokens.contains("--ui-ptt:") && tokens.contains("--ui-ptt-ai:"));
+}
+
+#[test]
 fn public_files_are_served_like_action_dispatch_static() {
     let overridden = overridden();
     for case in json_fixture("static_responses.json").as_array().unwrap() {

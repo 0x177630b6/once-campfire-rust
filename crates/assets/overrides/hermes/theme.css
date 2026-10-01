@@ -486,6 +486,8 @@
   --ui-ai-line: var(--ai-border);
   --ui-ai-tint: var(--ai-tint);
   --ui-on-ai-line: var(--ink);
+  --ui-ptt: var(--voice-fill);
+  --ui-ptt-ai: color-mix(in oklch, var(--ai) 80%, black);
   --ui-radius-sm: var(--radius-sm);
   --ui-radius-md: var(--radius-md);
   --ui-radius-bubble: var(--radius-xl);
