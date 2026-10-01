@@ -8,7 +8,9 @@ mod messages_support;
 use std::sync::Arc;
 
 use askama::Template;
-use campfire_views::hermes::{PageAssets, VoiceShow, VoiceView, WorkspaceHooks, install_page_assets, install_workspace_hooks};
+use campfire_views::hermes::{
+    PageAssets, THEME_SCRIPT, VoiceShow, VoiceView, WorkspaceHooks, install_page_assets, install_workspace_hooks, theme_switch,
+};
 use campfire_views::messages::MessageView;
 use campfire_views::rooms::{self, ShowView};
 use campfire_views::{AccountSummary, Platform, ViewContext};
@@ -65,6 +67,11 @@ fn link(logical: &str) -> String {
     format!("\n    <link rel=\"stylesheet\" href=\"/assets/{logical}\" data-turbo-track=\"reload\" />")
 }
 
+/// The light/dark switch's inline script, after the theme's link.
+fn script() -> String {
+    format!("\n    <script>{}</script>", THEME_SCRIPT.trim_end())
+}
+
 struct Workspace;
 
 impl WorkspaceHooks for Workspace {
@@ -107,24 +114,34 @@ fn the_head_links_the_fork_stylesheets_then_the_theme_after_custom_styles() {
     install_page_assets(Some(PageAssets { theme: true }));
     let themed = room_page();
     let themed_voice = voice_page();
-    let added = format!("{}{}{}", link("hermes/tokens.css"), link("hermes/hermes.css"), link("hermes/theme.css"));
+    let added = format!("{}{}{}{}", link("hermes/tokens.css"), link("hermes/hermes.css"), link("hermes/theme.css"), script());
     let at = positions(&themed, &[UPSTREAM_STYLESHEET, CUSTOM_STYLES, &added]);
     assert!(at[0] < at[1] && at[1] < at[2], "upstream, Custom styles, then ours");
     assert_eq!(themed.replace(&added, ""), upstream, "nothing else changes");
     assert_eq!(themed_voice.replace(&added, ""), upstream_voice, "the voice page links nothing else");
 
-    // CAMPFIRE_THEME=off: the fork's stylesheets only.
+    // The switch's script runs before the first paint: in the head, before anything in the body.
+    assert!(THEME_SCRIPT.contains("data-theme") && THEME_SCRIPT.contains("localStorage"));
+    assert!(!THEME_SCRIPT.contains("</script"));
+
+    // CAMPFIRE_THEME=off: the fork's stylesheets only (no theme, no switch script).
     install_page_assets(Some(PageAssets { theme: false }));
     let unthemed = room_page();
-    assert!(!unthemed.contains("hermes/theme.css"));
+    assert!(!unthemed.contains("hermes/theme.css") && !unthemed.contains("<script>(function"));
     assert_eq!(unthemed.replace(&format!("{}{}", link("hermes/tokens.css"), link("hermes/hermes.css")), ""), upstream);
 
     // The workspace on: its stylesheet between the fork's and the theme.
     install_page_assets(Some(PageAssets { theme: true }));
     install_workspace_hooks(Some(Arc::new(Workspace)));
     let with_workspace = room_page();
-    let added =
-        format!("{}{}{}{}", link("hermes/tokens.css"), link("hermes/hermes.css"), link("hermes/workspace.css"), link("hermes/theme.css"));
+    let added = format!(
+        "{}{}{}{}{}",
+        link("hermes/tokens.css"),
+        link("hermes/hermes.css"),
+        link("hermes/workspace.css"),
+        link("hermes/theme.css"),
+        script()
+    );
     positions(&with_workspace, &[CUSTOM_STYLES, &added]);
     assert_eq!(with_workspace.replace(&added, ""), upstream);
 
@@ -139,4 +156,18 @@ fn the_head_links_the_fork_stylesheets_then_the_theme_after_custom_styles() {
     install_page_assets(None);
     assert_eq!(room_page(), upstream);
     assert_eq!(voice_page(), upstream_voice);
+
+    // The theme's Light / Dark / System switch (the profile page's seam): only with the theme on.
+    assert_eq!(render(theme_switch), "");
+    install_page_assets(Some(PageAssets { theme: false }));
+    assert_eq!(render(theme_switch), "");
+    install_page_assets(Some(PageAssets { theme: true }));
+    let switch = render(theme_switch);
+    for value in ["light", "dark", "system"] {
+        assert_eq!(switch.matches(&format!(r#"<input type="radio" name="hermes-theme" value="{value}" />"#)).count(), 1, "{switch}");
+    }
+    assert!(switch.starts_with(r#"<fieldset class="hermes-theme-switch">"#) && switch.contains("<legend"), "{switch}");
+    install_page_assets(None);
+    let profile = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/templates-hermes/users/profiles/show.html")).unwrap();
+    assert!(profile.contains("{{ crate::hermes::theme_switch(ctx)|safe }}"));
 }

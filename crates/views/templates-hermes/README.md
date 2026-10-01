@@ -3,7 +3,7 @@
 A file here at the same path as one in `../templates/` replaces it: `askama.toml` searches
 `templates-hermes` first, so `#[template(path = …)]`, `{% include %}` and `{% extends %}` with a
 rooted path all pick this copy. Use it only where CSS (`crates/assets/overrides/hermes/theme.css`)
-can't do the job. Empty for now: no template is shadowed.
+can't do the job. The list is in [`SHADOWED.md`](SHADOWED.md).
 
 Before adding a file:
 

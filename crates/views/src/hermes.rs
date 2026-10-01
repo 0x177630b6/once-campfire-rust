@@ -8,6 +8,7 @@
 //!   docs/hermes-workspace.md) plugs into rendering; nothing is installed while it's off.
 //! - [`head_tags`]: the fork's stylesheets and the product theme, linked from the layout's head
 //!   (docs/hermes-theme.md); nothing until the app installs [`PageAssets`] at boot.
+//! - [`theme_switch`]: the Light / Dark / System control on the person's profile, with the theme on.
 //!
 //! Their styles are `hermes/hermes.css` (crates/assets/overrides), linked by [`head_tags`].
 
@@ -143,6 +144,12 @@ pub const HERMES_STYLESHEET: &str = "hermes/hermes.css";
 /// The product theme: loaded last, so it wins over upstream, Custom styles and the fork's CSS.
 pub const THEME_STYLESHEET: &str = "hermes/theme.css";
 
+/// The light/dark switch's script, inlined in the head after the theme so it runs before the first
+/// paint: it puts the person's choice (`localStorage["hermes-theme"]`, per browser) on `<html>` as
+/// `data-theme="light"` or `"dark"`; no attribute means "System" (`prefers-color-scheme`). It also
+/// saves a choice made with [`theme_switch`]'s radios and keeps them checked after Turbo visits.
+pub const THEME_SCRIPT: &str = include_str!("theme_script.js");
+
 /// Hermes fork: what [`head_tags`] links on every page, installed by the app at boot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PageAssets {
@@ -163,10 +170,11 @@ fn page_assets() -> Option<PageAssets> {
 
 /// The head seam, right after Custom styles (`custom_styles_tag`): the tokens, `hermes.css`,
 /// the workspace's stylesheet while it's on, then the theme, in that order, so that the theme wins
-/// every tie. Each `<link>` has `data-turbo-track="reload"`, like upstream's stylesheets: a page
-/// still open when a deploy changes one reloads at its next visit. The list is the same on every
-/// page of a signed-in person (a different list would make Turbo reload on each visit). Empty while
-/// nothing is installed, so the views' tests and goldens get upstream's bytes.
+/// every tie; with the theme, [`THEME_SCRIPT`] last. Each `<link>` has `data-turbo-track="reload"`,
+/// like upstream's stylesheets: a page still open when a deploy changes one reloads at its next
+/// visit. The list is the same on every page of a signed-in person (a different list would make
+/// Turbo reload on each visit). Empty while nothing is installed, so the views' tests and goldens
+/// get upstream's bytes.
 pub fn head_tags(ctx: &ViewContext) -> String {
     let assets = page_assets();
     let workspace = workspace_hooks().map(|hooks| hooks.stylesheets(ctx)).unwrap_or_default();
@@ -182,5 +190,32 @@ pub fn head_tags(ctx: &ViewContext) -> String {
     if assets.is_some_and(|assets| assets.theme) {
         hrefs.push(ctx.asset(THEME_STYLESHEET));
     }
-    hrefs.iter().map(|href| format!("\n    <link rel=\"stylesheet\" href=\"{}\" data-turbo-track=\"reload\" />", escape(href))).collect()
+    let mut tags: String = hrefs
+        .iter()
+        .map(|href| format!("\n    <link rel=\"stylesheet\" href=\"{}\" data-turbo-track=\"reload\" />", escape(href)))
+        .collect();
+    if assets.is_some_and(|assets| assets.theme) {
+        tags.push_str(&format!("\n    <script>{}</script>", THEME_SCRIPT.trim_end()));
+    }
+    tags
+}
+
+/// The theme's Light / Dark / System radios (profile page, `templates-hermes/users/profiles/show.html`),
+/// handled by [`THEME_SCRIPT`]. Nothing unless the theme is on: the switch only means something with
+/// `theme.css`, and the views' goldens (nothing installed) keep upstream's bytes.
+pub fn theme_switch(_ctx: &ViewContext) -> String {
+    if !page_assets().is_some_and(|assets| assets.theme) {
+        return String::new();
+    }
+    let option = |value: &str, label: &str| {
+        format!(
+            "\n    <label class=\"hermes-theme-switch__option\"><input type=\"radio\" name=\"hermes-theme\" value=\"{value}\" /><span>{label}</span></label>"
+        )
+    };
+    format!(
+        "<fieldset class=\"hermes-theme-switch\">\n    <legend class=\"hermes-theme-switch__legend\">Theme</legend>{}{}{}\n  </fieldset>\n  ",
+        option("light", "Light"),
+        option("dark", "Dark"),
+        option("system", "System"),
+    )
 }
