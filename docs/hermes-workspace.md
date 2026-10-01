@@ -811,7 +811,7 @@ Every one is marked `Hermes fork:` in the file. Line numbers as of this commit.
 | `crates/campfire/src/controllers.rs:48-49` | `pub mod workspace;` | The adapter module |
 | `crates/campfire/src/controllers.rs:329-354` | Twenty rows in `HERMES_ROUTES` (three for phase 0, nine for phase 1, six for phase 2, two for phase 2.6) | The fork's own route table (the Rails table stays identical to `bin/rails routes`) |
 | `crates/views/src/messages/presentation.rs:19-20` | `MessageContent::Text { html } => crate::hermes::workspace_message_html(message, html)` | The one hook in message rendering: chips and draft buttons, at render time |
-| `crates/views/templates/layouts/application.html:26` | `{{ crate::hermes::head_tags(ctx)\|safe }}` after `custom_styles_tag`, same line | The head seam (docs/hermes-theme.md): `tokens.css`, `hermes.css`, `workspace.css` while the workspace is on, then `theme.css`, each with `data-turbo-track="reload"`, after Custom styles so the theme wins. Renders `""` until the app installs its page assets (so the goldens keep upstream's bytes), and being on the same line adds no whitespace |
+| `crates/views/templates/layouts/application.html:26` | `{{ crate::hermes::head_tags(ctx)\|safe }}` after `custom_styles_tag`, same line | The head seam (docs/hermes-theme.md): `tokens.css`, `hermes.css`, `workspace.css` while the workspace is on, then `theme.css`, each with `data-turbo-track="reload"`, after Custom styles so the theme wins, and with the theme the light/dark switch's inline script. Renders `""` until the app installs its page assets (so the goldens keep upstream's bytes), and being on the same line adds no whitespace |
 | `crates/views/templates/layouts/application.html:55` | `{{ crate::hermes::workspace_overlay(ctx)\|safe }}` after the lightbox include, same line | The body seam: scripts and tab bar. Renders `""` while off, and being on the same line adds no whitespace |
 | `crates/views/askama.toml:1-5` | `dirs = ["templates-hermes", "templates"]` | Template shadowing (docs/hermes-theme.md): a file in `templates-hermes/` replaces upstream's at the same path. `crates/views/build.rs` (new, fork-owned) makes a new shadow trigger a rebuild |
 | `crates/campfire/src/config.rs:33-34, 72-73, 219-220, 245-252, 376-388` | `CAMPFIRE_THEME`, on unless `off`: module docs, `Config::theme`, its parsing, `theme_switch`, a test | The theme's kill switch (docs/hermes-theme.md) |
@@ -916,7 +916,10 @@ Not seams (fork-owned or new files): `crates/workspace/**`, `controllers/workspa
 - `crates/views/tests/workspace_hooks.rs`: hooks off = upstream bytes; on = overlay once in place
   and message hook applied, nothing else changed; removed = upstream bytes again.
   `crates/views/tests/hermes_head.rs`: the head seam's order (upstream, Custom styles, `tokens.css`,
-  `hermes.css`, `workspace.css`, `theme.css`), `CAMPFIRE_THEME=off`, nothing while not installed.
+  `hermes.css`, `workspace.css`, `theme.css`, then the light/dark script), `CAMPFIRE_THEME=off`,
+  nothing while not installed; the profile's Light / Dark / System switch only with the theme on.
+  `crates/assets/tests/theme.rs`: the theme's two dark blocks identical, every `--lch-*` triplet
+  the OKLCH of its colour, the fonts digested, served and licensed.
   `crates/views/tests/shadowed_templates.rs`: every file in `templates-hermes/` listed in
   `SHADOWED.md` with an existing upstream template, no bare-name include, no `include_str!` of a
   shadowed template (and the checks' own parsers).
