@@ -803,8 +803,8 @@ Every one is marked `Hermes fork:` in the file. Line numbers as of this commit.
 |---|---|---|
 | `Cargo.toml:29-30` | `campfire_workspace = { path = "crates/workspace" }` in `[workspace.dependencies]` | Shared dependency versions live in the root (AGENTS.md). The crate itself is a member through `members = ["crates/*"]` |
 | `crates/campfire/Cargo.toml:21-22` | `campfire_workspace.workspace = true` | The adapter uses it |
-| `crates/campfire/src/config.rs:67-69` | `Config::workspace: Option<WorkspaceConfig>` | The app's config carries the parsed env |
-| `crates/campfire/src/config.rs:213-214` | `workspace: WorkspaceConfig::from_lookup(&get)?` | Parsing lives in the workspace crate |
+| `crates/campfire/src/config.rs:69-71` | `Config::workspace: Option<WorkspaceConfig>` | The app's config carries the parsed env |
+| `crates/campfire/src/config.rs:217-218` | `workspace: WorkspaceConfig::from_lookup(&get)?` | Parsing lives in the workspace crate |
 | `crates/campfire/src/app.rs:47-48` | `AppState::workspace: Option<Arc<Workspace>>` | Actions reach it with `c.app()` |
 | `crates/campfire/src/app.rs:112-113, 126` | `let workspace = controllers::workspace::build(&config);` and the field in the `AppState` literal | Built before `config` moves into the state |
 | `crates/campfire/src/app.rs:129-130` | `controllers::workspace::start(&app).await;` | Bots, hooks and the poll task need the booted app; while off it only makes sure no hooks are installed. It also installs the fork's page assets and theme (`install_page_assets`), workspace on or off |
@@ -813,8 +813,8 @@ Every one is marked `Hermes fork:` in the file. Line numbers as of this commit.
 | `crates/views/src/messages/presentation.rs:19-20` | `MessageContent::Text { html } => crate::hermes::workspace_message_html(message, html)` | The one hook in message rendering: chips and draft buttons, at render time |
 | `crates/views/templates/layouts/application.html:26` | `{{ crate::hermes::head_tags(ctx)\|safe }}` after `custom_styles_tag`, same line | The head seam (docs/hermes-theme.md): `tokens.css`, `hermes.css`, `workspace.css` while the workspace is on, then `theme.css`, each with `data-turbo-track="reload"`, after Custom styles so the theme wins. Renders `""` until the app installs its page assets (so the goldens keep upstream's bytes), and being on the same line adds no whitespace |
 | `crates/views/templates/layouts/application.html:55` | `{{ crate::hermes::workspace_overlay(ctx)\|safe }}` after the lightbox include, same line | The body seam: scripts and tab bar. Renders `""` while off, and being on the same line adds no whitespace |
-| `crates/views/askama.toml` (`[general] dirs`) | `dirs = ["templates-hermes", "templates"]` | Template shadowing (docs/hermes-theme.md): a file in `templates-hermes/` replaces upstream's at the same path. `crates/views/build.rs` (new, fork-owned) makes a new shadow trigger a rebuild |
-| `crates/campfire/src/config.rs` (module docs, `Config::theme`, `theme_switch`, a test) | `CAMPFIRE_THEME`, on unless `off` | The theme's kill switch (docs/hermes-theme.md) |
+| `crates/views/askama.toml:1-5` | `dirs = ["templates-hermes", "templates"]` | Template shadowing (docs/hermes-theme.md): a file in `templates-hermes/` replaces upstream's at the same path. `crates/views/build.rs` (new, fork-owned) makes a new shadow trigger a rebuild |
+| `crates/campfire/src/config.rs:33-34, 72-73, 219-220, 245-252, 376-388` | `CAMPFIRE_THEME`, on unless `off`: module docs, `Config::theme`, its parsing, `theme_switch`, a test | The theme's kill switch (docs/hermes-theme.md) |
 
 Phases 1 and 2 added no seam: only rows in the existing `HERMES_ROUTES` block. Phase 2.7's per-viewer
 chips live behind the existing message hook (it marks links instead of rendering chips while
@@ -887,8 +887,11 @@ Not seams (fork-owned or new files): `crates/workspace/**`, `controllers/workspa
    room panel, the message menu's card entry, the overlay, the board's column switcher.
 8. `cargo clippy --workspace --all-targets` and the parity gate as usual; with the workspace **off**
    and `CAMPFIRE_THEME=off` the parity screenshots must not move (the head still links
-   `hermes.css`, whose rules only match the voice features; the owner retired the gate for the
-   theme itself, docs/hermes-theme.md).
+   `tokens.css` and `hermes.css`, whose rules only match the fork's markup; the owner retired the
+   gate for the theme itself, docs/hermes-theme.md). The server-HTML and live-DOM parity cells,
+   though, now differ from the reference in `<head>` on every page, even with `CAMPFIRE_THEME=off`:
+   the head seam's `<link>`s (`hermes/tokens.css`, `hermes/hermes.css`, and `hermes/theme.css` when
+   on) need a mask or allowlist entry in `parity/` before those cells can pass.
 9. If Fizzy changed (a new image): re-check the write endpoints against
    `docs/api/fizzy-rest-api.md` in the Hermes repo (taggings still toggles, `triage`/`not_now`/
    `closure`, `PUT /steps/:id`, `POST /boards/:id/cards` still ignoring tags), then create a test

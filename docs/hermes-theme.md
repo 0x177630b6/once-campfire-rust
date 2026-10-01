@@ -124,6 +124,14 @@ A `--ui-*` token defined from another (`--ui-text-muted` from `--ui-text`) follo
 redefines the base one at `:root`. Redefine tokens on `:root` (or `:root:root` from Custom
 styles); a token redefined on an inner element would not change the `:root` tokens built from it.
 
+**For existing installs:** the `--ui-*` tokens are resolved once, on `:root`. Before this change
+`workspace.css` and `hermes.css` read `--color-*` on each element, so Custom styles that redefine
+`--color-*` on an inner element (`#sidebar { --color-bg: … }`, `.message { --color-text: … }`)
+also recoloured the Workspace and voice elements inside it. They no longer do: those elements now
+take the `:root` value through `--ui-*`. Redefinitions on `:root` still reach everything. Check the
+account's Custom styles on each deployment (Account → Custom styles) for such rules, and restate
+them as `--ui-*` overrides if they should keep applying.
+
 ### `--ui-*` (hermes/tokens.css)
 
 | Token | Default, light | Default, dark | Used by |

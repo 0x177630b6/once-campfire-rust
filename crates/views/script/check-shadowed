@@ -24,6 +24,21 @@ review=0
 
 fail() { echo "FAIL: $*" >&2; failed=1; }
 
+# An absolute path with `.` and `..` folded, without touching the file system (portable: no
+# GNU `realpath -m`, and bash 3.2 as macOS ships it).
+normalize() {
+  local result="" part parts
+  IFS=/ read -ra parts <<< "$1"
+  for part in "${parts[@]}"; do
+    case "$part" in
+      "" | .) ;;
+      ..) result="${result%/*}" ;;
+      *) result="$result/$part" ;;
+    esac
+  done
+  printf '%s\n' "${result:-/}"
+}
+
 # (a) the list against the directory
 listed="$(grep -E '^\| `' "$SHADOW/SHADOWED.md" | awk -F'|' '{ for (i = 2; i <= 4; i++) { gsub(/^[ `]+|[ `]+$/, "", $i) } print $2 "\t" $3 "\t" $4 }' || true)"
 while IFS= read -r file; do
@@ -76,7 +91,7 @@ done
 while IFS= read -r line; do
   src="${line%%:*}"
   path="${line#*:}"
-  target="$(realpath -m "$(dirname "$src")/$path")"
+  target="$(normalize "$(dirname "$src")/$path")"
   case "$target" in
     "$UPSTREAM"/*)
       rel="${target#"$UPSTREAM"/}"
