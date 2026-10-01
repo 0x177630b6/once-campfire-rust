@@ -499,6 +499,41 @@ impl<'a> Client<'a> {
         self.get_list(&format!("/{account}/users.json"), USER_PAGES).await
     }
 
+    /// Who can own the board's cards: its users with access (`GET /boards/:id/accesses.json`, the
+    /// account's active users each with `has_access`; all of them on an all-access board), since
+    /// Fizzy assigns only `board.users.active`. A Fizzy without that route (404): every active user.
+    pub async fn board_people(&self, account: &str, board_id: &str) -> Result<Vec<UserRef>, FizzyError> {
+        #[derive(Deserialize)]
+        struct Accesses {
+            #[serde(default)]
+            all_access: bool,
+            #[serde(default)]
+            users: Vec<Value>,
+        }
+        let path = format!("/{account}/boards/{board_id}/accesses.json");
+        let mut people = Vec::new();
+        for page in 1..=USER_PAGES {
+            let paged = if page == 1 { path.clone() } else { format!("{path}?page={page}") };
+            let response = self.get(&paged).await?;
+            match response.status {
+                200 => {}
+                404 if page == 1 => return self.users(account).await,
+                status => return Err(FizzyError::Status(status)),
+            }
+            let accesses: Accesses = serde_json::from_slice(&response.body).map_err(|e| FizzyError::Decode(e.to_string()))?;
+            for user in accesses.users {
+                let has_access = accesses.all_access || user["has_access"].as_bool().unwrap_or(false);
+                if let (true, Ok(user)) = (has_access, serde_json::from_value::<UserRef>(user)) {
+                    people.push(user);
+                }
+            }
+            if !has_next_page(response.link.as_deref()) {
+                break;
+            }
+        }
+        Ok(people)
+    }
+
     /// A card's newest `keep` comments, oldest first, whether earlier ones were left out, and
     /// whether the walk hit its page cap (then they aren't the newest: [`LatestComments::truncated`]).
     ///

@@ -350,9 +350,9 @@ impl Workspace {
         if fresh {
             return Ok(());
         }
-        let (account, _) = self.target()?;
+        let (account, board) = self.target()?;
         let client = crate::fizzy::Client::new(http, &self.config);
-        match client.users(&account).await {
+        match client.board_people(&account, &board.id).await {
             Ok(users) => {
                 self.set_fizzy_people(users, now);
                 Ok(())

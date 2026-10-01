@@ -102,8 +102,8 @@ pub struct Snapshot {
     pub refreshed: HashMap<u64, Timestamp>,
     /// Owner changes on the incident board, newest first (page 1 of `/activities` each poll).
     pub assignments: Vec<Assignment>,
-    /// The Fizzy account's active users, with their email addresses: who can be made an owner
-    /// (read every [`FIZZY_PEOPLE_REFRESH`]). `None` until read once.
+    /// The incident board's active users (those with access to it), with their email addresses:
+    /// who can be made an owner (read every [`FIZZY_PEOPLE_REFRESH`]). `None` until read once.
     pub fizzy_people: Option<Vec<fizzy::UserRef>>,
     pub fizzy_people_at: Option<Timestamp>,
 }
@@ -268,10 +268,10 @@ pub(crate) async fn poll(
         }
     }
 
-    // The account's users, now and then: who can be made an owner (the sheet's picker).
+    // The board's users, now and then: who can be made an owner (the sheet's picker).
     if next.fizzy_people_at.is_none_or(|at| now.duration_since(at) >= FIZZY_PEOPLE_REFRESH) {
         next.fizzy_people_at = Some(now);
-        match client.users(&account).await {
+        match client.board_people(&account, &board.id).await {
             Ok(users) => next.fizzy_people = Some(users),
             // A Fizzy without the list: nobody can be picked, and nothing else changes.
             Err(FizzyError::Status(404)) => {}

@@ -363,25 +363,44 @@ impl<'a> Writer<'a> {
                 "Fizzy refused: that person has no access to the incident board in Fizzy. An administrator can add them to the board."
                     .into(),
             )),
+            // Removing someone Fizzy no longer counts among the board's active users: it can't.
+            Ok(response) if response.status == 404 => Err(ActionError::invalid("owner_not_removable", "not removable")),
             Ok(response) => Err(ActionError::from_fizzy(&FizzyError::Status(response.status))),
             Err(error) => Err(ActionError::from_fizzy(&error)),
         }
     }
 
     /// Makes the card's owner exactly `wanted` (a Fizzy user id), or nobody: against a fresh read,
-    /// the other owners are removed, then `wanted` added if missing (Fizzy's assignments are
-    /// toggles), then the card is read again and checked. Returns the card as it is afterwards.
+    /// `wanted` is added first if missing (so a refusal leaves the owners as they were), then the
+    /// others are removed (Fizzy's assignments are toggles), then the card is read again and
+    /// checked. An owner Fizzy won't remove (deactivated, or no longer on the board: its 404)
+    /// doesn't stop the others; the error afterwards names them. Returns the card as it is
+    /// afterwards.
     pub async fn set_owner(&self, number: u64, wanted: Option<&str>) -> Result<Card, ActionError> {
         let card = self.card(number).await?;
         let (remove, add) = owner_changes(&card, wanted);
-        for id in &remove {
-            self.toggle_assignment(number, id, false).await?;
-        }
         if let Some(id) = &add {
             self.toggle_assignment(number, id, true).await?;
         }
+        let mut stuck = Vec::new();
+        for id in &remove {
+            match self.toggle_assignment(number, id, false).await {
+                Ok(()) => {}
+                Err(ActionError::Invalid { code: "owner_not_removable", .. }) => {
+                    let name = card.assignees.iter().find(|owner| &owner.id == id).map(|owner| owner.name.clone()).unwrap_or_default();
+                    stuck.push(if name.trim().is_empty() { id.clone() } else { name });
+                }
+                Err(error) => return Err(error),
+            }
+        }
         let after = if remove.is_empty() && add.is_none() { card } else { self.card(number).await? };
         let (still_remove, still_add) = owner_changes(&after, wanted);
+        if !stuck.is_empty() && still_add.is_none() {
+            return Err(ActionError::Fizzy(format!(
+                "Done, but Fizzy won’t remove {} (no longer an active user of the incident board); an administrator can remove them in Fizzy.",
+                stuck.join(", ")
+            )));
+        }
         if !still_remove.is_empty() || still_add.is_some() {
             return Err(ActionError::Fizzy("Fizzy didn't apply the owner change; the ticket shows its owner as it is now.".into()));
         }

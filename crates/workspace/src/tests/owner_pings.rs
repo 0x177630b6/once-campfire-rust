@@ -475,10 +475,25 @@ async fn who_can_own_a_ticket() {
     assert_eq!(names(13), ["Karim", "Manager", "Maya"], "people with a Fizzy user who may see it");
     assert_eq!(names(12), ["Manager"], "Security's: only who may see it (Sam has no Fizzy user)");
 
-    // Fizzy refuses someone without access to the board: said plainly.
+    // Fizzy refuses someone without access to the board: said plainly, and the owner stays (the
+    // new one is added before the old one is removed).
+    workspace.set_owner(&fizzy, &maya(), 13, OwnerTarget::Me).await.unwrap();
     fizzy.reply("/897/users.json", json!([user("fz-maya", "Maya")]));
     let error = workspace.set_owner(&fizzy, &boss(), 13, OwnerTarget::Person(7)).await.unwrap_err();
     assert!(error.message().contains("no access to the incident board"), "{error}");
+    assert_eq!(owners_of(&fizzy, 13), ["fz-maya"], "not left without an owner");
+    assert!(workspace.take_alerts(Some(9)).unwrap().is_empty(), "nobody pinged: nothing changed");
+
+    // An owner Fizzy won't remove (deactivated: its 404) doesn't stop the change; it's reported.
+    fizzy.reply("/897/users.json", users());
+    let mut card = fizzy.live_card(13);
+    card["assignees"] = json!([user("fz-gone", "Gone"), user("fz-maya", "Maya")]);
+    fizzy.live(card);
+    let error = workspace.set_owner(&fizzy, &boss(), 13, OwnerTarget::Person(7)).await.unwrap_err();
+    assert!(error.message().contains("won’t remove Gone"), "{error}");
+    assert_eq!(owners_of(&fizzy, 13), ["fz-gone", "fz-karim"], "Karim added, Maya removed");
+    let sent = workspace.take_alerts(Some(9)).unwrap();
+    assert_eq!(to(&sent), [To::Person(5), To::Person(7)], "the change that happened is pinged");
 
     // A closed card: no owner changes.
     let mut closed = fizzy.live_card(15);
@@ -532,4 +547,26 @@ async fn the_sheet_shows_the_owner_control_to_whom_it_applies() {
     assert!(sheet.owner.is_empty());
     let html = askama::Template::render(&sheet).unwrap();
     assert!(html.contains("Maya") && !html.contains("data-ws-owner"), "{html}");
+}
+
+#[tokio::test]
+async fn the_picker_offers_only_people_with_access_to_the_board() {
+    let (fizzy, workspace, clock) = pinging(settings()).await;
+    // Karim has a Fizzy user but no access to the board (not an all-access board).
+    let access = |id: &str, name: &str, has: bool| {
+        let mut user = user(id, name);
+        user["has_access"] = json!(has);
+        user
+    };
+    fizzy.reply(
+        "/897/boards/b1/accesses.json",
+        json!({"board_id": "b1", "all_access": false, "users": [
+            access("fz-karim", "Karim", false), access("fz-manager", "Manager", true), access("fz-maya", "Maya", true)
+        ]}),
+    );
+    poll_at(&fizzy, &workspace, &clock, 0).await;
+    let names: Vec<String> = workspace.owner_candidates(&["engineering".into()]).into_iter().map(|c| c.name).collect();
+    assert_eq!(names, ["Manager", "Maya"]);
+    assert_eq!(workspace.people_without_fizzy_user(), Some(vec!["Karim".to_string(), "Sam".to_string()]));
+    assert_eq!(workspace.set_owner(&fizzy, &karim(), 13, OwnerTarget::Me).await.unwrap_err().code(), "no_fizzy_user");
 }
