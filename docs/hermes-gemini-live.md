@@ -361,12 +361,24 @@ use, with nothing visible: `SKY_PTT` is `off` by default and no `/sky/*` route e
 | `SKY_MONTHLY_BUDGET_USD` | `100` | The organization's estimated month budget; reached, no more Sky tokens until the 1st (house time zone). Each reported cost is clamped to one token's ceiling (10 min of audio in and out, $0.23) |
 | `SKY_WARM_SECONDS` | `120` | Idle seconds before the page closes a warm session (1–600) |
 
-Caps are at least 1; a malformed value fails the boot. The rolling hourly windows are in memory
+Caps are at least 1. A malformed `SKY_*` value **stops the boot** whenever the workspace is on
+(`FIZZY_URL` and `FIZZY_TOKEN` both set, since `WorkspaceConfig::from_lookup` parses them); with the
+workspace off they aren't read at all. The rolling hourly windows are in memory
 (per process, like the voice page's); the day and month counters (presses, tokens, reconnections,
 asks, confirms, refusals, errors, estimated cost; no words, no audio, no tokens) persist in
 `<CAMPFIRE_STORAGE_PATH>/hermes/sky-usage.json` (atomic writes; 90 days per person, 13 months of
 totals), so a restart doesn't reset the budget. A damaged file starts empty and is replaced on the
 next save (the caller logs why).
+
+**Before batch 1a (the first `/sky/*` route)**, two things the review asked for:
+
+- `record_cost` (`campfire_workspace::sky`) must be tied to a token the server minted for that
+  person (e.g. the token's id, checked and spent once), not take a cost from the page as is: the
+  clamp bounds each report, not how many reports arrive, so an unbound report could exhaust the
+  organization's month budget or hide real spending.
+- `sky-usage.json` needs **a single saver** (one owner of the file, e.g. one store object behind a
+  mutex or one task that writes): two writers each saving their own copy would lose the other's
+  counters (atomic writes prevent torn files, not lost updates).
 
 ## Where the code is
 

@@ -589,6 +589,9 @@ still alerts at the next poll) and the proposals:
   the messages to the adapter, which reports how each post went, `Workspace::settle_alerts`): a
   message that fails to post is tried again after the next poll, to the recipients who didn't get
   it only, up to 10 tries (`alerts::MAX_ATTEMPTS`), then given up (recorded, and the log says so).
+  A message counts as posted once it's created (its Web Push queued): a broadcast that fails after
+  that is only logged, never retried (it would post a second message and push). A delivery that
+  never reports back within 10 minutes (`alerts::IN_FLIGHT_FOR`) is tried again.
   A restart while one waits loses it (the first poll after a start records what's there). An event
   that ends up with nobody to tell is recorded at once.
   The **first poll after a start alerts on nothing**: whatever would alert then is recorded without
@@ -706,9 +709,11 @@ Handover section, which opens `GET /workspace/handover`:
 A ticket's **owner** is Fizzy's assignee (research and the owner's decisions O1 to O10, 1 Oct 2026:
 `docs/owner-notifications-research.md` in the Hermes repo). `campfire_workspace::owners`.
 
-**Who can be an owner.** Only a Fizzy user (with access to the incident board). A Campfire person is
-matched to a Fizzy user by **email address** (any case; the users come from Fizzy's `GET
-/users.json`, read with the poll every 5 minutes, `cache::FIZZY_PEOPLE_REFRESH`). People with no
+**Who can be an owner.** Only a Fizzy user with access to the incident board (Fizzy assigns only
+the board's active users). A Campfire person is matched to a Fizzy user by **email address** (any
+case; the users come from Fizzy's `GET /boards/:id/accesses.json`, those with `has_access`, or all of
+them on an all-access board; `GET /users.json` on a Fizzy without that route; read with the poll every
+5 minutes, `cache::FIZZY_PEOPLE_REFRESH`). People with no
 Fizzy user don't appear in the picker and get no pings; the settings page lists them for the
 administrators ("N people have no Fizzy user", with their names, `Workspace::people_without_fizzy_user`),
 since the owner creates those users (step 0 of the research: a Fizzy user per person, no token
@@ -731,9 +736,11 @@ buttons carry `data-ws-owner-set`, the picker is a `data-ws-change="owner"` sele
 fresh sheet like any change (`{"number", "sheet", "chip"}`). The write (`Writer::set_owner`) goes
 through the workspace's token (the "Campfire" Fizzy user, so Fizzy shows "Campfire assigned Maya"
 until per-person identity, D11), against a fresh read: Fizzy's assignments are **toggles**
-(`POST /cards/:n/assignments {"assignee_id"}`), so the other owners are toggled off, then the new one
-on (with their Fizzy user id, never `self_assignment`, which would assign "Campfire"), then the card
-is read again and checked. Each toggle is in the write log (`owner +<fizzy id>`, `owner -<fizzy
+(`POST /cards/:n/assignments {"assignee_id"}`), so the new owner is toggled on **first** (with
+their Fizzy user id, never `self_assignment`, which would assign "Campfire"; a refusal then leaves
+the ticket as it was, and pings nobody), then the other owners off, then the card is read again and
+checked. An owner Fizzy won't remove (deactivated, or no longer on the board: its 404) doesn't stop
+the change: the sheet says so by name, and an administrator removes them in Fizzy. Each toggle is in the write log (`owner +<fizzy id>`, `owner -<fizzy
 id>`) with the **real actor**'s Campfire id. Fizzy's 404 (the person has no access to the board) is
 said plainly. No undo: people's own changes have none (undo is for what Hermes did), and setting the
 owner back is one click. Refusals: `403` (policy), `404` (a card the actor may not see),
@@ -773,7 +780,8 @@ How changes are found:
   The first poll ever only records the owners. After a restart the first poll compares with what was
   known before it, and pings a change made meanwhile if it's less than 2 hours old (`owners::MAX_AGE`).
   A card new since the last poll starts with no owner; one that comes back (reopened) is only
-  recorded. Key: `owner:<card>:<+|->:<fizzy user id>:<card's last_active_at, ms>`.
+  recorded. A known card missing from one poll's picture (a failed lookup) keeps its known owners
+  (24 hours). Key: `owner:<card>:<+|->:<fizzy user id>:<card's last_active_at, ms>`.
 - **From the sheet**: pinged at once (the adapter posts them in the background right after the
   write), naming the person who did it, never pinging them about their own action; the card's new
   owners are recorded at the same time, and a poll's older read of the card (its `last_active_at`
