@@ -199,7 +199,7 @@ mod tests {
         let element = html.find(r#"<div id="sky-ptt""#).unwrap();
         assert!(html.find("</nav>").unwrap() < element, "after the tab bar");
         assert!(html[element..].starts_with(
-            r#"<div id="sky-ptt" class="sky-ptt" data-turbo-permanent data-sky-token-url="/sky/token" data-sky-context-url="/sky/context" data-sky-usage-url="/sky/usage" data-sky-worklet-url="/assets/voice/pcm-worklet-1.js" data-sky-warm-seconds="120" data-sky-debug="false">"#
+            r#"<div id="sky-ptt" class="sky-ptt" data-turbo-permanent data-sky-logic-url="/assets/hermes/sky_ptt_logic-1.js" data-sky-token-url="/sky/token" data-sky-context-url="/sky/context" data-sky-usage-url="/sky/usage" data-sky-worklet-url="/assets/voice/pcm-worklet-1.js" data-sky-warm-seconds="120" data-sky-debug="false">"#
         ), "{html}");
         assert!(html.contains(r#"data-sky-ptt-button"#) && html.contains(r#"aria-label="Hold to talk to Sky""#));
         assert!(

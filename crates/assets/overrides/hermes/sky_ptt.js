@@ -12,18 +12,27 @@
 // `<template data-sky-page>`, read on every `turbo:load`. Nothing lives in a Stimulus controller or
 // in nodes Turbo replaces.
 //
-// A press: the microphone opens at once (its audio is buffered) and `POST /sky/context` checks the
-// screen and returns the note; once the hold is longer than a tap (TIP_MS), the session is opened if
+// A press: the microphone opens at once (its audio is buffered); once the hold is longer than a tap
+// (TIP_MS), `POST /sky/context` checks the screen and returns the note, and the session is opened if
 // it isn't warm (`POST /sky/token`). With both there: the note, `activityStart`, the buffered audio,
-// then live audio. Release: `activityEnd`. A tap sends nothing and mints no token. The session stays open SKY_WARM_SECONDS after the last reply
-// (follow-ups keep their context), and closes when the page is hidden or left.
+// then live audio. Release: `activityEnd`. A tap sends nothing, counts no press and mints no token.
+// The session stays open SKY_WARM_SECONDS after the last reply or failure (follow-ups keep their
+// context), and closes when the page is hidden or left, or on the live voice page.
+//
+// Turns: a turn the person interrupted (a new press while Sky answers), cancelled after it began, or
+// whose press failed is "dropped": its late audio and words are ignored (their audio still counts
+// in the usage) until the server ends it (`interrupted`, or its `turnComplete`); a `turnComplete`
+// right after `interrupted`, before any new content, is the old turn's and is ignored too.
 //
 // The logic that doesn't touch the page is in hermes/sky_ptt_logic.js (`globalThis.HermesSky`,
 // tested with `node --test`); the protocol is lib/hermes/live_session.js, shared with the voice page.
 
 import { LiveSession, Player, TokenError, StepTimeout, INPUT_RATE, STEP_TIMEOUT_MS, withTimeout, base64FromBytes } from "lib/hermes/live_session"
 
-const logic = globalThis.HermesSky
+// Turbo inserts a new page's body scripts one by one without waiting, so after a visit from a page
+// without Sky's scripts this module may run before hermes/sky_ptt_logic.js: load it here then (same
+// URL, so the browser evaluates it once either way).
+const logic = globalThis.HermesSky || await loadLogic()
 const STORAGE_KEY = "meshduty:sky-ptt:last"
 
 const sky = {
@@ -48,10 +57,26 @@ const sky = {
   lastPress: null,
   // Replies shown, newest last.
   exchanges: [],
-  // Reply audio and words to ignore until the turn completes (a cancelled or interrupted turn).
+  // A dropped turn is still running on the server: its audio and words are ignored.
   dropping: false,
-  turnDone: true,
-  replyTimer: null
+  // The server said `interrupted`: a `turnComplete` before any new content is the old turn's.
+  staleComplete: false,
+  replyTimer: null,
+  // A session still connecting, and how many times sessions were closed (one connecting when a
+  // close happens is closed as soon as it opens).
+  pending: null,
+  closes: 0
+}
+
+async function loadLogic() {
+  const url = document.querySelector("#sky-ptt[data-sky-logic-url]")?.dataset.skyLogicUrl
+  if (!url) return null
+  try {
+    await import(url)
+  } catch (error) {
+    console.warn("Sky push-to-talk: couldn't load its logic", error)
+  }
+  return globalThis.HermesSky || null
 }
 
 // --- Start ----------------------------------------------------------------------------------------
@@ -92,7 +117,8 @@ function onPage() {
   sky.page = { ...template.dataset }
   const hidden = logic.hiddenOn(sky.page)
   root.hidden = hidden
-  if (hidden && logic.holding(sky.state)) cancelPress("hidden")
+  // The live voice page has its own microphone and voice: nothing of Sky's may play over it.
+  if (hidden) closeSession("hidden on this page")
   if (first) {
     if (!window.isSecureContext) return fail({ message: logic.TEXTS.insecure, state: "unsupported" })
     if (!navigator.mediaDevices?.getUserMedia || !window.AudioWorkletNode || !window.WebSocket) {
@@ -187,7 +213,7 @@ function press({ pointerId = null, key = null, y = 0 }) {
   const interrupting = logic.answering(sky.state)
   if (interrupting) {
     sky.player?.flush()
-    if (!sky.turnDone) sky.dropping = true
+    dropTurnOf(sky.press)
     if (sky.press) sky.press.outcome = "interrupted"
   }
   finishPress()
@@ -209,16 +235,16 @@ function press({ pointerId = null, key = null, y = 0 }) {
 
   startAudioInGesture()
   // A cold session is opened once the hold is longer than a tap: a tap mints no token.
+  // Once the hold is longer than a tap: the context (a press counted) and, if cold, the session.
   current.timers.push(setTimeout(() => {
-    if (sky.press !== current || current.outcome === "tip") return
+    if (sky.press !== current || current.outcome !== "no_reply") return
+    fetchContext(current)
     ensureSession(current)
-    maybeBegin(current)
   }, logic.TIP_MS))
   current.timers.push(setTimeout(() => { if (sky.press === current && !current.released) render() }, logic.WARN_HOLD_MS))
   current.timers.push(setTimeout(() => { if (sky.press === current && !current.released) release({ limit: true }) }, logic.MAX_HOLD_MS))
 
   openMicrophone(current)
-  fetchContext(current)
   if (current.warm) current.connectedAt = current.pressedAt
   render()
 }
@@ -266,7 +292,8 @@ function cancelPress(reason) {
     current.ended = true
     sky.session?.endTurn()
     sky.session?.sendContext(logic.CANCEL_NOTE)
-    sky.dropping = true
+    countTurn(current)
+    dropTurnOf(current)
   }
   setState("cancel")
   flash(logic.TEXTS.cancelled)
@@ -282,8 +309,6 @@ function maybeBegin(current) {
   if (held < logic.TIP_MS) return
   if (current.note === null || !sky.session?.open) return
   current.begun = true
-  sky.dropping = false
-  sky.turnDone = false
   if (!sky.session.beginTurn(current.note)) return failPress(current, { message: logic.TEXTS.connectionLost })
   for (const chunk of current.buffer) sky.session.sendAudio(chunk)
   current.buffer = []
@@ -296,8 +321,7 @@ function endTurn(current) {
   if (current.ended) return
   current.ended = true
   sky.session?.endTurn()
-  sky.usage.heldMs += current.streamedMs
-  sky.usage.turns += 1
+  countTurn(current)
   clearTimeout(sky.replyTimer)
   sky.replyTimer = setTimeout(() => {
     if (sky.press === current && logic.answering(sky.state) && !current.firstAudioAt && !current.firstTextAt) {
@@ -310,9 +334,34 @@ function failPress(current, { message, details = "", state = "fail" }) {
   if (current) {
     current.outcome = "error"
     clearPressTimers(current)
+    if (current.begun) {
+      if (!current.ended) {
+        current.ended = true
+        sky.session?.endTurn()
+        sky.session?.sendContext(logic.CANCEL_NOTE)
+      }
+      countTurn(current)
+      dropTurnOf(current)
+    }
   }
   stopMicrophone()
   fail({ message, details, state })
+}
+
+// A turn's audio sent, once, into the session's usage report.
+function countTurn(current) {
+  if (current.counted) return
+  current.counted = true
+  sky.usage.heldMs += current.streamedMs
+  sky.usage.turns += 1
+}
+
+// The server may still be answering `current`'s turn: ignore what's left of it.
+function dropTurnOf(current) {
+  if (current && current.begun && !current.done) {
+    sky.dropping = true
+    sky.staleComplete = false
+  }
 }
 
 function clearPressTimers(current) {
@@ -370,11 +419,12 @@ function ensureSession(current) {
 }
 
 async function connect() {
+  const closes = sky.closes
   const session = new LiveSession({
     fetchToken: options => fetchToken(options),
     handlers: {
       onAudio: onReplyAudio,
-      onInterrupted: () => sky.player?.flush(),
+      onInterrupted: onInterrupted,
       onTranscript: onTranscript,
       onTurnComplete: onTurnComplete,
       onUsage: usage => { if (sky.press && Number.isFinite(usage?.totalTokenCount)) sky.press.totalTokens = usage.totalTokenCount },
@@ -385,11 +435,19 @@ async function connect() {
       }
     }
   })
+  sky.pending = session
   try {
     await session.start()
+    if (sky.closes !== closes) {
+      // Closed (page hidden, left, the voice page) while it was connecting.
+      session.close()
+      reportUsage()
+      throw new Error("session closed while connecting")
+    }
     sky.session = session
     scheduleWarmClose()
   } finally {
+    if (sky.pending === session) sky.pending = null
     sky.connecting = null
   }
 }
@@ -433,16 +491,23 @@ function scheduleWarmClose() {
 
 function closeSession(reason) {
   clearTimeout(sky.warmTimer)
+  sky.closes += 1
   if (sky.press && logic.holding(sky.state)) cancelPress(reason)
   if (logic.answering(sky.state)) {
     sky.player?.flush()
+    dropTurnOf(sky.press)
     if (sky.press) sky.press.outcome = "interrupted"
     setState("reset")
   }
+  sky.pending?.close()
+  sky.pending = null
   if (sky.session) {
     sky.session.close()
     dropSession()
   }
+  // A new session starts clean.
+  sky.dropping = false
+  sky.staleComplete = false
 }
 
 function dropSession() {
@@ -547,26 +612,38 @@ function stopMicrophone() {
 
 // --- The reply ------------------------------------------------------------------------------------
 
+function onInterrupted() {
+  sky.player?.flush()
+  // The old turn is over: what comes next is the new one's (a turnComplete first is the old one's).
+  if (sky.dropping) {
+    sky.dropping = false
+    sky.staleComplete = true
+  }
+}
+
 function onReplyAudio(data) {
-  if (sky.dropping) return
-  const current = sky.press
   const ms = logic.audioMsFromBase64(data)
   sky.usage.replyMs += ms
-  if (current) {
-    current.replyMs += ms
-    if (!current.firstAudioAt) current.firstAudioAt = performance.now()
-  }
+  if (sky.dropping) return
+  sky.staleComplete = false
+  const current = sky.press
+  // Only a sent turn has a reply (nothing of the next one can come while it's held).
+  if (!current || !current.ended) return
+  current.replyMs += ms
+  if (!current.firstAudioAt) current.firstAudioAt = performance.now()
   sky.player?.enqueue(data)
   if (sky.state === "thinking") setState("reply")
 }
 
 function onTranscript(role, text) {
-  if (sky.dropping) return
   const current = sky.press
-  if (!current) return
+  if (!current || !current.begun) return
   if (role === "user") {
-    current.you += text
+    // What was heard: the current turn's (its input transcription runs while it's held).
+    if (!sky.dropping || !current.ended) current.you += text
   } else {
+    if (sky.dropping || !current.ended) return
+    sky.staleComplete = false
     current.reply += text
     current.replyChars = current.reply.length
     if (!current.firstTextAt) current.firstTextAt = performance.now()
@@ -576,15 +653,17 @@ function onTranscript(role, text) {
 }
 
 function onTurnComplete() {
-  if (sky.dropping) {
+  if (sky.dropping || sky.staleComplete) {
+    // The dropped turn's end.
     sky.dropping = false
-    sky.turnDone = true
+    sky.staleComplete = false
     return
   }
-  sky.turnDone = true
-  clearTimeout(sky.replyTimer)
   const current = sky.press
-  if (current && current.begun) {
+  // Only the turn of a press that was sent can complete (not one still held).
+  if (!current || !current.ended || current.done) return
+  clearTimeout(sky.replyTimer)
+  if (current.begun) {
     current.outcome = current.reply || current.firstAudioAt ? "answered" : "no_reply"
     current.done = true
     saveLastReply(current)
@@ -595,7 +674,7 @@ function onTurnComplete() {
 }
 
 function onPlayback(playing) {
-  if (!playing && sky.turnDone) settle()
+  if (!playing && (!sky.press || sky.press.done)) settle()
 }
 
 // The reply is over (all said and played).
@@ -628,6 +707,8 @@ function fail({ message, details = "", state = "fail" }) {
   finishPress()
   announce(message)
   render()
+  // The warm session isn't kept forever after a failure.
+  scheduleWarmClose()
 }
 
 function announce(text) {
