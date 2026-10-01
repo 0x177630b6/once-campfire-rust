@@ -235,7 +235,8 @@ labels, the draft hint, column headings) are 0.68rem, 600, caps, 0.16em tracking
 Light is the guide's palette with chapter 08's contrast fixes (`--danger` darker; voice buttons
 and badges filled with terracotta 600 instead of 500/400; overlines and text on canvas in
 terracotta 700 / ink 2; timestamps in `--ink-muted`, `--ink-subtle` kept for placeholders and
-decoration). Dark is chapter 08's draft (the designer can adjust it). The theme adds a few roles
+decoration). `--ink-muted` is one step darker than the guide (`#62665f` for `#6b6f68`) so meta text
+also passes on canvas, chip and sunken backgrounds. Dark is chapter 08's draft (the designer can adjust it). The theme adds a few roles
 (the last block) so components don't hard-code a palette step.
 
 | Token | Light | Dark | Use |
@@ -261,7 +262,7 @@ decoration). Dark is chapter 08's draft (the designer can adjust it). The theme 
 | `--border-strong` | `#cdc5b4` | `#4f5a53` | inputs and secondary buttons (theme addition) |
 | `--ink` | `#1f2522` | `#ece7dc` | text |
 | `--ink-2` | `#4b4f49` | `#c9c4b8` | secondary text, text on chips and canvas |
-| `--ink-muted` | `#6b6f68` | `#a6a99f` | meta, timestamps, hints (on raised or surface only) |
+| `--ink-muted` | `#62665f` | `#a6a99f` | meta, timestamps, hints, placeholders |
 | `--ink-subtle` | `#8b8e86` | `#8f9289` | decoration only in light |
 | `--ink-disabled` | `#b9b5aa` | `#4d534e` | disabled fills |
 | `--ai` | `#4a7f8a` | `#6fa3ae` | Sky (Hermes): the ✦ mark |
@@ -279,7 +280,8 @@ decoration). Dark is chapter 08's draft (the designer can adjust it). The theme 
 
 The same blocks hold the Workspace's column tones (`--ws-col-*`, Fizzy's column colours toned to
 the palette, used as dots), upstream's code colours (`code.css`'s own light and dark values),
-`--icon-invert` (0 light, 1 dark: icons are black `<img>`), the shadows (`--shadow-sm`,
+`--icon-invert` (0 light, 1 dark: icons are black `<img>`), `--select-arrow` (Lexxy's
+code-language picker arrow, black or white), the shadows (`--shadow-sm`,
 `--shadow-lg`), the scrollbar colour and `color-scheme`.
 
 **Upstream's `--lch-*`** are set in each block as the exact OKLCH triplets of these colours (each
@@ -325,8 +327,9 @@ it), every access in `try/catch` (private windows: System).
   `@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { … } }` (same values,
   kept identical by `tests/theme.rs`). An explicit Light wins over a dark phone; Dark wins over a
   light one. Only the palette changes between modes: every upstream rule that had its own dark
-  variant (13 blocks in 9 files: icon inversion, `.shadow`, the mention tint, code colours) and the
-  fork's (`hermes.css`, `workspace.css`) is restated in `theme.css` from `--icon-invert` and the
+  variant (13 blocks in 9 files: icon inversion, `.shadow`, the mention tint, code colours; plus
+  the vendored `lexxy-editor.css`'s code-language picker arrow) and the fork's (`hermes.css`,
+  `workspace.css`) is restated in `theme.css` from `--icon-invert` and the
   palette, at the same specificity and later, so it no longer depends on the media query.
 - **Why the profile page**: it is where each person's own settings are (name, avatar,
   notifications), it exists with the Workspace on or off, and it is reachable on phones (sidebar →
@@ -349,13 +352,14 @@ the browser by the message formatter, so the cached message HTML is untouched; t
 edit form and emoji-only messages keep the page's colours); timestamps in mono, muted; day
 separators as terracotta overlines; panels (sign-in, account, profile) raised cards on wide
 screens; menus, autocomplete, link previews, dialogs (no more rainbow backdrop), lightbox, flash,
-code, scrollbars.
+code (code blocks in my own bubble keep the page's ink on their light block), scrollbars.
 
 The fork's screens: card chips as small record cards (mono `#412`, Caslon title, severity and
 state pills, the column colour as the state's dot); severity as tinted pills; Sky's drafts and
 proposals dashed teal with a teal overline, solid with a green ✓ once filed, neutral once
 answered; Home sections in Caslon, raised ticket cards with a mono record ID, counts as chips (the
-"to confirm" one teal); the tab bar raised with a terracotta underline under the current tab and
+"to confirm" one teal); the board's severity filters as outlined pills, filled once checked (the
+Workspace dimmed unchecked ones to 45 %); the tab bar raised with a terracotta underline under the current tab and
 a terracotta Report disc; board columns sunken, column tabs and filters with a primary selected
 state; the card sheet and room panel raised; the voice buttons in the composer and the voice
 page's big button terracotta (hang-up stays destructive), the transcript's lines as bubbles (mine
@@ -366,7 +370,9 @@ autonomy table's radios were invisible (upstream's `appearance: none` on every i
 native again; the board's severity filters and the sheet's departments were laid out as a column
 by upstream's `fieldset` rule and are rows; the board and (on phones) Home start below the fixed
 title pill instead of under it; the Workspace pages' title pill no longer slides over the back
-button on wide screens; the chip's number no longer wraps one digit per line on phones.
+button on wide screens; the chip's number no longer wraps one digit per line on phones; on phones
+a room's title pill shrinks (with its ellipsis) so the bell no longer slides under the sidebar's
+menu button, which upstream positions from the off-screen sidebar.
 
 Not done, and why:
 
@@ -382,8 +388,8 @@ Not done, and why:
 |---|---|---|
 | Body text, `--ink` on surface | 13.73 | 13.73 |
 | Text in cards and bubbles, `--ink` on raised | 15.09 | 12.38 |
-| Meta, timestamps, hints, `--ink-muted` on raised | 4.95 | 6.39 |
-| Meta on the page, `--ink-muted` on surface | 4.51 | 7.09 |
+| Meta, timestamps, hints, `--ink-muted` on raised / surface | 5.66 / 5.15 | 6.39 / 7.09 |
+| `--ink-muted` on chip / sunken / canvas | 4.89 / 4.72 / 4.62 | 5.60 / 7.38 / 7.59 |
 | Record IDs, low severity, `--ink-2` on chip | 6.97 | 7.69 |
 | Tab labels on the desktop rail, `--ink-2` on canvas | 6.59 | 10.41 |
 | Links, `--accent-600` on surface / raised | 4.55 / 5.00 | 7.45 / 6.72 |
@@ -392,6 +398,7 @@ Not done, and why:
 | Voice buttons, Report disc, white on `--voice-fill` | 5.17 | 5.17 |
 | Critical pill, destructive button, white on `--danger-fill` | 6.40 | 6.01 |
 | Medium severity, `--warning` on its tint | 4.56 | 7.33 |
+| Unchecked severity filters (outline, text on surface): low / medium / high / critical | 7.35 / 4.72 / 6.37 / 5.63 | 9.73 / 9.14 / 9.51 / 8.11 |
 | High severity, `--accent-700` on `--accent-tint` | 5.84 | 8.29 |
 | Sky's labels, `--ai-ink` on raised | 6.84 | 8.28 |
 | "To confirm" count, raised on `--ai-ink` | 6.84 | 8.28 |
