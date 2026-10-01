@@ -164,6 +164,8 @@ impl Pending {
 /// An event whose messages couldn't be posted is tried again at the next polls, this many times in
 /// all, then given up (and recorded as sent: it's stale by then).
 pub const MAX_ATTEMPTS: u32 = 10;
+/// A delivery the app took but didn't report back on within this (hung) is tried again.
+pub const IN_FLIGHT_FOR: SignedDuration = SignedDuration::from_mins(10);
 
 /// What should alert now, comparing `previous` and `next`. `primed_at`: when the first poll since
 /// the start ran (`None` during it: every card counts as new, to be recorded without being sent).

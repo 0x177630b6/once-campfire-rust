@@ -114,7 +114,9 @@ pub struct Workspace {
     /// again).
     outbox: Mutex<Vec<alerts::Pending>>,
     /// Alerts the app took and is posting: recorded as sent once posted ([`Workspace::settle_alerts`]).
-    in_flight: Mutex<BTreeMap<String, alerts::Pending>>,
+    /// With when they were taken: one taken longer than [`alerts::IN_FLIGHT_FOR`] ago (a delivery
+    /// that hung) is put back to be tried again.
+    in_flight: Mutex<BTreeMap<String, (alerts::Pending, Timestamp)>>,
     clock: Box<dyn Fn() -> Timestamp + Send + Sync>,
     /// "Show earlier comments" reads at once ([`actions::ALL_COMMENTS_AT_ONCE`]): each walks up to a
     /// dozen Fizzy pages, and the app is reachable from the internet.
@@ -404,8 +406,26 @@ impl Workspace {
     /// an alert that ends up with nobody to tell is recorded as sent now. `None`: no bot to post
     /// them; they're dropped, recorded as sent (and counted).
     pub fn take_alerts(&self, bot_id: Option<i64>) -> Result<Vec<alerts::Delivery>, usize> {
-        let pending = std::mem::take(&mut *self.outbox.lock().unwrap_or_else(|e| e.into_inner()));
         let now = self.now();
+        // Both locks held from emptying the outbox to filling `in_flight` (always in that order,
+        // as `unsent`): a poll can't see an alert in neither and queue it again.
+        let mut outbox = self.outbox.lock().unwrap_or_else(|e| e.into_inner());
+        let mut in_flight = self.in_flight.lock().unwrap_or_else(|e| e.into_inner());
+        let mut pending = std::mem::take(&mut *outbox);
+        let mut given_up = Vec::new();
+        // A delivery that never reported back (hung): tried again, as a failed one would be.
+        let stale: Vec<String> =
+            in_flight.iter().filter(|(_, (_, at))| now.duration_since(*at) > alerts::IN_FLIGHT_FOR).map(|(key, _)| key.clone()).collect();
+        for key in stale {
+            let Some((mut stuck, _)) = in_flight.remove(&key) else { continue };
+            stuck.attempts += 1;
+            if stuck.attempts >= alerts::MAX_ATTEMPTS {
+                given_up.push(key);
+            } else {
+                pending.push(stuck);
+            }
+        }
+        self.notified.record(given_up.iter().map(String::as_str), now);
         let Some(bot_id) = bot_id else {
             self.notified.record(pending.iter().map(|pending| pending.event.key.as_str()), now);
             return if pending.is_empty() { Ok(Vec::new()) } else { Err(pending.len()) };
@@ -420,33 +440,36 @@ impl Workspace {
             bot_id,
         };
         let deliveries = alerts::plan_pending(&pending, &plan);
-        let mut in_flight = self.in_flight.lock().unwrap_or_else(|e| e.into_inner());
         let mut nobody = Vec::new();
         for pending in pending {
             if deliveries.iter().any(|delivery| delivery.keys.contains(&pending.event.key)) {
-                in_flight.insert(pending.event.key.clone(), pending);
+                in_flight.insert(pending.event.key.clone(), (pending, now));
             } else {
                 nobody.push(pending.event.key);
             }
         }
-        drop(in_flight);
         self.notified.record(nobody.iter().map(String::as_str), now);
+        drop((in_flight, outbox));
         Ok(deliveries)
     }
 
     /// How posting the messages [`Workspace::take_alerts`] gave went (`true`: posted). An alert all
     /// of whose messages were posted is recorded as sent; one that failed somewhere waits for the
     /// next poll, for those recipients only, up to [`alerts::MAX_ATTEMPTS`] tries. Returns how many
-    /// alerts were given up.
+    /// alerts were given up. An alert recorded or queued again before it leaves `in_flight`, under
+    /// the same locks, so a poll never finds it nowhere.
     pub fn settle_alerts(&self, outcomes: &[(&alerts::Delivery, bool)]) -> usize {
         let now = self.now();
+        let mut outbox = self.outbox.lock().unwrap_or_else(|e| e.into_inner());
         let mut in_flight = self.in_flight.lock().unwrap_or_else(|e| e.into_inner());
         let mut sent = Vec::new();
-        let mut retry = Vec::new();
         let mut given_up = 0;
         let keys: BTreeSet<&String> = outcomes.iter().flat_map(|(delivery, _)| delivery.keys.iter()).collect();
+        let mut settled = Vec::new();
         for key in keys {
-            let Some(mut pending) = in_flight.remove(key) else { continue };
+            // Gone: taken again after hanging too long; this late report changes nothing.
+            let Some((pending, _)) = in_flight.get(key) else { continue };
+            let mut pending = pending.clone();
             let failed: BTreeSet<alerts::To> = outcomes
                 .iter()
                 .filter(|(delivery, posted)| !posted && delivery.keys.contains(key))
@@ -460,12 +483,14 @@ impl Workspace {
                 sent.push(key.clone());
             } else {
                 pending.only = Some(failed);
-                retry.push(pending);
+                outbox.push(pending);
             }
+            settled.push(key.clone());
         }
-        drop(in_flight);
         self.notified.record(sent.iter().map(String::as_str), now);
-        self.outbox.lock().unwrap_or_else(|e| e.into_inner()).extend(retry);
+        for key in settled {
+            in_flight.remove(&key);
+        }
         given_up
     }
 

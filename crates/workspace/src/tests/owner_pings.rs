@@ -570,3 +570,22 @@ async fn the_picker_offers_only_people_with_access_to_the_board() {
     assert_eq!(workspace.people_without_fizzy_user(), Some(vec!["Karim".to_string(), "Sam".to_string()]));
     assert_eq!(workspace.set_owner(&fizzy, &karim(), 13, OwnerTarget::Me).await.unwrap_err().code(), "no_fizzy_user");
 }
+
+#[tokio::test]
+async fn a_delivery_that_never_reports_back_is_tried_again_after_ten_minutes() {
+    let (fizzy, workspace, clock) = pinging(settings()).await;
+    poll_at(&fizzy, &workspace, &clock, 0).await;
+    let mut cards = initial_cards();
+    cards[0] = owned(13, "Guest slip in lobby", &["engineering", "sev-critical"], &["fz-maya"], &stamp(1));
+    set_cards(&fizzy, &cards, &[assigned("e1", 13, true, "fz-maya", ("fz-karim", "Karim"), &stamp(1))]);
+    let hung = poll_at(&fizzy, &workspace, &clock, 2).await;
+    assert_eq!(to(&hung), [To::Person(5)]);
+    assert!(poll_at(&fizzy, &workspace, &clock, 5).await.is_empty(), "still in flight");
+    let again = poll_at(&fizzy, &workspace, &clock, 13).await;
+    assert_eq!(to(&again), [To::Person(5)], "taken over 10 minutes ago and never settled: tried again");
+    // Whichever reports first settles it; the other's report finds nothing to do.
+    settle(&workspace, &again, true);
+    assert!(workspace.notified().contains(&hung[0].keys[0]));
+    assert_eq!(settle(&workspace, &hung, false), 0);
+    assert!(poll_at(&fizzy, &workspace, &clock, 30).await.is_empty(), "not tried again");
+}

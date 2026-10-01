@@ -236,7 +236,11 @@ fn at(minutes: i64) -> Timestamp {
 async fn poll_at(fizzy: &FakeFizzy, workspace: &Workspace, clock: &Clock, minutes: i64) -> Vec<crate::alerts::Delivery> {
     *clock.lock().unwrap() = at(minutes);
     workspace.poll(fizzy, at(minutes)).await.unwrap();
-    workspace.take_alerts(Some(9)).unwrap()
+    let deliveries = workspace.take_alerts(Some(9)).unwrap();
+    // Posted, as the app reports it.
+    let outcomes: Vec<(&crate::alerts::Delivery, bool)> = deliveries.iter().map(|delivery| (delivery, true)).collect();
+    workspace.settle_alerts(&outcomes);
+    deliveries
 }
 
 fn to(deliveries: &[crate::alerts::Delivery]) -> Vec<To> {
