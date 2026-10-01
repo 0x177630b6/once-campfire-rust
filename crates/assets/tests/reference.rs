@@ -129,8 +129,9 @@ fn stylesheet_link_tag_all_matches_the_reference() {
 #[test]
 fn javascript_importmap_tags_match_the_reference() {
     // Modules the overrides add (Hermes fork: `controllers/voice_controller.js`,
-    // `controllers/voice_note_controller.js`, `controllers/voice_player_controller.js`) are pinned too:
-    // their import and modulepreload lines are the only extra ones.
+    // `controllers/voice_note_controller.js`, `controllers/voice_player_controller.js`, and
+    // `lib/hermes/live_session.js`, which the voice controller and Sky push-to-talk share) are pinned
+    // too: their import and modulepreload lines are the only extra ones.
     let added: Vec<String> = added()
         .iter()
         .filter(|logical| logical.ends_with(".js"))
@@ -152,6 +153,7 @@ fn javascript_importmap_tags_match_the_reference() {
         extra.iter().any(|line| line.contains(r#""controllers/voice_player_controller": "/assets/controllers/voice_player_controller-"#)),
         "{extra:?}"
     );
+    assert!(extra.iter().any(|line| line.contains(r#""lib/hermes/live_session": "/assets/lib/hermes/live_session-"#)), "{extra:?}");
 }
 
 #[test]
